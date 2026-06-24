@@ -14,6 +14,7 @@
 | ish · iOS · i686 emu · ~25 MFLOPS | tiny_bclibc SP | 9.4 ms | **107.5** | 38× |
 | ish · iOS · i686 emu · ~25 MFLOPS | tiny_bclibc DP | 17.6 ms | **54.0** | 19× |
 | ish · iOS · i686 emu · ~25 MFLOPS | py-balcalc Cython DP | 10.1 ms | **99.2** | 35× |
+| XBurst · MIPS LE · mipsel | tiny_bclibc DP (usermod) | 3.00 ms | **309** | 110× |
 | x64 Linux · MicroPython unix | tiny_bclibc SP | 0.46 ms | **2,217** | 792× |
 | x64 Linux · MicroPython unix | tiny_bclibc DP | 1.07 ms | **980** | 350× |
 | x64 Linux · CPython | py-balcalc Cython DP ¹ | 0.123 ms | **8,152** | 2912× |
@@ -32,6 +33,7 @@
 | ish | tiny_bclibc SP | 300 m | 2.9 ms | **331.5** |
 | ish | tiny_bclibc DP | 300 m | 10.1 ms | **94.9** |
 | ish | py-balcalc Cython DP | 300 m | 6.5 ms | **153.0** |
+| XBurst · mipsel | tiny_bclibc DP (usermod) | 300 m | 1.555 ms | **912.4** |
 | x64 | tiny_bclibc SP | 300 m | 0.131 ms | **7,398** |
 | x64 | tiny_bclibc DP | 300 m | 0.624 ms | **1,575** |
 | x64 | py-balcalc Cython DP ² | 300 m | 0.960 ms | **1,042** |
@@ -210,6 +212,7 @@ Benchmark: scalar FP add+multiply loop, native C
 | ish · iOS · i686 emu · ~25 MFLOPS | tiny_bclibc **SP** | **107.5** | **607** | **331.5** | **1,195** |
 | ish · iOS · i686 emu · ~25 MFLOPS | tiny_bclibc DP | 54.0 | 274 | 94.9 | 548 |
 | ish · iOS · i686 emu · ~25 MFLOPS | py-balcalc Cython DP ¹ | 99.2 | 255 | 153.0 ² | — |
+| XBurst · MIPS LE · mipsel | tiny_bclibc DP (usermod) | 309 | 2,194 | 912.4 | ~3,717 |
 | x64 Linux · MicroPython unix | tiny_bclibc **SP** | **2,217** | **16,159** | **7,398** | **41,667** |
 | x64 Linux · MicroPython unix | tiny_bclibc DP | 980 | 4,524 | 1,575 | 20,408 |
 | x64 Linux · CPython | py-balcalc Cython DP ³ | 2,994 | 18,475 | 1,042 ⁴ | — |
@@ -234,6 +237,7 @@ Benchmark: scalar FP add+multiply loop, native C
 | File | Platform | Prec |
 |---|---|---|
 | [`tiny_bclibc_natmod_bench_x64_sp.log.txt`](tiny_bclibc_natmod_bench_x64_sp.log.txt) | x64 Linux | SP |
+| [`tiny_bclibc_usermod_mipsel_dp.log.txt`](logs/tiny_bclibc_usermod_mipsel_dp.log.txt) | XBurst · MIPS LE (usermod) | DP |
 | [`tiny_bclibc_natmod_bench_x64_dp.log.txt`](tiny_bclibc_natmod_bench_x64_dp.log.txt) | x64 Linux | DP |
 | [`tiny_bclibc_natmod_bench_ish_sp.log.txt`](tiny_bclibc_natmod_bench_ish_sp.log.txt) | ish / iOS / i686 | SP |
 | [`tiny_bclibc_natmod_bench_ish_dp.log.txt`](tiny_bclibc_natmod_bench_ish_dp.log.txt) | ish / iOS / i686 | DP |

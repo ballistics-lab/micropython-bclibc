@@ -1,0 +1,54 @@
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 0.0.0-dp
+Platform: XBurst (MIPS LE, mipsel usermod, via adb)
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 3.00 ms  (3002 µs)
+  Min: 2882 µs  Max: 3352 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 30
+  Stop reason: 1
+  Avg: 12.92 ms  (12916 µs)
+  Min: 10922 µs  Max: 18485 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 0.501 ms  (501.2 µs)
+  Min: 104 µs  Max: 12735 µs
+  Calls: 500
+  ~1995 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 1.555 ms  (1554.7 µs)
+  Min: 1050 µs  Max: 9226 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.269 ms  (268.7 µs)
+  Min: 230 µs  Max: 1035 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 51,376 B
+  After integrate: 61,200 B
+  After GC: 61,120 B
+  Peak allocation: 9,824 B
+  Rows: 30
+  Free memory: 965,200 B → 955,456 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 309.0 shots/sec
+  Interpolation: 2193.9 calls/sec
+  Zero finding: 912.4 calls/sec
+============================================================
+Benchmark complete.
