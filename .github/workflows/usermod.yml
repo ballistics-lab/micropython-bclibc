@@ -1,0 +1,238 @@
+name: usermod
+
+on:
+  pull_request:
+    paths:
+      - "bclibc"
+      - "usermod/**"
+      - ".github/workflows/usermod.yml"
+  workflow_dispatch:
+    inputs:
+      mpy_tag:
+        description: "MicroPython release tag (e.g. v1.28.0)"
+        required: false
+        default: "v1.28.0"
+
+env:
+  MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
+
+jobs:
+  # ── ARMhf cross-compile: unix port, MICROPY_STANDALONE, static binary ──────
+  build-armhf:
+    name: build (armhf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install cross-compiler + build tools
+        run: |
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf \
+            autoconf automake libtool libtool-bin pkg-config
+
+      - name: Build mpy-cross (for FROZEN_MANIFEST)
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build standalone libffi for armhf
+        run: |
+          USERMOD_BUILD="$GITHUB_WORKSPACE/usermod/build"
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$USERMOD_BUILD/armhf_dp" \
+            CROSS_COMPILE=arm-linux-gnueabihf- \
+            MICROPY_STANDALONE=1 \
+            LDFLAGS_EXTRA="-static" \
+            deplibs
+
+      - name: Build armhf usermod (double precision, static)
+        working-directory: usermod
+        run: make armhf MPY_DIR="$MPY_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-armhf
+          path: usermod/build/armhf_dp/micropython
+          if-no-files-found: error
+
+  # ── Test armhf: static binary runs directly under qemu-arm ────────────────
+  test-armhf:
+    name: test (armhf / qemu-arm)
+    needs: build-armhf
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install QEMU user-mode emulation
+        run: sudo apt-get install -y qemu-user
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-usermod-armhf
+          path: usermod/build/armhf_dp/
+
+      - name: Make binary executable
+        run: chmod +x usermod/build/armhf_dp/micropython
+
+      - name: Run tests
+        run: |
+          qemu-arm usermod/build/armhf_dp/micropython \
+            tests/test_bclibc.py
+
+  # ── MIPS LE cross-compile: unix port (coverage variant), static binary ───────
+  build-mipsel:
+    name: build (mipsel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install cross-compiler + build tools
+        run: |
+          sudo apt-get install -y \
+            gcc-mipsel-linux-gnu \
+            autoconf automake libtool libtool-bin pkg-config
+
+      - name: Build mpy-cross (for FROZEN_MANIFEST)
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build standalone libffi for mipsel
+        run: |
+          USERMOD_BUILD="$GITHUB_WORKSPACE/usermod/build"
+          make -C "$MPY_DIR/ports/unix" VARIANT=coverage \
+            BUILD="$USERMOD_BUILD/mipsel_dp" \
+            CROSS_COMPILE=mipsel-linux-gnu- \
+            MICROPY_STANDALONE=1 \
+            LDFLAGS_EXTRA="-static" \
+            deplibs
+
+      - name: Build mipsel usermod (double precision, static)
+        working-directory: usermod
+        run: make mipsel MPY_DIR="$MPY_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-mipsel
+          path: usermod/build/mipsel_dp/micropython
+          if-no-files-found: error
+
+  # ── Test mipsel: static binary runs under qemu-mipsel ─────────────────────
+  test-mipsel:
+    name: test (mipsel / qemu-mipsel)
+    needs: build-mipsel
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install QEMU user-mode emulation
+        run: sudo apt-get install -y qemu-user
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-usermod-mipsel
+          path: usermod/build/mipsel_dp/
+
+      - name: Make binary executable
+        run: chmod +x usermod/build/mipsel_dp/micropython
+
+      - name: Run tests
+        run: |
+          qemu-mipsel usermod/build/mipsel_dp/micropython \
+            tests/test_bclibc.py
+
+  # ── AArch64: native ubuntu-26.04-arm runner — build + test + artifact ───
+  build-test-aarch64:
+    name: build + test (aarch64)
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install build deps
+        run: sudo apt-get install -y libffi-dev pkg-config
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build usermod (native aarch64, double precision)
+        working-directory: usermod
+        run: make x64 MPY_DIR="$MPY_DIR"
+
+      - name: Run tests
+        run: |
+          usermod/build/x64_dp/micropython \
+            tests/test_bclibc.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-aarch64
+          path: usermod/build/x64_dp/micropython
+          if-no-files-found: error
+
+  # ── armv7m_sp: QEMU Cortex-M3 firmware with usermod baked in ─────────────
+  #
+  # Builds ports/qemu BOARD=MPS2_AN385 with USER_C_MODULES + FROZEN_MANIFEST
+  # so that both _tiny_bclibc (C module) and tiny_bclibc.py (Python wrapper)
+  # are embedded in the firmware.  Tests run via usermod/ci/run_qemu.py which
+  # uses pyboard to execute test_bclibc.py over the QEMU UART — no .mpy files
+  # needed (unlike the natmod variant).
+  build-test-qemu-armv7m:
+    name: build + test (armv7m_sp / QEMU Cortex-M3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install toolchain + QEMU
+        run: |
+          sudo apt-get install -y \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            qemu-system-arm
+          pip install pyserial
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Generate version header
+        working-directory: usermod
+        run: make generated MPY_DIR="$MPY_DIR"
+
+      - name: Build QEMU firmware (MPS2_AN385 / Cortex-M3) with usermod
+        run: |
+          make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            TINY_BCLIBC_PRECISION=single
+
+      - name: Run tests via QEMU
+        env:
+          MPY_DIR: ${{ env.MPY_DIR }}
+        run: |
+          python3 usermod/ci/run_qemu.py \
+            "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
+            tests/

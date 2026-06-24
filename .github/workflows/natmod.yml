@@ -1,0 +1,305 @@
+name: natmod
+
+on:
+  pull_request:
+    paths:
+      - "bclibc"
+      - "natmod/**"
+      - ".github/workflows/natmod.yml"
+  workflow_dispatch:
+    inputs:
+      mpy_tag:
+        description: "MicroPython release tag (e.g. v1.28.0)"
+        required: false
+        default: "v1.28.0"
+
+env:
+  MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
+
+jobs:
+  # ── Build all architectures + precisions in parallel ───────────────────────
+  build:
+    name: build (${{ matrix.arch }}${{ matrix.suffix }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Single precision (float) — default for all MCU archs ─────────
+          - { arch: x64, suffix: _sp, target: x64sp }
+          - { arch: x86, suffix: _sp, target: x86sp, apt: gcc-multilib }
+          - {
+              arch: armv6m,
+              suffix: _sp,
+              target: rp2040,
+              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
+            }
+          - {
+              arch: armv7m,
+              suffix: _sp,
+              target: armv7m,
+              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
+            }
+          - {
+              arch: armv7emsp,
+              suffix: _sp,
+              target: rp2350,
+              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
+            }
+          - {
+              arch: armv7emdp,
+              suffix: _sp,
+              target: stm32h7,
+              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
+            }
+          - {
+              arch: rv32imc,
+              suffix: _sp,
+              target: esp32c3,
+              apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
+            }
+          - {
+              arch: rv64imc,
+              suffix: _sp,
+              target: rv64,
+              apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
+            }
+          # ── Double precision — host (x64/x86) and armv7emdp (hw double FPU)
+          - { arch: x64, suffix: _dp, target: x64 }
+          - { arch: x86, suffix: _dp, target: x86, apt: gcc-multilib }
+          - {
+              arch: armv7emdp,
+              suffix: _dp,
+              target: stm32h7dp,
+              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
+            }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install cross-compiler
+        if: matrix.apt != ''
+        run: sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install Python tools
+        run: pip install pyelftools ar
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build ${{ matrix.target }}
+        working-directory: natmod
+        run: make ${{ matrix.target }} MPY_DIR="$MPY_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-${{ matrix.arch }}${{ matrix.suffix }}
+          path: natmod/build/${{ matrix.arch }}${{ matrix.suffix }}/
+          if-no-files-found: error
+
+  # ── Test on x64 host — both sp and dp variants ────────────────────────────
+  test-x64:
+    name: test (x64${{ matrix.suffix }} / micropython)
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suffix: _sp, precision: single }
+          - { suffix: _dp, precision: double }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install micropython unix build deps
+        run: sudo apt-get install -y libffi-dev pkg-config
+
+      - name: Build micropython unix/standard (matches natmod .mpy version)
+        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-x64${{ matrix.suffix }}
+          path: natmod/build/x64${{ matrix.suffix }}/
+
+      - name: Symlink modules for testing
+        run: |
+          ln -sf ../natmod/build/x64${{ matrix.suffix }}/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
+          ln -sf ../natmod/build/x64${{ matrix.suffix }}/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+
+      - name: Run tests
+        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
+
+  # ── Test on x86 host — both sp and dp variants ────────────────────────────
+  test-x86:
+    name: test (x86${{ matrix.suffix }} / micropython 32-bit)
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suffix: _sp, precision: single }
+          - { suffix: _dp, precision: double }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install 32-bit build deps
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-multilib libffi-dev:i386 pkg-config
+
+      - name: Build micropython unix/standard 32-bit
+        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard MICROPY_FORCE_32BIT=1
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-x86${{ matrix.suffix }}
+          path: natmod/build/x86${{ matrix.suffix }}/
+
+      - name: Symlink modules for testing
+        run: |
+          ln -sf ../natmod/build/x86${{ matrix.suffix }}/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
+          ln -sf ../natmod/build/x86${{ matrix.suffix }}/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+
+      - name: Run tests
+        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
+
+  # ── Test on emulated Cortex-M3 via QEMU (armv7m, single precision) ────────
+  test-qemu-arm:
+    name: test (armv7m_sp / QEMU Cortex-M3)
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install toolchain + QEMU
+        run: |
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
+          pip install pyelftools ar pyserial
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
+        run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-armv7m_sp
+          path: natmod/build/armv7m_sp/
+
+      - name: Symlink modules for testing
+        run: |
+          ln -sf ../natmod/build/armv7m_sp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
+          ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+
+      - name: Run tests via QEMU
+        run: |
+          python3 natmod/ci/run_qemu.py \
+            "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
+            tests/
+
+  # armv6m (RP2040) runtime test is not possible via QEMU: the MICROBIT board
+  # firmware does not support loading native .mpy for Cortex-M0, and no other
+  # QEMU ARM board emulates armv6m native modules. The build job above already
+  # verifies that the armv6m .mpy is correctly generated; hardware testing on
+  # actual RP2040 hardware is outside the scope of this CI.
+
+  # aarch64: dynruntime.mk in MicroPython ≤ v1.28 explicitly does not support
+  # aarch64 as a native module link target. Jobs removed until upstream adds
+  # support. Makefile targets (make aarch64 / make aarch64sp) are kept for
+  # future use once a compatible MicroPython version is available.
+
+  # ── Experimental: armhf native .mpy via Docker/QEMU ───────────────────────
+  # Probes what native arch the armhf unix port reports (sys.implementation._mpy)
+  # then attempts to build and run a matching .mpy inside the container.
+  # DISABLED: not completely tested: look at https://github.com/ballistics-lab/bclibc/actions/runs/28057833858/job/83064511114
+  # test-armhf:
+  #   name: test (armhf / QEMU Docker — experimental)
+  #   if: ${{ !cancelled() }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v6
+
+  #     - name: Fetch MicroPython ${{ env.MPY_TAG }}
+  #       run: |
+  #         VER="${MPY_TAG#v}"
+  #         wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+  #         tar xf mpy.tar.xz && rm mpy.tar.xz
+  #         echo "MPY_VER=$VER" >> $GITHUB_ENV
+
+  #     - name: Set up QEMU for linux/arm/v7
+  #       uses: docker/setup-qemu-action@v3
+  #       with:
+  #         platforms: linux/arm/v7
+
+  #     - name: Write build/test script
+  #       run: |
+  #         cat > /tmp/run_armhf.sh << 'SCRIPT'
+  #         set -e
+  #         apt-get update -q
+  #         apt-get install -y -q --no-install-recommends \
+  #           build-essential libffi-dev pkg-config python3 python3-pip \
+  #           gcc-arm-none-eabi libnewlib-arm-none-eabi
+  #         pip3 install -q --break-system-packages pyelftools ar
+  #         MPY_DIR="/work/micropython-${MPY_VER}"
+  #         make -C "$MPY_DIR/mpy-cross"
+  #         make -C "$MPY_DIR/ports/unix" VARIANT=standard
+  #         MPY="$MPY_DIR/ports/unix/build-standard/micropython"
+  #         ARCH_ID=$("$MPY" -c 'import sys; print(sys.implementation._mpy >> 10)')
+  #         ARCHS=(NONE x86 x64 armv6 armv6m armv7m armv7em armv7emsp armv7emdp xtensa xtensawin rv32imc rv64imc aarch64)
+  #         ARCH="${ARCHS[$ARCH_ID]:-UNKNOWN}"
+  #         echo "armhf MicroPython native arch: $ARCH (id=$ARCH_ID)"
+  #         if [ "$ARCH" = "NONE" ] || [ "$ARCH" = "UNKNOWN" ]; then
+  #           echo "No native module support on armhf" >&2; exit 1
+  #         fi
+  #         cd /work/natmod
+  #         make ARCH="$ARCH" PRECISION=single MPY_DIR="$MPY_DIR"
+  #         SUFF=sp
+  #         ln -sf "build/${ARCH}_${SUFF}/_tiny_bclibc.mpy" ../tests/_tiny_bclibc.mpy
+  #         ln -sf "build/${ARCH}_${SUFF}/tiny_bclibc.mpy"  ../tests/tiny_bclibc.mpy
+  #         "$MPY" ../tests/test_bclibc.py
+  #         SCRIPT
+  #         chmod +x /tmp/run_armhf.sh
+
+  #     - name: Build and test in armhf container
+  #       run: |
+  #         docker run --rm --platform linux/arm/v7 \
+  #           -v "$GITHUB_WORKSPACE:/work" \
+  #           -v "/tmp/run_armhf.sh:/run_armhf.sh" \
+  #           -e MPY_VER="${{ env.MPY_VER }}" \
+  #           arm32v7/debian:bookworm-slim \
+  #           bash /run_armhf.sh

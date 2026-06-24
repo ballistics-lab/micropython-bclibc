@@ -1,0 +1,89 @@
+From: o-murphy <thehelixpg@gmail.com>
+Subject: [PATCH] tools/mpy_ld: support .srodata sections and absolute LO12 for RISC-V picolibc
+
+picolibc stores floating-point constants in .srodata.cst4 / .srodata.cst8
+(RISC-V small-data read-only sections).  Two issues prevented linking natmods
+that use picolibc's libc.a via LINK_RUNTIME=1:
+
+1. load_object_file only recognised sections starting with .rodata, .text,
+   .bss etc.  .srodata was not on the list so those sections were skipped,
+   leaving their symbols without a .section attribute and causing:
+
+     AttributeError: 'Symbol' object has no attribute 'section'
+
+   Fix: add ".srodata" to the accepted section-name prefixes.
+
+2. process_riscv32_relocation handled R_RISCV_LO12_I/S with the same
+   parent-lookup logic as R_RISCV_PCREL_LO12_I/S.  For the PCREL variant
+   the relocation symbol is a local label pointing to the PCREL_HI20
+   instruction; for the absolute variant (used by picolibc) the symbol IS
+   the target data (e.g. .LC1 in .srodata.cst4), so no parent lookup is
+   needed -- the address is directly s.section.addr + st_value.
+
+   Fix: after a failed parent lookup, fall back to the direct address for
+   absolute LO12; keep the assert only for PCREL_LO12 where a parent is
+   always required.
+
+Tested with gcc-riscv64-unknown-elf 14.2.0 + picolibc-riscv64-unknown-elf
+1.8.10 (Ubuntu 26.04) for rv32imc and rv64imc.
+
+Apply with: git apply mpy_ld_srodata.patch
+---
+ tools/mpy_ld.py | 34 ++++++++++++++++++++++++----------
+ 1 file changed, 24 insertions(+), 10 deletions(-)
+
+diff --git a/tools/mpy_ld.py b/tools/mpy_ld.py
+index 02d2431c4..974a06e5f 100755
+--- a/tools/mpy_ld.py
++++ b/tools/mpy_ld.py
+@@ -941,21 +941,27 @@ def process_riscv32_relocation(env, text_addr, r):
+         R_RISCV_LO12_S,
+     ):
+         parent = None
+-        for potential_parent in s.section.reloc:
+-            if potential_parent["r_offset"] != s["st_value"]:
+-                continue
+-            if potential_parent["r_info_type"] not in (
+-                R_RISCV_GOT_HI20,
+-                R_RISCV_PCREL_HI20,
+-                R_RISCV_HI20,
+-            ):
+-                continue
+-            parent = potential_parent
+-            break
+-        if parent is None:
+-            assert 0, r
++        if hasattr(s.section, "reloc"):
++            for potential_parent in s.section.reloc:
++                if potential_parent["r_offset"] != s["st_value"]:
++                    continue
++                if potential_parent["r_info_type"] not in (
++                    R_RISCV_GOT_HI20,
++                    R_RISCV_PCREL_HI20,
++                    R_RISCV_HI20,
++                ):
++                    continue
++                parent = potential_parent
++                break
+         addr = s.section.addr + s["st_value"]
+-        reloc = parent.computed_reloc
++        if parent is not None:
++            reloc = parent.computed_reloc
++        elif r_info_type in (R_RISCV_LO12_I, R_RISCV_LO12_S):
++            # Absolute LO12: sym points directly to the data (e.g. .LC1 in
++            # .srodata.cst4 from picolibc).  The full address is already known.
++            reloc = addr + r_addend
++        else:
++            assert 0, r
+         reloc_type = RISCV_RELOCATIONS_TYPE_MAP[r_info_type]
+
+     elif r_info_type in (
+@@ -1147,7 +1153,7 @@ def load_object_file(env, f, felf):
+             if s.data_size == 0:
+                 # Ignore empty sections
+                 pass
+-            elif s.name.startswith((".literal", ".text", ".rodata", ".data.rel.ro", ".bss")):
++            elif s.name.startswith((".literal", ".text", ".rodata", ".srodata", ".data.rel.ro", ".bss")):
+                 sec = Section.from_elfsec(s, felf)
+                 sections_shndx[idx] = sec
+                 if s.name.startswith(".literal"):
