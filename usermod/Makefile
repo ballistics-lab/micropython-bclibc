@@ -118,10 +118,11 @@ x64sp: $(VERSION_H)
 # deplibs builds lib32/libffi.a into BUILD; autoreconf is needed when the
 # libffi configure script is absent (fresh clone / first build).
 define x86_deplibs
-	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
-	    BUILD="$(_BUILD)/$(1)" \
-	    MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-	    submodules
+	test -f "$(abspath $(MPY_DIR)/lib/libffi/configure.ac)" || \
+	    $(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
+	        BUILD="$(_BUILD)/$(1)" \
+	        MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	        submodules
 	test -f "$(abspath $(MPY_DIR)/lib/libffi/configure)" || \
 	    ( cd "$(abspath $(MPY_DIR)/lib/libffi)" && libtoolize --copy --force && autoreconf -fvi )
 	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
