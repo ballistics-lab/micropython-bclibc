@@ -1,0 +1,54 @@
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 1.1.3-10-g4a6c3b6-sp
+Platform: x64 Linux (MicroPython unix/standard)
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 0.46 ms  (459 µs)
+  Min: 443 µs  Max: 498 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 30
+  Stop reason: 1
+  Avg: 2.46 ms  (2460 µs)
+  Min: 2378 µs  Max: 2869 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 0.062 ms  (62.0 µs)
+  Min: 6 µs  Max: 176 µs
+  Calls: 500
+  ~16129 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 0.131 ms  (130.9 µs)
+  Min: 124 µs  Max: 151 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.024 ms  (24.2 µs)
+  Min: 21 µs  Max: 43 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 40,480 B
+  After integrate: 60,000 B
+  After GC: 59,968 B
+  Peak allocation: 19,520 B
+  Rows: 30
+  Free memory: 2,032,352 B → 2,012,864 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 2217.3 shots/sec
+  Interpolation: 16159.3 calls/sec
+  Zero finding: 7397.5 calls/sec
+============================================================
+Benchmark complete.

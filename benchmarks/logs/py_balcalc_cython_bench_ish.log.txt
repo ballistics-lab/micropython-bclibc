@@ -1,0 +1,28 @@
+Platform: ish (iOS, Alpine Linux i686 emulation, ~25 MFLOPS, CPython)
+Engine: py-ballisticcalc CythonizedRK4IntegrationEngine
+
+=== performance_check.py -e cythonized_rk4 ===
+
+Namespace(e='cythonized_rk4', m='RK45', n=120)
+
+Calculate barrel elevation at distance 100.0m 120 times:
+Total time: 0.784573 seconds
+Execution rate: 152.95 calls per second
+
+Calculate trajectory to distance 1000.0m 120 times:
+Total time: 1.210198 seconds
+Execution rate: 99.16 calls per second
+
+Calculate trajectory to distance + extra 1000.0m 120 times:
+Total time: 1.389822 seconds
+Execution rate: 86.34 calls per second
+
+Calculate integrate_raw_at(key_attribute='position.x', target_value=3280.839895013123) 1000.0m 120 times:
+Total time: 0.471136 seconds
+Execution rate: 254.70 calls per second
+
+=== benchmark.py -e cythonized_rk4_engine ===
+
+timestamp,version,branch,git_hash,case,engine,repeats,mean_ms,stdev_ms,min_ms,max_ms
+2026-06-23T21:41:15Z,2.3.0b3,unknown,unknown,Trajectory,cythonized_rk4_engine,100,28.180,0.229,27.735,30.224
+2026-06-23T21:41:21Z,2.3.0b3,unknown,unknown,Zero,cythonized_rk4_engine,100,48.268,0.491,46.650,49.331

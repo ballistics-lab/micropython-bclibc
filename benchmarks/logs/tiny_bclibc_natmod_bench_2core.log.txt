@@ -1,0 +1,94 @@
+============================================================
+tiny_bclibc Dual-Core Benchmark
+============================================================
+Version: 1.1.3-10-g4a6c3b6-sp
+Running on: RP2040 (dual-core)
+
+[Main] Starting Core1 benchmark thread...
+[Main] Core0 will run heartbeat (LED blink)
+[Main] Watch the LED for status:
+  - Fast blink (5Hz): Benchmark running
+  - Slow blink (1Hz): Benchmark done
+  - 3 quick blinks: Finished
+
+[Main] Core1 thread started successfully
+
+[Core1] ============================================================
+[Core1] Starting benchmarks on Core1
+[Core0] Heartbeat started (LED on GPIO25)
+[Core1] ============================================================
+
+[Core1] --- integrate() (1 km, 10 m steps) ---
+[Core1] integrate() progress: 5/10
+[Core1] integrate() progress: 10/10
+[Core1]   Rows: 101
+[Core1]   Avg: 353.23 ms
+
+[Core1] --- integrate() (3 km, 100 m steps) ---
+[Core0] Heartbeat: RUNNING (50 blinks)
+[Core0] Heartbeat: RUNNING (100 blinks)
+[Core1] integrate() progress: 5/10
+[Core0] Heartbeat: RUNNING (150 blinks)
+[Core0] Heartbeat: RUNNING (200 blinks)
+[Core0] Heartbeat: RUNNING (250 blinks)
+[Core1] integrate() progress: 10/10
+[Core1]   Rows: 31
+[Core1]   Avg: 2151.21 ms
+
+[Core1] --- integrate_at() (single point interpolation) ---
+[Core0] Heartbeat: RUNNING (300 blinks)
+[Core1] integrate_at() progress: 20/100
+[Core0] Heartbeat: RUNNING (350 blinks)
+[Core0] Heartbeat: RUNNING (400 blinks)
+[Core1] integrate_at() progress: 40/100
+[Core0] Heartbeat: RUNNING (450 blinks)
+[Core1] integrate_at() progress: 60/100
+[Core0] Heartbeat: RUNNING (500 blinks)
+[Core0] Heartbeat: RUNNING (550 blinks)
+[Core1] integrate_at() progress: 80/100
+[Core0] Heartbeat: RUNNING (600 blinks)
+[Core0] Heartbeat: RUNNING (650 blinks)
+[Core1] integrate_at() progress: 100/100
+[Core1]   Avg: 66.949 ms
+[Core1]   ~15 calls/sec
+
+[Core1] --- find_zero_angle() (300 m zero) ---
+[Core1] find_zero_angle() progress: 10/10
+[Core1]   Avg: 119.104 ms
+[Core1]   Elevation: 0.1434°
+
+[Core1] --- find_apex() ---
+[Core1] find_apex() progress: 10/50
+[Core1] find_apex() progress: 20/50
+[Core1] find_apex() progress: 30/50
+[Core1] find_apex() progress: 40/50
+[Core1] find_apex() progress: 50/50
+[Core1]   Avg: 33.435 ms
+[Core1]   Apex: 532.1 ft
+
+[Core1] --- Memory usage (3 km trajectory) ---
+[Core0] Heartbeat: RUNNING (700 blinks)
+[Core1]   Peak allocation: 10,176 B
+[Core1]   Free memory: 170,976 B → 160,896 B
+
+[Core1] ============================================================
+[Core1] Benchmark Summary
+[Core1] ============================================================
+[Core1]   Trajectory (1 km): 2.8 shots/sec
+[Core1]   Interpolation: 14.9 calls/sec
+[Core1]   Zero finding: 8.4 calls/sec
+[Core1] ============================================================
+[Core1] Benchmarks complete!
+[Core0] Heartbeat finished
+
+============================================================
+Final Results from Core1
+============================================================
+All benchmarks completed successfully!
+Results: 6 benchmark categories
+
+  integrate() 1km: 353.23 ms, 101 rows
+  integrate_at(): 66.949 ms, ~15 calls/sec
+  find_zero_angle(): 119.104 ms, 0.1434°
+============================================================
+Done!

@@ -1,12 +1,12 @@
 # tiny_bclibc MicroPython module
 
 > [!WARNING]
-> **Experimental feature.** The MicroPython native module (`/`) and the
-> underlying `tiny_bclibc` C99 engine are experimental. APIs, binary format, and build
-> system may change without notice in future releases. Do not use in production firmware
-> without thorough validation on your specific target.
+> **Experimental feature.** This repository and the underlying `tiny_bclibc` C99 engine
+> are experimental. APIs, binary format, and build system may change without notice in
+> future releases. Do not use in production firmware without thorough validation on your
+> specific target.
 
-`/` provides three integration modes for using `tiny_bclibc` from
+This repository provides three integration modes for using `tiny_bclibc` from
 MicroPython — choose the one that fits your target and deployment constraints:
 
 | Approach | Location | Architectures | Module deployment |
@@ -18,6 +18,54 @@ MicroPython — choose the one that fits your target and deployment constraints:
 All three expose the same Python API: `Shot`, `Request`, `Wind`, `Config`,
 `integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`, `find_max_range`,
 and all flag / index constants.
+
+---
+
+## Project structure
+
+```
+.
+├── src/                        # Shared C + Python source
+│   ├── tiny_bclibc_mp.c        # MicroPython C extension (natmod + usermod)
+│   ├── tiny_bclibc.py          # Python API wrapper (frozen into firmware)
+│   ├── drag_tables.h           # Built-in G1/G7 drag curve tables
+│   └── math_shim.c             # math shim for x64/x86 natmod builds
+│
+├── natmod/                     # Native module (.mpy) build
+│   ├── Makefile                # make x64 / armv6m / esp32c3 / …
+│   ├── ci/run_qemu.py          # QEMU UART bridge for natmod CI tests
+│   ├── examples/               # Usage examples
+│   └── patches/                # MicroPython patches (if any)
+│
+├── usermod/                    # Usermod (baked-into-firmware) build
+│   ├── Makefile                # make x64 / armhf / mipsel / rp2040 / …
+│   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES
+│   ├── micropython.cmake       # CMake entry point for RP2040 / pico-sdk
+│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware
+│   ├── Dockerfile.mipsel       # Ubuntu 22.04 + mipsel cross-compiler
+│   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
+│
+├── ffimod/                     # FFI-based access (any unix arch)
+│   ├── _tiny_bclibc.py         # MicroPython ffi wrapper for libtiny_bclibc.so
+│   ├── ffi.py                  # ffi helpers
+│   └── uctypes.py              # uctypes shim for CPython test runner
+│
+├── tests/                      # Test suite (shared across all modes)
+│   ├── test_bclibc.py          # Main test suite (natmod / usermod)
+│   ├── test_ffi.py             # FFI backend tests
+│   ├── tiny_bclibc_bench.py    # Benchmark script
+│   ├── precision_compare.py    # float32 vs float64 comparison (CPython runner)
+│   └── precision_run.py        # MicroPython worker for precision comparison
+│
+├── benchmarks/                 # Extended benchmark results and scripts
+│
+├── bclibc/                     # Git submodule → github.com/ballistics-lab/bclibc
+│                               # Contains tiny_bclibc C99 engine (include/, src/)
+│
+├── version.h.in                # Version template (filled by Makefile)
+├── CHANGELOG.md
+└── LICENSE
+```
 
 ---
 
@@ -171,28 +219,28 @@ Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based port
 ### Prerequisites
 
 ```bash
-# For cross-compile targets + standalone libffi build
+# For armhf / aarch64 cross-compile targets
 sudo apt-get install \
     autoconf automake libtool libtool-bin \
     gcc-arm-linux-gnueabihf \     # armhf
     gcc-aarch64-linux-gnu \       # aarch64
-    gcc-mipsel-linux-gnu \        # mipsel
     gcc-multilib                  # x86
+
+# mipsel — builds inside Docker (Ubuntu 22.04); no host toolchain needed:
+#   make mipsel MPY_DIR=...   (Docker image built automatically on first run)
 
 # For rp2040
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi
 ```
 
-`MPY_DIR` defaults to `../natmod/micropython` (local symlink).
+`MPY_DIR` must be set explicitly or default to `micropython` (local symlink at repo root).
 
 ### Test (unix host)
 
 ```bash
 cd usermod
 make x64 MPY_DIR=/path/to/micropython-1.28.0
-/path/to/micropython-1.28.0/ports/unix/build-standard/micropython \
-    ../tests/test_bclibc.py  # NOT needed — binary IS the micropython:
-build/x64/micropython ../tests/test_bclibc.py
+build/x64_dp/micropython tests/test_bclibc.py
 ```
 
 ### Test (RP2040)
@@ -693,3 +741,12 @@ python3 tests/precision_compare.py
 
 See [`tests/precision_compare.py`](tests/precision_compare.py) (CPython runner) and
 [`tests/precision_run.py`](tests/precision_run.py) (MicroPython worker).
+
+> [!WARNING]
+>
+> ## RISK NOTICE
+>
+> This library performs approximate simulations of complex physical processes.
+> Therefore, the calculation results MUST NOT be considered as completely and reliably > reflecting actual behavior of projectiles. While these results may be used for educational purpose, they must NOT be considered as reliable for the areas where incorrect calculation may cause making a wrong decision, financial harm, or can put a human life at risk.
+> 
+> THE CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE USE OR OTHER DEALINGS IN THE MATERIALS.

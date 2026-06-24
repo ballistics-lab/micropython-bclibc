@@ -8,7 +8,7 @@
 SRC_USERMOD_C += $(USERMOD_DIR)/../src/tiny_bclibc_mp.c
 
 CFLAGS_USERMOD += \
-    -I$(USERMOD_DIR)/../../tiny_bclibc/include \
+    -I$(USERMOD_DIR)/../bclibc/tiny_bclibc/include \
     -I$(USERMOD_DIR) \
     -DTINY_BCLIBC_NO_THREAD_LOCAL \
     -DTINY_BCLIBC_NO_ERR_BUF

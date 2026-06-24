@@ -186,8 +186,8 @@ $(BUILD)/tiny_bclibc_mp.o: $(VERSION_H)
 # ── Convenience aliases ────────────────────────────────────────────────────────
 .PHONY: submodules x64 x64sp x86 x86sp aarch64 aarch64sp rp2040 rp2350 stm32f4 armv7m stm32h7 stm32h7dp esp32s3 esp32 esp32c3 esp32c6 rv64 dist clean
 
-submodules
-    git submodule update --init --recursive
+submodules:
+	git submodule update --init --recursive
 
 x64:
 	$(MAKE) ARCH=x64 PRECISION=double dist

@@ -1,0 +1,25 @@
+Platform: x64 Linux (CPython, py-ballisticcalc v2.3.0b3, CythonizedRK4IntegrationEngine)
+
+=== benchmark.py -e cythonized_rk4_engine -r 1000 -w 100 ===
+
+timestamp,version,branch,git_hash,case,engine,repeats,mean_ms,stdev_ms,min_ms,max_ms
+2026-06-23T21:59:13Z,2.3.0b3,master,b36a110,Trajectory,cythonized_rk4_engine,1000,0.334,0.010,0.327,0.546
+2026-06-23T21:59:14Z,2.3.0b3,master,b36a110,Zero,cythonized_rk4_engine,1000,0.960,0.052,0.946,2.514
+
+=== performance_check.py -e cythonized_rk4 -n 10000 ===
+
+Calculate barrel elevation at distance 100.0m 10000 times:
+Total time: 0.448502 seconds
+Execution rate: 22296.46 calls per second
+
+Calculate trajectory to distance 1000.0m 10000 times:
+Total time: 1.226644 seconds
+Execution rate: 8152.32 calls per second
+
+Calculate trajectory to distance + extra 1000.0m 10000 times:
+Total time: 1.316165 seconds
+Execution rate: 7597.83 calls per second
+
+Calculate integrate_raw_at(key_attribute='position.x', target_value=3280.839895013123) 1000.0m 10000 times:
+Total time: 0.541278 seconds
+Execution rate: 18474.81 calls per second

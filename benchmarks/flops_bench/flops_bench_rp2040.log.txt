@@ -1,0 +1,14 @@
+====================================================
+FPU FLOPS Benchmark (native .mpy)
+====================================================
+Platform: RP2040 (Cortex-M0+, 125 MHz, no FPU, soft-float via newlib)
+Module:   _flops_bench_armv6m.mpy
+
+Latency-bound (volatile, sequential chain):
+  DP      :      0.52 MFLOPS   dt=3.840s
+  SP      :      1.10 MFLOPS   dt=1.816s
+
+Throughput (8 independent accumulators):
+  DP      :      1.41 MFLOPS   dt=1.138s
+  SP      :      2.21 MFLOPS   dt=0.725s
+====================================================

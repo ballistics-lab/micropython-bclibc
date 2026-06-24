@@ -9,28 +9,30 @@
 #   make aarch64sp  — AArch64 single → build/aarch64_sp/micropython
 #   make armhf      — ARMv7hf double → build/armhf_dp/micropython
 #   make armhfsp    — ARMv7hf single → build/armhf_sp/micropython
-#   make mipsel     — MIPS LE double → build/mipsel_dp/micropython
-#   make mipselsp   — MIPS LE single → build/mipsel_sp/micropython
+#   make mipsel     — MIPS LE double → build/mipsel_dp/micropython  (Docker)
+#   make mipselsp   — MIPS LE single → build/mipsel_sp/micropython  (Docker)
 #   make rp2040     — RP2040 single  → build/rp2040_sp/firmware.{elf,uf2}
 #   make rp2040dp   — RP2040 double  → build/rp2040_dp/firmware.{elf,uf2}
 #
-# Set MPY_DIR= to override (default: ../natmod/micropython symlink).
+# Set MPY_DIR= to point at a MicroPython source tree (required for all targets).
 
 MPY_DIR      ?= micropython
 THIS_DIR     := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-# make-based ports: USER_C_MODULES must be a directory.
-# py.mk searches $(USER_C_MODULES)/*/micropython.mk — we point to 
-# so that usermod/micropython.mk is found as the module descriptor.
+# py.mk scans $(USER_C_MODULES)/*/micropython.mk — repo root lets it find usermod/micropython.mk
 MAKE_MODULES := $(abspath ../)
-# cmake-based ports (rp2040, esp32): pass the .cmake file.
 CMAKE_MODULE := $(THIS_DIR)/micropython.cmake
 MANIFEST     := $(THIS_DIR)/manifest.py
 VERSION_H    := $(THIS_DIR)/generated/bclibc_mp/version.h
 VERSION_IN   := $(abspath ../version.h.in)
-BCLIBC_ROOT  := $(abspath ../..)
+BCLIBC_ROOT  := $(abspath $(THIS_DIR)/..)
 _BUILD       := $(THIS_DIR)/build
 
-.PHONY: all x64 x64sp x86 x86sp \
+# mipsel targets run inside Docker (Ubuntu 22.04) — MPY_DIR resolved to absolute path
+DOCKER_IMAGE := micropython-mipsel-builder
+_MPY_ABS     := $(abspath $(MPY_DIR))
+_REPO_ABS    := $(abspath $(THIS_DIR)/..)
+
+.PHONY: all submodules x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
         rp2040 rp2040dp generated clean help
 
@@ -42,9 +44,9 @@ help:
 	@echo "  x86 / x86sp          — x86 32-bit (dp / sp)   build/x86_{dp,sp}/micropython"
 	@echo "  aarch64 / aarch64sp  — AArch64 cross           build/aarch64_{dp,sp}/micropython"
 	@echo "  armhf / armhfsp      — ARMv7hf cross           build/armhf_{dp,sp}/micropython"
-	@echo "  mipsel / mipselsp    — MIPS LE cross            build/mipsel_{dp,sp}/micropython"
+	@echo "  mipsel / mipselsp    — MIPS LE (Docker)        build/mipsel_{dp,sp}/micropython"
 	@echo "  rp2040 / rp2040dp    — RP2040 Pico (sp / dp)  build/rp2040_{sp,dp}/firmware.uf2"
-	@echo "Set MPY_DIR= to override MicroPython source"
+	@echo "Set MPY_DIR= to point at a MicroPython source tree"
 
 # ── Version header ─────────────────────────────────────────────────────────────
 $(VERSION_H): $(VERSION_IN)
@@ -67,7 +69,6 @@ generated: $(VERSION_H)
 # $(1) = extra make vars (e.g. MICROPY_FORCE_32BIT=1)
 # $(2) = precision: single | double
 # $(3) = output subdirectory, e.g. x64_dp, armhf_sp
-# Precision is passed as TINY_BCLIBC_PRECISION, picked up by micropython.mk.
 define unix_build
 	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
 	    BUILD="$(_BUILD)/$(3)" \
@@ -92,6 +93,9 @@ define cross_build
 	    TINY_BCLIBC_PRECISION=$(2)
 endef
 
+submodules:
+	git submodule update --init --recursive
+
 # ── x64 ───────────────────────────────────────────────────────────────────────
 x64: $(VERSION_H)
 	$(call unix_build,,double,x64_dp)
@@ -100,8 +104,6 @@ x64sp: $(VERSION_H)
 	$(call unix_build,,single,x64_sp)
 
 # ── x86 — standalone (MICROPY_STANDALONE=1 avoids system 32-bit libffi) ─────
-# Requires: gcc-multilib + one-time setup:
-#   make -C $MPY_DIR/ports/unix MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 submodules deplibs
 x86: $(VERSION_H)
 	$(call unix_build,MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static",double,x86_dp)
 
@@ -122,26 +124,66 @@ armhf: $(VERSION_H)
 armhfsp: $(VERSION_H)
 	$(call cross_build,arm-linux-gnueabihf-,single,armhf_sp)
 
-# ── MIPS LE (cross) — coverage variant required for MIPS ─────────────────────
+# ── MIPS LE — builds inside Docker (Ubuntu 22.04 + gcc-mipsel-linux-gnu) ─────
+# MPY_DIR is mounted read-write (deplibs writes into it); output lands in build/mipsel_{dp,sp}.
+# Image is built once and reused; rebuild manually with: docker rmi $(DOCKER_IMAGE)
 mipsel: $(VERSION_H)
-	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=coverage \
-	    BUILD="$(_BUILD)/mipsel_dp" \
-	    CROSS_COMPILE=mipsel-linux-gnu- \
-	    MICROPY_STANDALONE=1 \
-	    LDFLAGS_EXTRA="-static" \
-	    USER_C_MODULES="$(MAKE_MODULES)" \
-	    FROZEN_MANIFEST="$(MANIFEST)" \
-	    TINY_BCLIBC_PRECISION=double
+	docker image inspect $(DOCKER_IMAGE) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE) -f $(THIS_DIR)/Dockerfile.mipsel $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); ulimit -n 1024; \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_dp \
+	            submodules; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_dp \
+	            deplibs; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_dp \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=double'
 
 mipselsp: $(VERSION_H)
-	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=coverage \
-	    BUILD="$(_BUILD)/mipsel_sp" \
-	    CROSS_COMPILE=mipsel-linux-gnu- \
-	    MICROPY_STANDALONE=1 \
-	    LDFLAGS_EXTRA="-static" \
-	    USER_C_MODULES="$(MAKE_MODULES)" \
-	    FROZEN_MANIFEST="$(MANIFEST)" \
-	    TINY_BCLIBC_PRECISION=single
+	docker image inspect $(DOCKER_IMAGE) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE) -f $(THIS_DIR)/Dockerfile.mipsel $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); ulimit -n 1024; \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_sp \
+	            submodules; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_sp \
+	            deplibs; \
+	        make -j$$J -C /mpy/ports/unix \
+	            CROSS_COMPILE=mipsel-linux-gnu- VARIANT=coverage \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/mipsel_sp \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=single'
 
 # ── RP2040 (CMake via pico-sdk) ───────────────────────────────────────────────
 rp2040: $(VERSION_H)
@@ -162,5 +204,6 @@ rp2040dp: $(VERSION_H)
 	    FROZEN_MANIFEST="$(MANIFEST)"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
+.PHONY: clean
 clean:
-	rm -rf build/ generated/
+	rm -rf "$(_BUILD)" generated/
