@@ -75,7 +75,7 @@ jobs:
             }
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -119,7 +119,7 @@ jobs:
           - { suffix: _sp, precision: single }
           - { suffix: _dp, precision: double }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -162,7 +162,7 @@ jobs:
           - { suffix: _sp, precision: single }
           - { suffix: _dp, precision: double }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -202,7 +202,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -260,7 +260,7 @@ jobs:
   #   if: ${{ !cancelled() }}
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v6
+  #     - uses: actions/checkout@v7
 
   #     - name: Fetch MicroPython ${{ env.MPY_TAG }}
   #       run: |
