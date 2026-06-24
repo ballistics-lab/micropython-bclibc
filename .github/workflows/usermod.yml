@@ -199,3 +199,147 @@ jobs:
           python3 usermod/ci/run_qemu.py \
             "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
             tests/
+
+  # ── x64: native builds, test, artifact ───────────────────────────────────
+  build-test-x64:
+    name: build + test (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+          fetch-depth: 0
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install deps
+        run: sudo apt-get install -y libffi-dev
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build x64 dp + sp
+        working-directory: usermod
+        run: |
+          make x64   MPY_DIR="$MPY_DIR"
+          make x64sp MPY_DIR="$MPY_DIR"
+
+      - name: Test x64 dp + sp
+        run: |
+          usermod/build/x64_dp/micropython tests/test_bclibc.py
+          usermod/build/x64_sp/micropython tests/test_bclibc.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-x64
+          path: |
+            usermod/build/x64_dp/micropython
+            usermod/build/x64_sp/micropython
+          if-no-files-found: error
+
+  # ── x86: 32-bit standalone builds, test, artifact ────────────────────────
+  build-test-x86:
+    name: build + test (x86)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+          fetch-depth: 0
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        run: |
+          VER="${MPY_TAG#v}"
+          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+
+      - name: Install deps
+        run: |
+          sudo apt-get install -y \
+            gcc-multilib g++-multilib \
+            texinfo
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build standalone libffi for x86
+        run: |
+          B="$GITHUB_WORKSPACE/usermod/build"
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$B/x86_dp" \
+            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            deplibs
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$B/x86_sp" \
+            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            deplibs
+
+      - name: Build x86 dp + sp
+        working-directory: usermod
+        run: |
+          make x86   MPY_DIR="$MPY_DIR"
+          make x86sp MPY_DIR="$MPY_DIR"
+
+      - name: Test x86 dp + sp
+        run: |
+          usermod/build/x86_dp/micropython tests/test_bclibc.py
+          usermod/build/x86_sp/micropython tests/test_bclibc.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-x86
+          path: |
+            usermod/build/x86_dp/micropython
+            usermod/build/x86_sp/micropython
+          if-no-files-found: error
+
+  # ── RP2040: build firmware (sp + dp), upload UF2 artifacts ──────────────
+  build-rp2040:
+    name: build + artifact (rp2040)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+          fetch-depth: 0
+
+      - name: Clone MicroPython ${{ env.MPY_TAG }}
+        run: |
+          git clone --depth=1 --branch "${MPY_TAG}" \
+            https://github.com/micropython/micropython.git
+          cd micropython
+          git submodule update --init \
+            lib/pico-sdk lib/micropython-lib lib/tinyusb
+          git -C lib/pico-sdk submodule update --init
+          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython" >> $GITHUB_ENV
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            python3
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build RP2040 sp + dp
+        working-directory: usermod
+        run: |
+          make rp2040   MPY_DIR="$MPY_DIR"
+          make rp2040dp MPY_DIR="$MPY_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-rp2040
+          path: |
+            usermod/build/rp2040_sp/firmware.uf2
+            usermod/build/rp2040_dp/firmware.uf2
+          if-no-files-found: error

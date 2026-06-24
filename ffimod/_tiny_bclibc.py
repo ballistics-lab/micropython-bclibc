@@ -50,7 +50,14 @@ _R  = "f" if _SP else "d"   # array / struct real_t type code
 _RS = 4   if _SP else 8     # sizeof(real_t)
 
 # ── .so location ──────────────────────────────────────────────────────────────
-_SO = os.getenv("TINY_BCLIBC_SO") or _rel("../bclibc/tiny_bclibc/build-shared/libtiny_bclibc.so")
+_SO = os.getenv("TINY_BCLIBC_SO")
+if not _SO:
+    _local = _rel("tiny_bclibc.so")
+    try:
+        os.stat(_local)
+        _SO = _local
+    except OSError:
+        _SO = _rel("../bclibc/tiny_bclibc/build-shared/libtiny_bclibc.so")
 _lib = ffi.open(_SO)
 
 # ── FFI function handles ───────────────────────────────────────────────────────

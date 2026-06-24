@@ -20,7 +20,6 @@ cmake_minimum_required(VERSION 3.13)
 
 get_filename_component(_USERMOD_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
 get_filename_component(_MOD_DIR     "${_USERMOD_DIR}/.."         ABSOLUTE)
-get_filename_component(_ROOT_DIR    "${_MOD_DIR}/.."             ABSOLUTE)
 
 # ── Version header ────────────────────────────────────────────────────────────
 set(_VERSION_H  "${_USERMOD_DIR}/generated/bclibc_mp/version.h")
@@ -30,7 +29,7 @@ if(NOT EXISTS "${_VERSION_H}")
     file(MAKE_DIRECTORY "${_USERMOD_DIR}/generated/bclibc_mp")
     execute_process(
         COMMAND git describe --tags --always
-        WORKING_DIRECTORY "${_ROOT_DIR}"
+        WORKING_DIRECTORY "${_MOD_DIR}"
         OUTPUT_VARIABLE _GIT_TAG
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
@@ -61,7 +60,7 @@ target_sources(usermod_tiny_bclibc INTERFACE
 )
 
 target_include_directories(usermod_tiny_bclibc INTERFACE
-    "${_ROOT_DIR}/tiny_bclibc/include"
+    "${_MOD_DIR}/bclibc/tiny_bclibc/include"
     "${_USERMOD_DIR}"
 )
 

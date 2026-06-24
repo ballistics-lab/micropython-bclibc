@@ -91,6 +91,7 @@ define cross_build
 	    USER_C_MODULES="$(MAKE_MODULES)" \
 	    FROZEN_MANIFEST="$(MANIFEST)" \
 	    TINY_BCLIBC_PRECISION=$(2)
+	$(1)strip -s "$(_BUILD)/$(3)/micropython"
 endef
 
 submodules:
@@ -154,7 +155,8 @@ mipsel: $(VERSION_H)
 	            BUILD=/workspace/usermod/build/mipsel_dp \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=double'
+	            TINY_BCLIBC_PRECISION=double; \
+	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_dp/micropython'
 
 mipselsp: $(VERSION_H)
 	docker image inspect $(DOCKER_IMAGE) >/dev/null 2>&1 || \
@@ -183,7 +185,8 @@ mipselsp: $(VERSION_H)
 	            BUILD=/workspace/usermod/build/mipsel_sp \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=single'
+	            TINY_BCLIBC_PRECISION=single; \
+	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_sp/micropython'
 
 # ── RP2040 (CMake via pico-sdk) ───────────────────────────────────────────────
 rp2040: $(VERSION_H)
