@@ -42,7 +42,10 @@ and all flag / index constants.
 │   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES
 │   ├── micropython.cmake       # CMake entry point for RP2040 / pico-sdk
 │   ├── manifest.py             # Freezes tiny_bclibc.py into firmware
-│   ├── Dockerfile.mipsel       # Ubuntu 22.04 + mipsel cross-compiler
+│   ├── Dockerfile.x86          # Ubuntu 22.04 + gcc-multilib (x86 builds)
+│   ├── Dockerfile.armhf        # Ubuntu 22.04 + gcc-arm-linux-gnueabihf
+│   ├── Dockerfile.armv7m       # Ubuntu 22.04 + gcc-arm-none-eabi + qemu-system-arm
+│   ├── Dockerfile.mipsel       # Ubuntu 22.04 + gcc-mipsel-linux-gnu
 │   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │
 ├── ffimod/                     # FFI-based access (any unix arch)
@@ -196,18 +199,19 @@ available as a built-in. Use this approach when:
 All commands are run from `usermod/`.
 
 ```bash
-make x64        # x64 double (default)
-make x64sp      # x64 single
-make x86        # x86 double  [requires gcc-multilib; standalone static]
-make x86sp      # x86 single
-make aarch64    # AArch64 double  (cross: aarch64-linux-gnu-, static)
-make aarch64sp  # AArch64 single
-make armhf      # ARMv7hf double  (cross: arm-linux-gnueabihf-, static)
-make armhfsp    # ARMv7hf single
-make mipsel     # MIPS LE double  (cross: mipsel-linux-gnu-, static)
-make mipselsp   # MIPS LE single
-make rp2040     # RP2040 single (cmake, pico-sdk)
-make rp2040dp   # RP2040 double
+make x64          # x64 double (default)
+make x64sp        # x64 single
+make x86          # x86 double           [Docker — no host toolchain needed]
+make x86sp        # x86 single           [Docker]
+make aarch64      # AArch64 double  (cross: aarch64-linux-gnu-, static)
+make aarch64sp    # AArch64 single
+make armhf        # ARMv7hf double       [Docker — no host toolchain needed]
+make armhfsp      # ARMv7hf single       [Docker]
+make mipsel       # MIPS LE double       [Docker]
+make mipselsp     # MIPS LE single       [Docker]
+make qemu-armv7m  # Cortex-M3 build + test [Docker]
+make rp2040       # RP2040 single (cmake, pico-sdk)
+make rp2040dp     # RP2040 double
 ```
 
 Output for unix targets: `usermod/build/<target>/micropython`
@@ -219,17 +223,15 @@ Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based port
 ### Prerequisites
 
 ```bash
-# For armhf / aarch64 cross-compile targets
-sudo apt-get install \
-    autoconf automake libtool libtool-bin \
-    gcc-arm-linux-gnueabihf \     # armhf
-    gcc-aarch64-linux-gnu \       # aarch64
-    gcc-multilib                  # x86
+# x64 / x64sp — host gcc only (already installed)
 
-# mipsel — builds inside Docker (Ubuntu 22.04); no host toolchain needed:
-#   make mipsel MPY_DIR=...   (Docker image built automatically on first run)
+# aarch64 / aarch64sp — cross-compiler on host
+sudo apt-get install gcc-aarch64-linux-gnu
 
-# For rp2040
+# x86, armhf, mipsel, qemu-armv7m — Docker only, no host toolchain needed:
+#   Docker images are built automatically on first run from usermod/Dockerfile.*
+
+# rp2040 / rp2040dp — bare-metal ARM toolchain
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi
 ```
 
@@ -264,46 +266,28 @@ vfs.mount(bdev, '/')
 
 ### Test (QEMU Cortex-M3 / armv7m_sp)
 
+Runs entirely inside Docker — no host toolchain needed:
+
 ```bash
-sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
-pip install pyserial
-
-MPY_DIR=/path/to/micropython-1.28.0
-make -C "$MPY_DIR/mpy-cross"
-make generated MPY_DIR="$MPY_DIR"
-
-make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 \
-    USER_C_MODULES="$(pwd)/.." \
-    FROZEN_MANIFEST="$(pwd)/manifest.py" \
-    TINY_BCLIBC_PRECISION=single
-
-MPY_DIR="$MPY_DIR" python3 ci/run_qemu.py \
-    "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
-    ../tests/
+cd usermod
+make qemu-armv7m MPY_DIR=/path/to/micropython-1.28.0
 ```
 
-Unlike the natmod QEMU runner, `ci/run_qemu.py` sends `test_bclibc.py` directly to the
-UART REPL — no `.mpy` injection step, because the module is already built into the firmware.
+The `qemu-armv7m` target builds the Docker image on first run, then inside the container:
+mpy-cross → version header → MPS2_AN385 firmware → `ci/run_qemu.py` test.
 
-### Standalone static build (cross, for qemu-user testing)
-
-Cross-compile targets (`armhf`, `aarch64`, `mipsel`) use `MICROPY_STANDALONE=1` and
-`LDFLAGS_EXTRA="-static"` to produce fully static binaries. These run directly under
-`qemu-arm` / `qemu-aarch64` / `qemu-mipsel` without needing matching shared libraries.
-
-Building libffi from source (required by `MICROPY_STANDALONE=1`) needs `libtool-bin`
-so that `lib/libffi/autogen.sh → autoreconf` can find `libtoolize`:
+### Test (armhf / qemu-arm)
 
 ```bash
-sudo apt-get install autoconf automake libtool libtool-bin pkg-config
-USERMOD_BUILD="$(pwd)/build"
-make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-    BUILD="$USERMOD_BUILD/armhf" \
-    CROSS_COMPILE=arm-linux-gnueabihf- \
-    MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-    deplibs
-make armhf MPY_DIR="$MPY_DIR"
-qemu-arm build/armhf/micropython ../tests/test_bclibc.py
+cd usermod
+make armhf MPY_DIR=/path/to/micropython-1.28.0
+qemu-arm build/armhf_dp/micropython ../tests/test_bclibc.py
+```
+
+The build runs inside Docker (`Dockerfile.armhf`). Only `qemu-arm` is needed on the host:
+
+```bash
+sudo apt-get install qemu-user
 ```
 
 ### natmod vs usermod comparison

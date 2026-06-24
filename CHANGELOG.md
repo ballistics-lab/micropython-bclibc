@@ -9,9 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### `usermod/` — x86, armhf, armv7m builds moved inside Docker
+
+All targets that require standalone libffi (`autoreconf` + `deplibs`) or a bare-metal
+toolchain are now fully self-contained inside pinned Ubuntu 22.04 Docker images.
+This eliminates `autotools` version sensitivity (Ubuntu 24.04+ breaks libffi's
+`configure.ac` from MicroPython v1.28) and removes all host-side toolchain requirements
+beyond Docker itself.
+
+| Target | Dockerfile | What runs inside |
+|--------|-----------|-----------------|
+| `x86` / `x86sp` | `Dockerfile.x86` | mpy-cross, autoreconf, deplibs, main build |
+| `armhf` / `armhfsp` | `Dockerfile.armhf` | mpy-cross, autoreconf, deplibs, main build, strip |
+| `qemu-armv7m` | `Dockerfile.armv7m` | mpy-cross, firmware build, QEMU test |
+| `mipsel` / `mipselsp` | `Dockerfile.mipsel` | mpy-cross, submodules, deplibs, main build, strip |
+
+- `usermod/Dockerfile.x86`: Ubuntu 22.04 + `gcc-multilib g++-multilib` + autotools.
+- `usermod/Dockerfile.armhf`: Ubuntu 22.04 + `gcc-arm-linux-gnueabihf` + autotools.
+- `usermod/Dockerfile.armv7m`: Ubuntu 22.04 + `gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm python3-serial`.
+- New `make qemu-armv7m` target: runs the full Cortex-M3 build **and** test inside Docker via `usermod/ci/run_qemu.py`.
+- `apt-deps` Makefile target removed (superseded by Docker).
+- `.github/workflows/usermod.yml`:
+  - `build-test-x86`: removed `Install deps` and `Build mpy-cross` steps; single `make x86 / make x86sp` step.
+  - `build-test-armhf`: runner changed `ubuntu-22.04` → `ubuntu-26.04-arm`; removed `Install cross-compiler`, `Build mpy-cross`, `Build standalone libffi` steps; build step is now `make armhf`; only `Install QEMU` + test remain on the host.
+  - `build-test-qemu-armv7m`: runner changed `ubuntu-latest` → `ubuntu-26.04-arm`; all 5 steps (toolchain install, mpy-cross, version header, firmware build, test) replaced with a single `make qemu-armv7m`.
+
 #### `usermod/Makefile` — mipsel builds inside Docker
-- `mipsel` / `mipselsp` targets now run inside a Docker container (Ubuntu 20.04 + `gcc-mipsel-linux-gnu`) instead of requiring the toolchain on the host. Docker image is built automatically on first run from `usermod/Dockerfile.mipsel` and reused on subsequent builds.
-- `usermod/Dockerfile.mipsel`: Ubuntu 20.04, `libtool-bin` included for `autoreconf`/`deplibs`; no host toolchain install needed for mipsel.
+- `mipsel` / `mipselsp` targets now run inside a Docker container (Ubuntu 22.04 + `gcc-mipsel-linux-gnu`) instead of requiring the toolchain on the host. Docker image is built automatically on first run from `usermod/Dockerfile.mipsel` and reused on subsequent builds.
+- `usermod/Dockerfile.mipsel`: Ubuntu 22.04, `libtool-bin` included for `autoreconf`/`deplibs`; no host toolchain install needed for mipsel.
 - Build sequence inside container: `mpy-cross` → `submodules` → `deplibs` → main build. Output lands on the host at `usermod/build/mipsel_{dp,sp}/micropython` via Docker volume mount.
 - `.github/workflows/usermod.yml` `build-mipsel` job simplified: toolchain install, mpy-cross, and deplibs steps removed; replaced with a single `make mipsel MPY_DIR=...` step.
 

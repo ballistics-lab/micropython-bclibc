@@ -22,7 +22,7 @@ jobs:
     name: build + test (armhf / qemu-arm)
     runs-on: ubuntu-26.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -61,7 +61,7 @@ jobs:
     name: build + test (mipsel / qemu-mipsel)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -98,7 +98,7 @@ jobs:
     name: build + test (aarch64)
     runs-on: ubuntu-26.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -142,7 +142,7 @@ jobs:
     name: build + test (armv7m_sp / QEMU Cortex-M3)
     runs-on: ubuntu-26.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -163,7 +163,7 @@ jobs:
     name: build + test (x64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -205,7 +205,7 @@ jobs:
     name: build + test (x86)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
@@ -241,7 +241,7 @@ jobs:
     name: build + artifact (rp2040)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: 'true'
           fetch-depth: 0
