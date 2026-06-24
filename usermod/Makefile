@@ -27,16 +27,17 @@ VERSION_IN   := $(abspath ../version.h.in)
 BCLIBC_ROOT  := $(abspath $(THIS_DIR)/..)
 _BUILD       := $(THIS_DIR)/build
 
-# x86, armhf, and mipsel targets run inside Docker (Ubuntu 22.04) — MPY_DIR resolved to absolute path
-DOCKER_IMAGE      := micropython-mipsel-builder
-DOCKER_IMAGE_X86  := micropython-x86-builder
+# x86, armhf, armv7m, and mipsel targets run inside Docker (Ubuntu 22.04) — MPY_DIR resolved to absolute path
+DOCKER_IMAGE       := micropython-mipsel-builder
+DOCKER_IMAGE_X86   := micropython-x86-builder
 DOCKER_IMAGE_ARMHF := micropython-armhf-builder
+DOCKER_IMAGE_ARMV7M := micropython-armv7m-builder
 _MPY_ABS          := $(abspath $(MPY_DIR))
 _REPO_ABS         := $(abspath $(THIS_DIR)/..)
 
 .PHONY: all submodules x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
-        rp2040 rp2040dp generated clean help
+        qemu-armv7m rp2040 rp2040dp generated clean help
 
 all: x64
 
@@ -46,6 +47,7 @@ help:
 	@echo "  x86 / x86sp          — x86 32-bit (Docker)      build/x86_{dp,sp}/micropython"
 	@echo "  aarch64 / aarch64sp  — AArch64 cross           build/aarch64_{dp,sp}/micropython"
 	@echo "  armhf / armhfsp      — ARMv7hf (Docker)        build/armhf_{dp,sp}/micropython"
+	@echo "  qemu-armv7m          — Cortex-M3 QEMU (Docker, build+test)"
 	@echo "  mipsel / mipselsp    — MIPS LE (Docker)        build/mipsel_{dp,sp}/micropython"
 	@echo "  rp2040 / rp2040dp    — RP2040 Pico (sp / dp)  build/rp2040_{sp,dp}/firmware.uf2"
 	@echo "Set MPY_DIR= to point at a MicroPython source tree"
@@ -232,6 +234,27 @@ mipselsp: $(VERSION_H)
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
 	            TINY_BCLIBC_PRECISION=single; \
 	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_sp/micropython'
+
+# ── ARMv7m — bare-metal QEMU Cortex-M3 (Docker, build + test) ────────────────
+qemu-armv7m: $(VERSION_H)
+	docker image inspect $(DOCKER_IMAGE_ARMV7M) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE_ARMV7M) -f $(THIS_DIR)/Dockerfile.armv7m $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE_ARMV7M) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        make -C /workspace/usermod generated MPY_DIR=/mpy; \
+	        make -j$$J -C /mpy/ports/qemu BOARD=MPS2_AN385 \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=single; \
+	        python3 /workspace/usermod/ci/run_qemu.py \
+	            /mpy/ports/qemu/build-MPS2_AN385/firmware.elf \
+	            /workspace/tests/'
 
 # ── RP2040 (CMake via pico-sdk) ───────────────────────────────────────────────
 rp2040: $(VERSION_H)

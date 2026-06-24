@@ -140,7 +140,7 @@ jobs:
   # needed (unlike the natmod variant).
   build-test-qemu-armv7m:
     name: build + test (armv7m_sp / QEMU Cortex-M3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v6
         with:
@@ -154,34 +154,9 @@ jobs:
           tar xf mpy.tar.xz && rm mpy.tar.xz
           echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
 
-      - name: Install toolchain + QEMU
-        run: |
-          sudo apt-get install -y \
-            gcc-arm-none-eabi libnewlib-arm-none-eabi \
-            qemu-system-arm
-          pip install pyserial
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Generate version header
+      - name: Build + test (Docker)
         working-directory: usermod
-        run: make generated MPY_DIR="$MPY_DIR"
-
-      - name: Build QEMU firmware (MPS2_AN385 / Cortex-M3) with usermod
-        run: |
-          make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
-            TINY_BCLIBC_PRECISION=single
-
-      - name: Run tests via QEMU
-        env:
-          MPY_DIR: ${{ env.MPY_DIR }}
-        run: |
-          python3 usermod/ci/run_qemu.py \
-            "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
-            tests/
+        run: make qemu-armv7m MPY_DIR="$MPY_DIR"
 
   # ── x64: native builds, test, artifact ───────────────────────────────────
   build-test-x64:
