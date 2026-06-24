@@ -270,6 +270,9 @@ jobs:
 
       - name: Build standalone libffi for x86
         run: |
+          cd "$MPY_DIR/lib/libffi"
+          libtoolize --copy --force
+          autoreconf -fvi
           B="$GITHUB_WORKSPACE/usermod/build"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$B/x86_dp" \
