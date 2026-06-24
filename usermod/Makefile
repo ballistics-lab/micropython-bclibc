@@ -3,12 +3,12 @@
 #
 #   make x64        — x64 double    → build/x64_dp/micropython
 #   make x64sp      — x64 single    → build/x64_sp/micropython
-#   make x86        — x86 double    → build/x86_dp/micropython
-#   make x86sp      — x86 single    → build/x86_sp/micropython
+#   make x86        — x86 double    → build/x86_dp/micropython      (Docker)
+#   make x86sp      — x86 single    → build/x86_sp/micropython      (Docker)
 #   make aarch64    — AArch64 double → build/aarch64_dp/micropython
 #   make aarch64sp  — AArch64 single → build/aarch64_sp/micropython
-#   make armhf      — ARMv7hf double → build/armhf_dp/micropython
-#   make armhfsp    — ARMv7hf single → build/armhf_sp/micropython
+#   make armhf      — ARMv7hf double → build/armhf_dp/micropython  (Docker)
+#   make armhfsp    — ARMv7hf single → build/armhf_sp/micropython  (Docker)
 #   make mipsel     — MIPS LE double → build/mipsel_dp/micropython  (Docker)
 #   make mipselsp   — MIPS LE single → build/mipsel_sp/micropython  (Docker)
 #   make rp2040     — RP2040 single  → build/rp2040_sp/firmware.{elf,uf2}
@@ -27,29 +27,30 @@ VERSION_IN   := $(abspath ../version.h.in)
 BCLIBC_ROOT  := $(abspath $(THIS_DIR)/..)
 _BUILD       := $(THIS_DIR)/build
 
-# mipsel targets run inside Docker (Ubuntu 22.04) — MPY_DIR resolved to absolute path
-DOCKER_IMAGE := micropython-mipsel-builder
-_MPY_ABS     := $(abspath $(MPY_DIR))
-_REPO_ABS    := $(abspath $(THIS_DIR)/..)
+# x86, armhf, armv7m, and mipsel targets run inside Docker (Ubuntu 22.04) — MPY_DIR resolved to absolute path
+DOCKER_IMAGE       := micropython-mipsel-builder
+DOCKER_IMAGE_X86   := micropython-x86-builder
+DOCKER_IMAGE_ARMHF := micropython-armhf-builder
+DOCKER_IMAGE_ARMV7M := micropython-armv7m-builder
+_MPY_ABS          := $(abspath $(MPY_DIR))
+_REPO_ABS         := $(abspath $(THIS_DIR)/..)
 
-.PHONY: all submodules apt-deps x64 x64sp x86 x86sp \
+.PHONY: all submodules x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
-        rp2040 rp2040dp generated clean help
+        qemu-armv7m rp2040 rp2040dp generated clean help
 
 all: x64
 
 help:
 	@echo "Targets:                                         Output"
 	@echo "  x64 / x64sp          — x64 host (dp / sp)     build/x64_{dp,sp}/micropython"
-	@echo "  x86 / x86sp          — x86 32-bit (dp / sp)   build/x86_{dp,sp}/micropython"
+	@echo "  x86 / x86sp          — x86 32-bit (Docker)      build/x86_{dp,sp}/micropython"
 	@echo "  aarch64 / aarch64sp  — AArch64 cross           build/aarch64_{dp,sp}/micropython"
-	@echo "  armhf / armhfsp      — ARMv7hf cross           build/armhf_{dp,sp}/micropython"
+	@echo "  armhf / armhfsp      — ARMv7hf (Docker)        build/armhf_{dp,sp}/micropython"
+	@echo "  qemu-armv7m          — Cortex-M3 QEMU (Docker, build+test)"
 	@echo "  mipsel / mipselsp    — MIPS LE (Docker)        build/mipsel_{dp,sp}/micropython"
 	@echo "  rp2040 / rp2040dp    — RP2040 Pico (sp / dp)  build/rp2040_{sp,dp}/firmware.uf2"
 	@echo "Set MPY_DIR= to point at a MicroPython source tree"
-	@echo ""
-	@echo "Setup targets:"
-	@echo "  apt-deps             — install Debian/Ubuntu build deps (gcc-multilib etc.)"
 	@echo "  submodules           — init git submodules"
 
 # ── Version header ─────────────────────────────────────────────────────────────
@@ -82,30 +83,38 @@ define unix_build
 	    TINY_BCLIBC_PRECISION=$(2)
 endef
 
-# ── Cross-compile macro ────────────────────────────────────────────────────────
-# $(1) = CROSS_COMPILE prefix, e.g. arm-linux-gnueabihf-
-# $(2) = precision: single | double
-# $(3) = output subdirectory, e.g. armhf_dp
-define cross_build
-	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
-	    BUILD="$(_BUILD)/$(3)" \
-	    CROSS_COMPILE=$(1) \
-	    MICROPY_STANDALONE=1 \
-	    LDFLAGS_EXTRA="-static" \
-	    USER_C_MODULES="$(MAKE_MODULES)" \
-	    FROZEN_MANIFEST="$(MANIFEST)" \
-	    TINY_BCLIBC_PRECISION=$(2)
-	$(1)strip -s "$(_BUILD)/$(3)/micropython"
+# ── ARMhf — builds inside Docker (Ubuntu 22.04 + gcc-arm-linux-gnueabihf) ─────
+# $(1) = output subdir (armhf_dp / armhf_sp), $(2) = TINY_BCLIBC_PRECISION value
+define armhf_docker_build
+	docker image inspect $(DOCKER_IMAGE_ARMHF) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE_ARMHF) -f $(THIS_DIR)/Dockerfile.armhf $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE_ARMHF) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        test -f /mpy/lib/libffi/configure || \
+	            ( cd /mpy/lib/libffi && libtoolize --copy --force && autoreconf -fvi ); \
+	        make -j$$J -C /mpy/ports/unix VARIANT=standard \
+	            CROSS_COMPILE=arm-linux-gnueabihf- \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/$(1) \
+	            deplibs; \
+	        make -j$$J -C /mpy/ports/unix VARIANT=standard \
+	            CROSS_COMPILE=arm-linux-gnueabihf- \
+	            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/$(1) \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=$(2); \
+	        arm-linux-gnueabihf-strip -s /workspace/usermod/build/$(1)/micropython'
 endef
 
 submodules:
 	git submodule update --init --recursive
-
-# Install host packages required to build x86 targets (Debian/Ubuntu).
-apt-deps:
-	sudo apt-get install -y \
-	    gcc-multilib g++-multilib \
-	    texinfo autoconf automake libtool
 
 # ── x64 ───────────────────────────────────────────────────────────────────────
 x64: $(VERSION_H)
@@ -114,30 +123,40 @@ x64: $(VERSION_H)
 x64sp: $(VERSION_H)
 	$(call unix_build,,single,x64_sp)
 
-# ── x86 — standalone (MICROPY_STANDALONE=1 avoids system 32-bit libffi) ─────
-# deplibs builds lib32/libffi.a into BUILD; autoreconf is needed when the
-# libffi configure script is absent (fresh clone / first build).
-define x86_deplibs
-	test -f "$(abspath $(MPY_DIR)/lib/libffi/configure.ac)" || \
-	    $(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
-	        BUILD="$(_BUILD)/$(1)" \
-	        MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-	        submodules
-	test -f "$(abspath $(MPY_DIR)/lib/libffi/configure)" || \
-	    ( cd "$(abspath $(MPY_DIR)/lib/libffi)" && libtoolize --copy --force && autoreconf -fvi )
-	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
-	    BUILD="$(_BUILD)/$(1)" \
-	    MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-	    deplibs
+# ── x86 — builds inside Docker (Ubuntu 22.04 + gcc-multilib) ─────────────────
+# autoreconf on ubuntu-latest (24.04+) breaks libffi configure.ac from MPY v1.28;
+# Docker pins the toolchain to a known-good Ubuntu 22.04 environment.
+# $(1) = precision suffix (x86_dp / x86_sp), $(2) = TINY_BCLIBC_PRECISION value
+define x86_docker_build
+	docker image inspect $(DOCKER_IMAGE_X86) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE_X86) -f $(THIS_DIR)/Dockerfile.x86 $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE_X86) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        test -f /mpy/lib/libffi/configure || \
+	            ( cd /mpy/lib/libffi && libtoolize --copy --force && autoreconf -fvi ); \
+	        make -j$$J -C /mpy/ports/unix VARIANT=standard \
+	            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/$(1) \
+	            deplibs; \
+	        make -j$$J -C /mpy/ports/unix VARIANT=standard \
+	            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	            BUILD=/workspace/usermod/build/$(1) \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=$(2)'
 endef
 
 x86: $(VERSION_H)
-	$(call x86_deplibs,x86_dp)
-	$(call unix_build,MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static",double,x86_dp)
+	$(call x86_docker_build,x86_dp,double)
 
 x86sp: $(VERSION_H)
-	$(call x86_deplibs,x86_sp)
-	$(call unix_build,MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static",single,x86_sp)
+	$(call x86_docker_build,x86_sp,single)
 
 # ── AArch64 (cross) ───────────────────────────────────────────────────────────
 aarch64: $(VERSION_H)
@@ -146,12 +165,12 @@ aarch64: $(VERSION_H)
 aarch64sp: $(VERSION_H)
 	$(call cross_build,aarch64-linux-gnu-,single,aarch64_sp)
 
-# ── ARMv7hf (cross) ───────────────────────────────────────────────────────────
+# ── ARMv7hf (Docker) ──────────────────────────────────────────────────────────
 armhf: $(VERSION_H)
-	$(call cross_build,arm-linux-gnueabihf-,double,armhf_dp)
+	$(call armhf_docker_build,armhf_dp,double)
 
 armhfsp: $(VERSION_H)
-	$(call cross_build,arm-linux-gnueabihf-,single,armhf_sp)
+	$(call armhf_docker_build,armhf_sp,single)
 
 # ── MIPS LE — builds inside Docker (Ubuntu 22.04 + gcc-mipsel-linux-gnu) ─────
 # MPY_DIR is mounted read-write (deplibs writes into it); output lands in build/mipsel_{dp,sp}.
@@ -215,6 +234,27 @@ mipselsp: $(VERSION_H)
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
 	            TINY_BCLIBC_PRECISION=single; \
 	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_sp/micropython'
+
+# ── ARMv7m — bare-metal QEMU Cortex-M3 (Docker, build + test) ────────────────
+qemu-armv7m: $(VERSION_H)
+	docker image inspect $(DOCKER_IMAGE_ARMV7M) >/dev/null 2>&1 || \
+	    docker build -t $(DOCKER_IMAGE_ARMV7M) -f $(THIS_DIR)/Dockerfile.armv7m $(THIS_DIR)
+	docker run --rm \
+	    -v "$(_REPO_ABS):/workspace" \
+	    -v "$(_MPY_ABS):/mpy" \
+	    $(DOCKER_IMAGE_ARMV7M) \
+	    bash -exc '\
+	        git config --global --add safe.directory "*"; \
+	        J=$$(nproc); \
+	        make -j$$J -C /mpy/mpy-cross; \
+	        make -C /workspace/usermod generated MPY_DIR=/mpy; \
+	        make -j$$J -C /mpy/ports/qemu BOARD=MPS2_AN385 \
+	            USER_C_MODULES=/workspace \
+	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
+	            TINY_BCLIBC_PRECISION=single; \
+	        python3 /workspace/usermod/ci/run_qemu.py \
+	            /mpy/ports/qemu/build-MPS2_AN385/firmware.elf \
+	            /workspace/tests/'
 
 # ── RP2040 (CMake via pico-sdk) ───────────────────────────────────────────────
 rp2040: $(VERSION_H)
