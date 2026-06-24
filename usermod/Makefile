@@ -32,7 +32,7 @@ DOCKER_IMAGE := micropython-mipsel-builder
 _MPY_ABS     := $(abspath $(MPY_DIR))
 _REPO_ABS    := $(abspath $(THIS_DIR)/..)
 
-.PHONY: all submodules x64 x64sp x86 x86sp \
+.PHONY: all submodules apt-deps x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
         rp2040 rp2040dp generated clean help
 
@@ -47,6 +47,10 @@ help:
 	@echo "  mipsel / mipselsp    — MIPS LE (Docker)        build/mipsel_{dp,sp}/micropython"
 	@echo "  rp2040 / rp2040dp    — RP2040 Pico (sp / dp)  build/rp2040_{sp,dp}/firmware.uf2"
 	@echo "Set MPY_DIR= to point at a MicroPython source tree"
+	@echo ""
+	@echo "Setup targets:"
+	@echo "  apt-deps             — install Debian/Ubuntu build deps (gcc-multilib etc.)"
+	@echo "  submodules           — init git submodules"
 
 # ── Version header ─────────────────────────────────────────────────────────────
 $(VERSION_H): $(VERSION_IN)
@@ -97,6 +101,12 @@ endef
 submodules:
 	git submodule update --init --recursive
 
+# Install host packages required to build x86 targets (Debian/Ubuntu).
+apt-deps:
+	sudo apt-get install -y \
+	    gcc-multilib g++-multilib \
+	    texinfo autoconf automake libtool
+
 # ── x64 ───────────────────────────────────────────────────────────────────────
 x64: $(VERSION_H)
 	$(call unix_build,,double,x64_dp)
@@ -105,10 +115,27 @@ x64sp: $(VERSION_H)
 	$(call unix_build,,single,x64_sp)
 
 # ── x86 — standalone (MICROPY_STANDALONE=1 avoids system 32-bit libffi) ─────
+# deplibs builds lib32/libffi.a into BUILD; autoreconf is needed when the
+# libffi configure script is absent (fresh clone / first build).
+define x86_deplibs
+	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
+	    BUILD="$(_BUILD)/$(1)" \
+	    MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	    submodules
+	test -f "$(abspath $(MPY_DIR)/lib/libffi/configure)" || \
+	    ( cd "$(abspath $(MPY_DIR)/lib/libffi)" && libtoolize --copy --force && autoreconf -fvi )
+	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
+	    BUILD="$(_BUILD)/$(1)" \
+	    MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+	    deplibs
+endef
+
 x86: $(VERSION_H)
+	$(call x86_deplibs,x86_dp)
 	$(call unix_build,MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static",double,x86_dp)
 
 x86sp: $(VERSION_H)
+	$(call x86_deplibs,x86_sp)
 	$(call unix_build,MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static",single,x86_sp)
 
 # ── AArch64 (cross) ───────────────────────────────────────────────────────────

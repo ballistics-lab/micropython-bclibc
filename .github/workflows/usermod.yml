@@ -268,21 +268,6 @@ jobs:
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build standalone libffi for x86
-        run: |
-          cd "$MPY_DIR/lib/libffi"
-          libtoolize --copy --force
-          autoreconf -fvi
-          B="$GITHUB_WORKSPACE/usermod/build"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$B/x86_dp" \
-            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-            deplibs
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$B/x86_sp" \
-            MICROPY_FORCE_32BIT=1 MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-            deplibs
-
       - name: Build x86 dp + sp
         working-directory: usermod
         run: |
