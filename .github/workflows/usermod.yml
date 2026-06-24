@@ -17,10 +17,10 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── ARMhf: cross-compile (static) + test under qemu-arm ──────────────────
+  # ── ARMhf: cross-compile inside Docker (Ubuntu 22.04) + test under qemu-arm ──
   build-test-armhf:
     name: build + test (armhf / qemu-arm)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,27 +34,10 @@ jobs:
           tar xf mpy.tar.xz && rm mpy.tar.xz
           echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
 
-      - name: Install cross-compiler + build tools + QEMU
-        run: |
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            autoconf automake libtool libtool-bin pkg-config \
-            qemu-user
+      - name: Install QEMU
+        run: sudo apt-get install -y qemu-user
 
-      - name: Build mpy-cross (for FROZEN_MANIFEST)
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build standalone libffi for armhf
-        run: |
-          USERMOD_BUILD="$GITHUB_WORKSPACE/usermod/build"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$USERMOD_BUILD/armhf_dp" \
-            CROSS_COMPILE=arm-linux-gnueabihf- \
-            MICROPY_STANDALONE=1 \
-            LDFLAGS_EXTRA="-static" \
-            deplibs
-
-      - name: Build armhf usermod (double precision, static)
+      - name: Build armhf usermod (Docker)
         working-directory: usermod
         run: make armhf MPY_DIR="$MPY_DIR"
 
@@ -258,15 +241,6 @@ jobs:
           wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
           tar xf mpy.tar.xz && rm mpy.tar.xz
           echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
-
-      - name: Install deps
-        run: |
-          sudo apt-get install -y \
-            gcc-multilib g++-multilib \
-            texinfo autoconf automake libtool
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build x86 dp + sp
         working-directory: usermod
