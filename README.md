@@ -41,12 +41,15 @@ and all flag / index constants.
 │   ├── Makefile                # make x64 / armhf / mipsel / rp2040 / …
 │   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES
 │   ├── micropython.cmake       # CMake entry point for RP2040 / pico-sdk
-│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware
+│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release)
+│   ├── manifest_test.py        # CI-only: manifest.py + test_bclibc.py (rp2040test)
 │   ├── Dockerfile.x86          # Ubuntu 22.04 + gcc-multilib (x86 builds)
 │   ├── Dockerfile.armhf        # Ubuntu 22.04 + gcc-arm-linux-gnueabihf
 │   ├── Dockerfile.armv7m       # Ubuntu 22.04 + gcc-arm-none-eabi + qemu-system-arm
 │   ├── Dockerfile.mipsel       # Ubuntu 22.04 + gcc-mipsel-linux-gnu
-│   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
+│   ├── Dockerfile.webassembly  # emscripten/emsdk:latest (WebAssembly builds)
+│   ├── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
+│   └── ci/micropython-run.ts   # rp2040js emulator test runner
 │
 ├── ffimod/                     # FFI-based access (any unix arch)
 │   ├── _tiny_bclibc.py         # MicroPython ffi wrapper for libtiny_bclibc.so
@@ -209,13 +212,16 @@ make armhf        # ARMv7hf double       [Docker — no host toolchain needed]
 make armhfsp      # ARMv7hf single       [Docker]
 make mipsel       # MIPS LE double       [Docker]
 make mipselsp     # MIPS LE single       [Docker]
+make wasm         # WebAssembly double   [Docker] → build/wasm_dp/micropython.{mjs,wasm}
+make wasmsp       # WebAssembly single   [Docker] → build/wasm_sp/micropython.{mjs,wasm}
 make qemu-armv7m  # Cortex-M3 build + test [Docker]
-make rp2040       # RP2040 single (cmake, pico-sdk)
-make rp2040dp     # RP2040 double
+make rp2040       # RP2040 single (cmake, pico-sdk) → build/rp2040_sp/firmware.uf2
+make rp2040dp     # RP2040 double                  → build/rp2040_dp/firmware.uf2
+make rp2040test   # RP2040 single + frozen tests   → build/rp2040_sp_test/firmware.uf2  [CI only]
 ```
 
 Output for unix targets: `usermod/build/<target>/micropython`
-Output for rp2040: `$MPY_DIR/ports/rp2/build-RPI_PICO/firmware.uf2`
+Output for rp2040: `usermod/build/rp2040_{sp,dp}/firmware.uf2`
 
 Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based ports and
 `TINY_BCLIBC_DOUBLE_PRECISION=1` for cmake-based ports.
@@ -228,7 +234,7 @@ Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based port
 # aarch64 / aarch64sp — cross-compiler on host
 sudo apt-get install gcc-aarch64-linux-gnu
 
-# x86, armhf, mipsel, qemu-armv7m — Docker only, no host toolchain needed:
+# x86, armhf, mipsel, wasm, qemu-armv7m — Docker only, no host toolchain needed:
 #   Docker images are built automatically on first run from usermod/Dockerfile.*
 
 # rp2040 / rp2040dp — bare-metal ARM toolchain
@@ -245,12 +251,11 @@ make x64 MPY_DIR=/path/to/micropython-1.28.0
 build/x64_dp/micropython tests/test_bclibc.py
 ```
 
-### Test (RP2040)
+### Test (RP2040 — hardware)
 
 ```bash
 make rp2040 MPY_DIR=/path/to/micropython-1.28.0
-# flash build-RPI_PICO/firmware.uf2 to the board
-# then from the REPL:
+# flash build/rp2040_sp/firmware.uf2 to the board, then from the REPL:
 # >>> import tiny_bclibc; tiny_bclibc.version()
 # '1.1.3-sp'
 ```
@@ -262,6 +267,25 @@ import vfs, rp2
 bdev = rp2.Flash()
 vfs.VfsLfs2.mkfs(bdev)
 vfs.mount(bdev, '/')
+```
+
+### Test (RP2040 — rp2040js emulator)
+
+Runs `test_bclibc.py` on the firmware in the
+[wokwi/rp2040js](https://github.com/wokwi/rp2040js) JavaScript emulator — no board
+needed.  The test suite is baked into a separate `rp2040test` firmware so that release
+builds remain clean.
+
+```bash
+# Prerequisites: Node.js ≥ 18, cmake, gcc-arm-none-eabi
+cd usermod
+make rp2040test MPY_DIR=/path/to/micropython-1.28.0
+git clone https://github.com/wokwi/rp2040js && cd rp2040js && npm install
+cp ../ci/micropython-run.ts demo/micropython-run.ts
+npx tsx demo/micropython-run.ts \
+    --image ../build/rp2040_sp_test/firmware.uf2 \
+    --exec "import test_bclibc" \
+    --timeout 120
 ```
 
 ### Test (QEMU Cortex-M3 / armv7m_sp)

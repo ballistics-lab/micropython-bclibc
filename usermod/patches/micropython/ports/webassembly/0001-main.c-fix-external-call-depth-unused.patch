@@ -1,0 +1,11 @@
+--- a/ports/webassembly/main.c
++++ b/ports/webassembly/main.c
+@@ -47,7 +47,7 @@
+ // This counter tracks the current depth of calls into C code that originated
+ // externally, ie from JavaScript.  When the counter is 0 that corresponds to
+ // the top-level call into C.
+-static size_t external_call_depth = 0;
++static size_t external_call_depth __attribute__((unused)) = 0;
+ 
+ // Emscripten defaults to a 64k C-stack, so our limit should be less than that.
+ #define CSTACK_SIZE (32 * 1024)

@@ -13,6 +13,10 @@ on:
         required: false
         default: "v1.28.0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
@@ -79,12 +83,9 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install cross-compiler
         if: matrix.apt != ''
@@ -123,12 +124,9 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install micropython unix build deps
         run: sudo apt-get install -y libffi-dev pkg-config
@@ -166,12 +164,9 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install 32-bit build deps
         run: |
@@ -206,12 +201,9 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install toolchain + QEMU
         run: |
