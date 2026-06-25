@@ -252,9 +252,9 @@ jobs:
             usermod/build/wasm_sp/micropython.wasm
           if-no-files-found: error
 
-  # ── RP2040: build firmware (sp + dp), upload UF2 artifacts ──────────────
+  # ── RP2040: build firmware (sp + dp), test sp via rp2040js, upload UF2 ──
   build-rp2040:
-    name: build + artifact (rp2040)
+    name: build + test (rp2040)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -284,6 +284,31 @@ jobs:
         run: |
           make rp2040   MPY_DIR="$MPY_DIR"
           make rp2040dp MPY_DIR="$MPY_DIR"
+
+      - name: Build RP2040 sp test firmware (frozen tests, CI only)
+        working-directory: usermod
+        run: make rp2040test MPY_DIR="$MPY_DIR"
+
+      - name: Get node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+
+      - name: Get and patch rp2040js emulator
+        working-directory: usermod
+        run: |
+          git clone https://github.com/wokwi/rp2040js
+          cd rp2040js
+          npm install
+          cp ../ci/micropython-run.ts demo/micropython-run.ts
+
+      - name: Test rp2040_sp firmware via rp2040js emulator
+        working-directory: usermod/rp2040js
+        run: |
+          npx tsx demo/micropython-run.ts \
+            --image ../build/rp2040_sp_test/firmware.uf2 \
+            --exec "import test_bclibc" \
+            --timeout 120
 
       - uses: actions/upload-artifact@v7
         with:

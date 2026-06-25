@@ -15,6 +15,7 @@
 #   make wasmsp     — WebAssembly single → build/wasm_sp/micropython.{mjs,wasm}  (Docker)
 #   make rp2040     — RP2040 single   → build/rp2040_sp/firmware.{elf,uf2}
 #   make rp2040dp   — RP2040 double   → build/rp2040_dp/firmware.{elf,uf2}
+#   make rp2040test — RP2040 single + frozen tests → build/rp2040_sp_test/firmware.uf2  (CI only)
 #
 # Set MPY_DIR= to point at a MicroPython source tree (required for all targets).
 
@@ -42,7 +43,7 @@ HOST_GID          := $(shell id -g)
 
 .PHONY: all submodules x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
-        qemu-armv7m wasm wasmsp rp2040 rp2040dp generated clean help
+        qemu-armv7m wasm wasmsp rp2040 rp2040dp rp2040test generated clean help
 
 all: x64
 
@@ -321,6 +322,14 @@ rp2040dp: $(VERSION_H)
 	    BOARD=RPI_PICO \
 	    USER_C_MODULES="$(CMAKE_MODULE)" \
 	    FROZEN_MANIFEST="$(MANIFEST)"
+
+rp2040test: $(VERSION_H)
+	$(MAKE) -C "$(MPY_DIR)/ports/rp2" BOARD=RPI_PICO submodules
+	$(MAKE) -C "$(MPY_DIR)/ports/rp2" \
+	    BUILD="$(_BUILD)/rp2040_sp_test" \
+	    BOARD=RPI_PICO \
+	    USER_C_MODULES="$(CMAKE_MODULE)" \
+	    FROZEN_MANIFEST="$(THIS_DIR)/manifest_test.py"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 .PHONY: clean
