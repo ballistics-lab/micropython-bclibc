@@ -7,7 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### `src/tiny_bclibc_mp.c` — `-Wdouble-promotion` in wasm_sp (Emscripten/Clang)
+
+Emscripten adds `-Wdouble-promotion` to the compiler flags *after* `CFLAGS_USERMOD`, so
+`-Wno-double-promotion` in `micropython.mk` had no effect.  When `real_t=float` the call
+`mp_obj_new_float(real_t)` implicitly promotes `float → double` (because `mp_float_t` is
+`double` on wasm), which triggered the error in CI.
+
+Fixed in the usermod branch of `tiny_bclibc_mp.c` (mirroring the existing natmod fix):
+
+```c
+#undef  mp_obj_new_float
+#define mp_obj_new_float(v) mp_obj_new_float_from_d((double)(v))
+```
+
+The explicit cast is a no-op for `real_t=double`; it silences the warning for
+`real_t=float` without disabling the diagnostic globally.
+
+#### `usermod/Makefile` — Docker targets failed with `:ro` volume mounts
+
+`mpy-cross` (`make -C /mpy/mpy-cross`) writes its build output into the source tree,
+and `libtoolize --copy` writes into `lib/libffi/m4/`.  Both failed when `/mpy` was
+mounted read-only.
+
+Fixed by copying the entire MicroPython tree to a writable `/mpy_build` at container
+startup (`cp -r /mpy /mpy_build`) and running all in-container commands against
+`/mpy_build`.  Applied to all six Docker-based targets (x86, x86sp, armhf, armhfsp,
+mipsel, mipselsp, wasm, wasmsp, qemu-armv7m).
+
 ### Added
+
+#### `usermod/` — RP2040 emulator testing via rp2040js
+
+CI now runs `test_bclibc.py` on the actual RP2040 firmware (single-precision) in the
+[wokwi/rp2040js](https://github.com/wokwi/rp2040js) JavaScript emulator — no physical
+hardware required.
+
+- `usermod/manifest_test.py`: CI-only frozen manifest.  Extends `manifest.py` with
+  `tests/test_bclibc.py` so that `import test_bclibc` works from the REPL.  Release
+  firmware (`rp2040_sp`, `rp2040_dp`) is unaffected.
+- `usermod/Makefile` `rp2040test` target: builds RP2040 single-precision firmware with
+  `manifest_test.py` into `build/rp2040_sp_test/firmware.uf2`.  Separate `BUILD` dir
+  keeps release and test artifacts independent.
+- `usermod/ci/micropython-run.ts`: rp2040js test runner.  Options: `--image <uf2>`,
+  `--exec <python>` (single-line injection), `--run <file>` (rate-limited file send via
+  `exec("""...""")`), `--expect-text <text>` (exit 0 on match), `--timeout <sec>`.
+  Exits 1 if the captured output contains `"FAILED"` (matches `"N test(s) FAILED"` from
+  the test suite).
+- `.github/workflows/usermod.yml` `build-rp2040` job (renamed to "build + test"):
+  added `make rp2040test`, rp2040js clone + patch step, and test step:
+  `npx tsx demo/micropython-run.ts --exec "import test_bclibc" --timeout 120`.
 
 #### `usermod/` — WebAssembly target (`wasm` / `wasmsp`)
 
