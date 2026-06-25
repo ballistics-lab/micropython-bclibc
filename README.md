@@ -46,6 +46,7 @@ and all flag / index constants.
 │   ├── Dockerfile.armhf        # Ubuntu 22.04 + gcc-arm-linux-gnueabihf
 │   ├── Dockerfile.armv7m       # Ubuntu 22.04 + gcc-arm-none-eabi + qemu-system-arm
 │   ├── Dockerfile.mipsel       # Ubuntu 22.04 + gcc-mipsel-linux-gnu
+│   ├── Dockerfile.webassembly         # emscripten/emsdk:latest (WebAssembly builds)
 │   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │
 ├── ffimod/                     # FFI-based access (any unix arch)
@@ -209,6 +210,8 @@ make armhf        # ARMv7hf double       [Docker — no host toolchain needed]
 make armhfsp      # ARMv7hf single       [Docker]
 make mipsel       # MIPS LE double       [Docker]
 make mipselsp     # MIPS LE single       [Docker]
+make wasm         # WebAssembly double   [Docker] → build/wasm_dp/micropython.{mjs,wasm}
+make wasmsp       # WebAssembly single   [Docker] → build/wasm_sp/micropython.{mjs,wasm}
 make qemu-armv7m  # Cortex-M3 build + test [Docker]
 make rp2040       # RP2040 single (cmake, pico-sdk)
 make rp2040dp     # RP2040 double
@@ -228,7 +231,7 @@ Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based port
 # aarch64 / aarch64sp — cross-compiler on host
 sudo apt-get install gcc-aarch64-linux-gnu
 
-# x86, armhf, mipsel, qemu-armv7m — Docker only, no host toolchain needed:
+# x86, armhf, mipsel, wasm, qemu-armv7m — Docker only, no host toolchain needed:
 #   Docker images are built automatically on first run from usermod/Dockerfile.*
 
 # rp2040 / rp2040dp — bare-metal ARM toolchain

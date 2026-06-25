@@ -13,6 +13,10 @@ on:
         required: false
         default: "v1.28.0"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
@@ -27,12 +31,9 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install QEMU
         run: sudo apt-get install -y qemu-user
@@ -66,14 +67,10 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Clone MicroPython ${{ env.MPY_TAG }}
-        run: |
-          git clone --depth=1 --branch "${MPY_TAG}" \
-            https://github.com/micropython/micropython.git
-          cd micropython
-          git submodule update --init \
-            lib/libffi lib/mbedtls lib/micropython-lib lib/berkeley-db-1.xx
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython" >> $GITHUB_ENV
+      - uses: ./.github/actions/clone-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+          submodules: lib/libffi lib/mbedtls lib/micropython-lib lib/berkeley-db-1.xx
 
       - name: Install QEMU user-mode emulation
         run: sudo apt-get install -y qemu-user
@@ -103,12 +100,9 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install build deps
         run: sudo apt-get install -y libffi-dev pkg-config
@@ -147,12 +141,9 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Build + test (Docker)
         working-directory: usermod
@@ -168,12 +159,9 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install deps
         run: sudo apt-get install -y libffi-dev
@@ -210,12 +198,9 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-${VER}" >> $GITHUB_ENV
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Build x86 dp + sp
         working-directory: usermod
@@ -236,6 +221,37 @@ jobs:
             usermod/build/x86_sp/micropython
           if-no-files-found: error
 
+  # ── WebAssembly: build dp + sp inside Docker (Emscripten), test via Node ─
+  build-test-wasm:
+    name: build + test (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: 'true'
+          fetch-depth: 0
+
+      - uses: ./.github/actions/clone-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+          submodules: lib/micropython-lib
+
+      - name: Build + test wasm dp + sp (Docker)
+        working-directory: usermod
+        run: |
+          make wasm   MPY_DIR="$MPY_DIR"
+          make wasmsp MPY_DIR="$MPY_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-wasm
+          path: |
+            usermod/build/wasm_dp/micropython.mjs
+            usermod/build/wasm_dp/micropython.wasm
+            usermod/build/wasm_sp/micropython.mjs
+            usermod/build/wasm_sp/micropython.wasm
+          if-no-files-found: error
+
   # ── RP2040: build firmware (sp + dp), upload UF2 artifacts ──────────────
   build-rp2040:
     name: build + artifact (rp2040)
@@ -246,15 +262,11 @@ jobs:
           submodules: 'true'
           fetch-depth: 0
 
-      - name: Clone MicroPython ${{ env.MPY_TAG }}
-        run: |
-          git clone --depth=1 --branch "${MPY_TAG}" \
-            https://github.com/micropython/micropython.git
-          cd micropython
-          git submodule update --init \
-            lib/pico-sdk lib/micropython-lib lib/tinyusb
-          git -C lib/pico-sdk submodule update --init
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython" >> $GITHUB_ENV
+      - uses: ./.github/actions/clone-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+          submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb
+          pico_sdk_submodules: 'true'
 
       - name: Install toolchain
         run: |

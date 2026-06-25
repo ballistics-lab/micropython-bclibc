@@ -14,7 +14,10 @@ import array
 
 _IS_MPY = sys.implementation.name == "micropython"
 
-_HERE = __file__.rsplit("/", 1)[0] if "/" in __file__ else "."
+try:
+    _HERE = __file__.rsplit("/", 1)[0] if "/" in __file__ else "."
+except NameError:
+    _HERE = "."
 sys.path.append(_HERE)
 
 import tiny_bclibc as bc

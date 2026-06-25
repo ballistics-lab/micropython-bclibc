@@ -53,6 +53,9 @@
 #include "py/misc.h"
 /* usermod: mp_raise_msg takes mp_rom_error_text_t; use varg with %s for runtime strings */
 #define _RAISE_BCLIBC_ERROR(msg) mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("%s"), (msg))
+/* Explicit cast silences -Wdouble-promotion when real_t=float and mp_float_t=double (e.g. wasm_sp) */
+#undef mp_obj_new_float
+#define mp_obj_new_float(v) mp_obj_new_float_from_d((double)(v))
 #endif
 
 #include "tiny_bclibc.h"

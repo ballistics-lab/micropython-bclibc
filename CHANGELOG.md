@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### `usermod/` — WebAssembly target (`wasm` / `wasmsp`)
+
+- New `wasm` / `wasmsp` Makefile targets build MicroPython `ports/webassembly` with `USER_C_MODULES` + `FROZEN_MANIFEST` baked in via Emscripten.
+- Runs entirely inside Docker (`emscripten/emsdk:latest`); no Emscripten toolchain required on the host.
+- Outputs `micropython.mjs` + `micropython.wasm` in `usermod/build/wasm_{dp,sp}/`.
+- `node` tests execute inside the container immediately after the build (same pattern as `qemu-armv7m`).
+- `usermod/Dockerfile.webassembly`: `emscripten/emsdk:latest` base image (`git` + `python3` added on top).
+- `.github/workflows/usermod.yml` `build-test-wasm` job: clones MicroPython with `lib/micropython-lib`, builds `wasm` + `wasmsp` via Docker, uploads `micropython.mjs` + `micropython.wasm` for both precisions as the `tiny-bclibc-usermod-wasm` artifact.
+
 ### Changed
+
+#### `.github/` — `fetch-micropython` and `clone-micropython` composite actions
+
+Repeated inline steps extracted into reusable composite actions:
+
+- `.github/actions/fetch-micropython/action.yml` — downloads and extracts a MicroPython release tarball, exports `MPY_DIR` into `$GITHUB_ENV`. Input: `mpy_tag`. Replaced 9 identical inline steps across `natmod.yml` (4) and `usermod.yml` (5).
+- `.github/actions/clone-micropython/action.yml` — shallow-clones MicroPython and initialises the specified submodules, exports `MPY_DIR`. Inputs: `mpy_tag`, `submodules` (space-separated list), `pico_sdk_submodules` (`'true'` to also run `git -C lib/pico-sdk submodule update --init`). Replaced 3 clone variants in `usermod.yml`.
 
 #### `usermod/` — x86, armhf, armv7m builds moved inside Docker
 

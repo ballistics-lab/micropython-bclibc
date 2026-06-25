@@ -1,0 +1,31 @@
+--- a/ports/webassembly/api.js
++++ b/ports/webassembly/api.js
+@@ -133,16 +133,17 @@
+             Module._free(value);
+         },
+         pyimport: pyimport,
+-        runPython(code) {
++        async runPython(code) {
+             const len = Module.lengthBytesUTF8(code);
+             const buf = Module._malloc(len + 1);
+             Module.stringToUTF8(code, buf, len + 1);
+             const value = Module._malloc(3 * 4);
+-            Module.ccall(
++            await Module.ccall(
+                 "mp_js_do_exec",
+                 "number",
+                 ["pointer", "number", "pointer"],
+                 [buf, len, value],
++                { async: true },
+             );
+             Module._free(buf);
+             return proxy_convert_mp_to_js_obj_jsside_with_free(value);
+@@ -250,7 +251,7 @@
+         }
+ 
+         try {
+-            mp.runPython(contents);
++            await mp.runPython(contents);
+         } catch (error) {
+             if (error.name === "PythonError") {
+                 if (error.type === "SystemExit") {
