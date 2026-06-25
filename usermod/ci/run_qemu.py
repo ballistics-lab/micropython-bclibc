@@ -19,9 +19,12 @@ import os
 import argparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_MPY_ROOT = os.environ.get("MPY_DIR") or os.path.join(
-    _HERE, "..", "..", "..", "micropython"
-)
+_MPY_ROOT = os.environ.get("MPY_DIR")
+if not _MPY_ROOT:
+    if os.path.exists("/mpy/tools"):
+        _MPY_ROOT = "/mpy"
+    else:
+        _MPY_ROOT = os.path.join(_HERE, "..", "..", "..", "micropython")
 sys.path.insert(0, os.path.join(_MPY_ROOT, "tools"))
 
 from pyboard import Pyboard  # noqa: E402
