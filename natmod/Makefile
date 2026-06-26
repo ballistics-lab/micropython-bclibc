@@ -16,16 +16,16 @@ ARCH    ?= x64
 MPY_DIR ?= micropython
 
 # ── Precision ─────────────────────────────────────────────────────────────────
-# PRECISION=double → _dp suffix  (default on x64/x86)
-# PRECISION=single → _sp suffix  (default on MCU)
+# MP_BCLIBC_PRECISION=double → _dp suffix  (default on x64/x86)
+# MP_BCLIBC_PRECISION=single → _sp suffix  (default on MCU)
 #
 ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
-PRECISION ?= double
+MP_BCLIBC_PRECISION ?= double
 else
-PRECISION ?= single
+MP_BCLIBC_PRECISION ?= single
 endif
 
-ifeq ($(PRECISION),single)
+ifeq ($(MP_BCLIBC_PRECISION),single)
 _PREC_SUFFIX := _sp
 else
 _PREC_SUFFIX := _dp
@@ -98,7 +98,7 @@ _LIBM_DBL_FLAGS := -I$(MPY_DIR)/lib/libm_dbl \
 ifeq ($(ARCH),$(filter $(ARCH),x64 x86 aarch64))
 # Host (Linux): glibc libm.a uses IFUNC internals that can't be linked in a natmod.
 # GCC -O2 merges sin()+cos() → sincos() (GNU ext) → math_shim.c provides it.
-ifeq ($(PRECISION),single)
+ifeq ($(MP_BCLIBC_PRECISION),single)
 SRC          += $(_FDLIBM_SRCS) math_shim.c
 CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
 else
@@ -138,8 +138,8 @@ CFLAGS_EXTRA += \
     -DTINY_BCLIBC_NO_ERR_BUF \
     -DBCLIBC_BUILD_NATMOD
 
-ifeq ($(PRECISION),single)
-CFLAGS_EXTRA += -DTINY_BCLIBC_SINGLE_PRECISION -DMP_BCLIBC_SINGLE_PRECISION -DTINY_BCLIBC_FAST_ZERO_FIND
+ifeq ($(MP_BCLIBC_PRECISION),single)
+CFLAGS_EXTRA += -DTINY_BCLIBC_SINGLE_PRECISION -DTINY_BCLIBC_FAST_ZERO_FIND
 endif
 
 # Guard the include so 'make clean' works without MPY_DIR.
@@ -190,49 +190,49 @@ submodules:
 	git submodule update --init --recursive
 
 x64:
-	$(MAKE) ARCH=x64 PRECISION=double dist
+	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=double dist
 
 x64sp:
-	$(MAKE) ARCH=x64 PRECISION=single dist
+	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=single dist
 
 aarch64:
-	$(MAKE) ARCH=aarch64 PRECISION=double dist
+	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=double dist
 
 aarch64sp:
-	$(MAKE) ARCH=aarch64 PRECISION=single dist
+	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=single dist
 
 x86:
-	$(MAKE) ARCH=x86 PRECISION=double dist
+	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=double dist
 
 x86sp:
-	$(MAKE) ARCH=x86 PRECISION=single dist
+	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=single dist
 
 rp2040:
-	$(MAKE) ARCH=armv6m PRECISION=single dist
+	$(MAKE) ARCH=armv6m MP_BCLIBC_PRECISION=single dist
 
 armv7m:
-	$(MAKE) ARCH=armv7m PRECISION=single dist
+	$(MAKE) ARCH=armv7m MP_BCLIBC_PRECISION=single dist
 
 rp2350 stm32f4:
-	$(MAKE) ARCH=armv7emsp PRECISION=single dist
+	$(MAKE) ARCH=armv7emsp MP_BCLIBC_PRECISION=single dist
 
 stm32h7:
-	$(MAKE) ARCH=armv7emdp PRECISION=single dist
+	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=single dist
 
 stm32h7dp:
-	$(MAKE) ARCH=armv7emdp PRECISION=double dist
+	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=double dist
 
 esp32s3:
-	$(MAKE) ARCH=xtensawin PRECISION=single dist
+	$(MAKE) ARCH=xtensawin MP_BCLIBC_PRECISION=single dist
 
 esp32:
-	$(MAKE) ARCH=xtensa PRECISION=single dist
+	$(MAKE) ARCH=xtensa MP_BCLIBC_PRECISION=single dist
 
 esp32c3 esp32c6:
-	$(MAKE) ARCH=rv32imc PRECISION=single dist
+	$(MAKE) ARCH=rv32imc MP_BCLIBC_PRECISION=single dist
 
 rv64:
-	$(MAKE) ARCH=rv64imc PRECISION=single dist
+	$(MAKE) ARCH=rv64imc MP_BCLIBC_PRECISION=single dist
 
 dist: all
 	$(Q)mv $(MOD).mpy $(BUILD)/_tiny_bclibc.mpy

@@ -170,7 +170,7 @@ typedef struct
     TINY_BCLIBC_Shot shot;
     real_t mach_data[MAX_DRAG_PTS]; /* custom drag only */
     real_t cd_data[MAX_DRAG_PTS];   /* custom drag only */
-#ifndef MP_BCLIBC_SINGLE_PRECISION
+#ifndef TINY_BCLIBC_SINGLE_PRECISION
     TINY_BCLIBC_Wind winds[MAX_WINDS]; /* double build: convert float32 → double */
 #endif
     TINY_BCLIBC_CurvePoint curve_buf[MAX_DRAG_PTS];
@@ -268,7 +268,7 @@ static int32_t build_props_buf(mp_obj_t shot_obj, mp_obj_t holder_obj, TINY_BCLI
     int32_t wn = (int32_t)wind_count;
     if (wn > MAX_WINDS)
         wn = MAX_WINDS;
-#ifdef MP_BCLIBC_SINGLE_PRECISION
+#ifdef TINY_BCLIBC_SINGLE_PRECISION
     /* sp build: TINY_BCLIBC_Wind = {float×4} matches Python buffer layout exactly */
     s->winds = (const TINY_BCLIBC_Wind *)(p + winds_off);
 #else
@@ -305,7 +305,7 @@ static void parse_req(mp_obj_t req_obj, TINY_BCLIBC_TrajectoryRequest *req)
 
 static mp_obj_t mp_bclibc_version(void)
 {
-#ifdef MP_BCLIBC_SINGLE_PRECISION
+#ifdef TINY_BCLIBC_SINGLE_PRECISION
     static const char _v[] = MP_BCLIBC_VERSION "-sp";
 #else
     static const char _v[] = MP_BCLIBC_VERSION "-dp";

@@ -87,11 +87,11 @@ define unix_build
 	    $(1) \
 	    USER_C_MODULES="$(MAKE_MODULES)" \
 	    FROZEN_MANIFEST="$(MANIFEST)" \
-	    TINY_BCLIBC_PRECISION=$(2)
+	    MP_BCLIBC_PRECISION=$(2)
 endef
 
 # ── ARMhf — builds inside Docker (Ubuntu 22.04 + gcc-arm-linux-gnueabihf) ─────
-# $(1) = output subdir (armhf_dp / armhf_sp), $(2) = TINY_BCLIBC_PRECISION value
+# $(1) = output subdir (armhf_dp / armhf_sp), $(2) = MP_BCLIBC_PRECISION value
 define armhf_docker_build
 	docker image inspect $(DOCKER_IMAGE_ARMHF) >/dev/null 2>&1 || \
 	    docker build -t $(DOCKER_IMAGE_ARMHF) -f $(THIS_DIR)/Dockerfile.armhf $(THIS_DIR)
@@ -117,7 +117,7 @@ define armhf_docker_build
 	            BUILD=/workspace/usermod/build/$(1) \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=$(2); \
+	            MP_BCLIBC_PRECISION=$(2); \
 	        arm-linux-gnueabihf-strip -s /workspace/usermod/build/$(1)/micropython; \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/build && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/build/$(1)'
 endef
@@ -135,7 +135,7 @@ x64sp: $(VERSION_H)
 # ── x86 — builds inside Docker (Ubuntu 22.04 + gcc-multilib) ─────────────────
 # autoreconf on ubuntu-latest (24.04+) breaks libffi configure.ac from MPY v1.28;
 # Docker pins the toolchain to a known-good Ubuntu 22.04 environment.
-# $(1) = precision suffix (x86_dp / x86_sp), $(2) = TINY_BCLIBC_PRECISION value
+# $(1) = precision suffix (x86_dp / x86_sp), $(2) = MP_BCLIBC_PRECISION value
 define x86_docker_build
 	docker image inspect $(DOCKER_IMAGE_X86) >/dev/null 2>&1 || \
 	    docker build -t $(DOCKER_IMAGE_X86) -f $(THIS_DIR)/Dockerfile.x86 $(THIS_DIR)
@@ -159,7 +159,7 @@ define x86_docker_build
 	            BUILD=/workspace/usermod/build/$(1) \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=$(2); \
+	            MP_BCLIBC_PRECISION=$(2); \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/build && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/build/$(1)'
 endef
 
@@ -214,7 +214,7 @@ mipsel: $(VERSION_H)
 	            BUILD=/workspace/usermod/build/mipsel_dp \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=double; \
+	            MP_BCLIBC_PRECISION=double; \
 	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_dp/micropython; \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/build && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/build/mipsel_dp'
 
@@ -246,7 +246,7 @@ mipselsp: $(VERSION_H)
 	            BUILD=/workspace/usermod/build/mipsel_sp \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=single; \
+	            MP_BCLIBC_PRECISION=single; \
 	        mipsel-linux-gnu-strip -s /workspace/usermod/build/mipsel_sp/micropython; \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/build && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/build/mipsel_sp'
 
@@ -267,14 +267,14 @@ qemu-armv7m: $(VERSION_H)
 	        make -j$$J -C /mpy_build/ports/qemu BOARD=MPS2_AN385 \
 	            USER_C_MODULES=/workspace \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=single; \
+	            MP_BCLIBC_PRECISION=single; \
 	        python3 /workspace/usermod/ci/run_qemu.py \
 	            /mpy_build/ports/qemu/build-MPS2_AN385/firmware.elf \
 	            /workspace/tests/; \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/generated && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/generated'
 
 # ── WebAssembly — builds + tests inside Docker (emscripten/emsdk) ────────────
-# $(1) = output subdir (wasm_dp / wasm_sp), $(2) = TINY_BCLIBC_PRECISION value
+# $(1) = output subdir (wasm_dp / wasm_sp), $(2) = MP_BCLIBC_PRECISION value
 define wasm_docker_build
 	docker image inspect $(DOCKER_IMAGE_WASM) >/dev/null 2>&1 || \
 	    docker build -t $(DOCKER_IMAGE_WASM) -f $(THIS_DIR)/Dockerfile.webassembly $(THIS_DIR)
@@ -293,7 +293,7 @@ define wasm_docker_build
 	            USER_C_MODULES=/workspace \
                 MICROPY_MPYCROSS=/mpy_build/mpy-cross/build/mpy-cross \
 	            FROZEN_MANIFEST=/workspace/usermod/manifest.py \
-	            TINY_BCLIBC_PRECISION=$(2); \
+	            MP_BCLIBC_PRECISION=$(2); \
 	        node /workspace/usermod/build/$(1)/micropython.mjs \
 	            /workspace/tests/test_bclibc.py; \
 	        chown $(HOST_UID):$(HOST_GID) /workspace/usermod/build && chown -R $(HOST_UID):$(HOST_GID) /workspace/usermod/build/$(1)'
@@ -312,11 +312,11 @@ rp2040: $(VERSION_H)
 	    BUILD="$(_BUILD)/rp2040_sp" \
 	    BOARD=RPI_PICO \
 	    USER_C_MODULES="$(CMAKE_MODULE)" \
-	    FROZEN_MANIFEST="$(MANIFEST)"
+	    FROZEN_MANIFEST="$(MANIFEST)" \
+		MP_BCLIBC_PRECISION=single
 
 rp2040dp: $(VERSION_H)
 	$(MAKE) -C "$(MPY_DIR)/ports/rp2" BOARD=RPI_PICO submodules
-	TINY_BCLIBC_DOUBLE_PRECISION=1 \
 	$(MAKE) -C "$(MPY_DIR)/ports/rp2" \
 	    BUILD="$(_BUILD)/rp2040_dp" \
 	    BOARD=RPI_PICO \

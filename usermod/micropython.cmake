@@ -69,14 +69,13 @@ target_compile_definitions(usermod_tiny_bclibc INTERFACE
     TINY_BCLIBC_NO_ERR_BUF
 )
 
-# Precision: single by default; set TINY_BCLIBC_DOUBLE_PRECISION=1 (cmake var or env)
-# for double.  The usermod/Makefile handles this via CFLAGS_USERMOD for unix-family
-# targets (which bypass cmake's flag injection), so cmake precision only applies to
-# cmake-native ports (rp2040, esp32, Windows).
-if(NOT TINY_BCLIBC_DOUBLE_PRECISION AND NOT "$ENV{TINY_BCLIBC_DOUBLE_PRECISION}" STREQUAL "1")
+# ── Precision ──────────────────────────────────────────────────────────────────
+# Використовуємо MP_BCLIBC_PRECISION (той самий флаг, що в Makefile)
+#   MP_BCLIBC_PRECISION=single → вмикаємо TINY_BCLIBC_SINGLE_PRECISION
+#   MP_BCLIBC_PRECISION=double → нічого не додаємо (код використовує double за замовчуванням)
+if(MP_BCLIBC_PRECISION STREQUAL "single")
     target_compile_definitions(usermod_tiny_bclibc INTERFACE
         TINY_BCLIBC_SINGLE_PRECISION
-        MP_BCLIBC_SINGLE_PRECISION
         TINY_BCLIBC_FAST_ZERO_FIND
     )
 endif()

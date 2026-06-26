@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Precision flag unified across all build systems
+
+The precision selection is now controlled by a **single** environment / make variable:
+`MP_BCLIBC_PRECISION=single|double`. This replaces the previous fragmented approach:
+
+- `natmod/Makefile`: `PRECISION` → `MP_BCLIBC_PRECISION`
+- `usermod/Makefile`: `TINY_BCLIBC_PRECISION` → `MP_BCLIBC_PRECISION`
+- `usermod/micropython.cmake`: `TINY_BCLIBC_DOUBLE_PRECISION` → `MP_BCLIBC_PRECISION`
+- `usermod/micropython.mk`: `MP_BCLIBC_PRECISION` kept (already aligned)
+- `ffimod/_tiny_bclibc.py`: now uses `MP_BCLIBC_PRECISION` to select correct C struct layout.
+
+All targets now consistently accept `MP_BCLIBC_PRECISION=single` or `=double`; the default
+remains `double` on x64/x86 and `single` on MCU architectures. This eliminates the need
+to remember different flags for different build modes and makes the user experience
+uniform across the entire project.
+
 ### Fixed
 
 #### `src/tiny_bclibc_mp.c` — `-Wdouble-promotion` in wasm_sp (Emscripten/Clang)
