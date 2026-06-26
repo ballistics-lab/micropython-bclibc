@@ -43,6 +43,7 @@ HOST_GID          := $(shell id -g)
 
 .PHONY: all submodules x64 x64sp x86 x86sp \
         aarch64 aarch64sp armhf armhfsp mipsel mipselsp \
+		x86-native x86sp-native \
         qemu-armv7m wasm wasmsp rp2040 rp2040dp rp2040test generated clean help
 
 all: x64
@@ -85,6 +86,20 @@ define unix_build
 	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
 	    BUILD="$(_BUILD)/$(3)" \
 	    $(1) \
+	    USER_C_MODULES="$(MAKE_MODULES)" \
+	    FROZEN_MANIFEST="$(MANIFEST)" \
+	    TINY_BCLIBC_PRECISION=$(2)
+endef
+
+# ── Cross-compilation macro ──────────────────────────────────────────────────
+# $(1) = cross compile prefix (e.g. aarch64-linux-gnu-)
+# $(2) = precision: single | double
+# $(3) = output subdirectory
+define cross_build
+	$(MAKE) -C "$(MPY_DIR)/ports/unix" VARIANT=standard \
+	    BUILD="$(_BUILD)/$(3)" \
+	    CROSS_COMPILE=$(1) \
+	    MICROPY_STANDALONE=1 \
 	    USER_C_MODULES="$(MAKE_MODULES)" \
 	    FROZEN_MANIFEST="$(MANIFEST)" \
 	    TINY_BCLIBC_PRECISION=$(2)
@@ -168,6 +183,12 @@ x86: $(VERSION_H)
 
 x86sp: $(VERSION_H)
 	$(call x86_docker_build,x86_sp,single)
+
+x86-native: $(VERSION_H)
+	$(call unix_build,MICROPY_FORCE_32BIT=1,double,x86_dp_native)
+
+x86sp-native: $(VERSION_H)
+	$(call unix_build,MICROPY_FORCE_32BIT=1,single,x86_sp_native)
 
 # ── AArch64 (cross) ───────────────────────────────────────────────────────────
 aarch64: $(VERSION_H)
