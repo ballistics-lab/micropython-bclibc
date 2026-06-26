@@ -1,4 +1,4 @@
-# tiny_bclibc MicroPython module
+# Pure C99 Ballistic Solver Engine for MicroPython based on [bclibc/tiny_bclibc](https://github.com/ballistics-lab/bclibc) library
 
 > [!WARNING]
 > **Experimental feature.** This repository and the underlying `tiny_bclibc` C99 engine
@@ -157,8 +157,8 @@ make clean      # rm -rf natmod/build/ natmod/generated/
 
 ```bash
 make ARCH=armv6m MPY_DIR=/path/to/micropython-1.28.0
-make ARCH=armv7emdp PRECISION=double   # double on Cortex-M7  → build/armv7emdp_dp/
-make ARCH=x64 PRECISION=single         # single on host       → build/x64_sp/
+make ARCH=armv7emdp MP_BCLIBC_PRECISION=double   # double on Cortex-M7  → build/armv7emdp_dp/
+make ARCH=x64 MP_BCLIBC_PRECISION=single         # single on host       → build/x64_sp/
 ```
 
 ## Test (x64 / x86 host)
@@ -217,14 +217,17 @@ make wasmsp       # WebAssembly single   [Docker] → build/wasm_sp/micropython.
 make qemu-armv7m  # Cortex-M3 build + test [Docker]
 make rp2040       # RP2040 single (cmake, pico-sdk) → build/rp2040_sp/firmware.uf2
 make rp2040dp     # RP2040 double                  → build/rp2040_dp/firmware.uf2
-make rp2040test   # RP2040 single + frozen tests   → build/rp2040_sp_test/firmware.uf2  [CI only]
+
+# Precision override:
+make rp2040 MP_BCLIBC_PRECISION=single
+make rp2040 MP_BCLIBC_PRECISION=double
+make x64 MP_BCLIBC_PRECISION=single
 ```
 
 Output for unix targets: `usermod/build/<target>/micropython`
 Output for rp2040: `usermod/build/rp2040_{sp,dp}/firmware.uf2`
 
-Precision is passed as `TINY_BCLIBC_PRECISION=single|double` for make-based ports and
-`TINY_BCLIBC_DOUBLE_PRECISION=1` for cmake-based ports.
+`MP_BCLIBC_PRECISION=single|double` for all ports (unix, cmake, Docker).
 
 ### Prerequisites
 
@@ -353,14 +356,14 @@ MPY="$MPY_DIR/ports/unix/build-standard/micropython"
 
 # 3. Run full test suite via the FFI module (sp or dp)
 TINY_BCLIBC_SO=../tiny_bclibc/build-shared/libtiny_bclibc.so \
-TINY_BCLIBC_PRECISION=double \
+MP_BCLIBC_PRECISION=double \
 $MPY tests/test_ffi.py
 ```
 
 Both skip automatically on 32-bit platforms (pointer size ≠ 8 bytes).
 
 `ffimod/_tiny_bclibc.py` supports both `single` and `double` precision via
-`TINY_BCLIBC_PRECISION` and provides the same API as the natmod: `Shot`, `Request`,
+`MP_BCLIBC_PRECISION` and provides the same API as the natmod: `Shot`, `Request`,
 `Wind`, `Config`, `integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`,
 `find_max_range`, and all flag / index constants.
 
@@ -645,7 +648,7 @@ BSS must be 0 — MicroPython natmod ABI does not allow uninitialized static dat
 then Ridder's method to find the zero angle. Each GSS iteration runs a full RK4
 trajectory, which is expensive on soft-float MCUs (Cortex-M0+, RISC-V without FPU).
 
-`TINY_BCLIBC_FAST_ZERO_FIND` is automatically defined when building with `PRECISION=single`.
+`TINY_BCLIBC_FAST_ZERO_FIND` is automatically defined when building with `MP_BCLIBC_PRECISION=single`.
 It applies two optimisations that do **not** affect the final angle accuracy:
 
 | Parameter | Default | Fast |
@@ -658,7 +661,7 @@ The bracket bound (`angle_at_max`) is used only to constrain Ridder's search int
 its precision does not affect the output. Ridder's method always uses the original
 `calc_step`.
 
-To build without `FAST_ZERO_FIND` even on `PRECISION=single`, remove
+To build without `FAST_ZERO_FIND` even on `MP_BCLIBC_PRECISION=single`, remove
 `-DTINY_BCLIBC_FAST_ZERO_FIND` from `CFLAGS_EXTRA` in the Makefile.
 
 See [src/sincosf_shim.md](src/sincosf_shim.md) for why `src/math_shim.c` is only compiled on x64/x86 and how to add it back for MCU targets if needed.
@@ -701,8 +704,8 @@ using `integrate_at()` + a range loop instead of storing the full trajectory.
 ### Test methodology
 
 The comparison runs the full trajectory integration twice — once with the float64 natmod
-(`build/x64_dp/_tiny_bclibc.mpy`, `PRECISION=double`) and once with the float32
-natmod (`build/x64_sp/_tiny_bclibc.mpy`, `PRECISION=single`) — and diffs the output
+(`build/x64_dp/_tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=double`) and once with the float32
+natmod (`build/x64_sp/_tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=single`) — and diffs the output
 row by row. `find_zero_angle` is also compared between the two builds.
 
 **Important:** `range_step_ft` in the `Request` is the *output sampling step* only.
