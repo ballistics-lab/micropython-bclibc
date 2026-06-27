@@ -1,6 +1,6 @@
 {
     "version": "0.1.0",
     "urls": [
-        ["tiny_bclibc.py", "github:ballistics-lab/micropython-bclibc/installer/src/tiny_bclibc.py"]
+        ["tiny_bclibc.py", "https://raw.githubusercontent.com/ballistics-lab/micropython-bclibc/installer/src/tiny_bclibc.py"]
     ]
 }
