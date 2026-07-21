@@ -87,6 +87,9 @@ hardware required.
 
 ### Changed
 
+####
+- Pin `bclibc` to `v1.1.5`
+
 #### `.github/` — `fetch-micropython` and `clone-micropython` composite actions
 
 Repeated inline steps extracted into reusable composite actions:
