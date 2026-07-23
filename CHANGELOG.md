@@ -88,7 +88,7 @@ hardware required.
 ### Changed
 
 ####
-- Pin `bclibc` to `v1.1.5`
+- Pin `bclibc` to `v1.1.6`
 
 #### `.github/` — `fetch-micropython` and `clone-micropython` composite actions
 
