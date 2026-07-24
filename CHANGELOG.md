@@ -88,7 +88,7 @@ hardware required.
 ### Changed
 
 ####
-- Pin `bclibc` to `v1.1.6`
+- Pin `bclibc` to `v1.1.7`
 
 #### `.github/` — `fetch-micropython` and `clone-micropython` composite actions
 
@@ -105,11 +105,11 @@ This eliminates `autotools` version sensitivity (Ubuntu 24.04+ breaks libffi's
 `configure.ac` from MicroPython v1.28) and removes all host-side toolchain requirements
 beyond Docker itself.
 
-| Target | Dockerfile | What runs inside |
-|--------|-----------|-----------------|
-| `x86` / `x86sp` | `Dockerfile.x86` | mpy-cross, autoreconf, deplibs, main build |
-| `armhf` / `armhfsp` | `Dockerfile.armhf` | mpy-cross, autoreconf, deplibs, main build, strip |
-| `qemu-armv7m` | `Dockerfile.armv7m` | mpy-cross, firmware build, QEMU test |
+| Target                | Dockerfile          | What runs inside                                  |
+| --------------------- | ------------------- | ------------------------------------------------- |
+| `x86` / `x86sp`       | `Dockerfile.x86`    | mpy-cross, autoreconf, deplibs, main build        |
+| `armhf` / `armhfsp`   | `Dockerfile.armhf`  | mpy-cross, autoreconf, deplibs, main build, strip |
+| `qemu-armv7m`         | `Dockerfile.armv7m` | mpy-cross, firmware build, QEMU test              |
 | `mipsel` / `mipselsp` | `Dockerfile.mipsel` | mpy-cross, submodules, deplibs, main build, strip |
 
 - `usermod/Dockerfile.x86`: Ubuntu 22.04 + `gcc-multilib g++-multilib` + autotools.
@@ -140,15 +140,15 @@ available as a built-in at every boot.
 
 - `usermod/Makefile`: cross-compile targets for all supported platforms:
 
-  | Target | Precision | Host/cross | Notes |
-  |--------|-----------|-----------|-------|
-  | `x64` / `x64sp` | double / single | native x64 | unix port, dynamic |
-  | `x86` / `x86sp` | double / single | 32-bit | unix port, standalone static |
-  | `aarch64` / `aarch64sp` | double / single | `aarch64-linux-gnu-` | unix port, standalone static |
-  | `armhf` / `armhfsp` | double / single | `arm-linux-gnueabihf-` | unix port, standalone static |
-  | `mipsel` / `mipselsp` | double / single | `mipsel-linux-gnu-` | unix port, coverage variant, static |
-  | `rp2040` | single | cmake (`arm-none-eabi`) | RP2040 firmware |
-  | `rp2040dp` | double | cmake (`arm-none-eabi`) | RP2040 firmware, DP FPU |
+  | Target                  | Precision       | Host/cross              | Notes                               |
+  | ----------------------- | --------------- | ----------------------- | ----------------------------------- |
+  | `x64` / `x64sp`         | double / single | native x64              | unix port, dynamic                  |
+  | `x86` / `x86sp`         | double / single | 32-bit                  | unix port, standalone static        |
+  | `aarch64` / `aarch64sp` | double / single | `aarch64-linux-gnu-`    | unix port, standalone static        |
+  | `armhf` / `armhfsp`     | double / single | `arm-linux-gnueabihf-`  | unix port, standalone static        |
+  | `mipsel` / `mipselsp`   | double / single | `mipsel-linux-gnu-`     | unix port, coverage variant, static |
+  | `rp2040`                | single          | cmake (`arm-none-eabi`) | RP2040 firmware                     |
+  | `rp2040dp`              | double          | cmake (`arm-none-eabi`) | RP2040 firmware, DP FPU             |
 
   Build output: `usermod/build/<target>/micropython` (unix) or
   `$MPY_DIR/ports/rp2/build-RPI_PICO/firmware.{elf,uf2}` (rp2040).
@@ -173,14 +173,14 @@ available as a built-in at every boot.
 
 #### `.github/workflows/usermod.yml` — CI for usermod builds
 
-  | Job | Runner | Approach |
-  |-----|--------|---------|
-  | `build-armhf` | ubuntu-latest | Cross-compile, `MICROPY_STANDALONE=1 -static`, artifact upload |
-  | `test-armhf` | ubuntu-latest | Download artifact, run under `qemu-arm` |
-  | `build-mipsel` | ubuntu-latest | Cross-compile (coverage variant), static, artifact upload |
-  | `test-mipsel` | ubuntu-latest | Download artifact, run under `qemu-mipsel` |
-  | `build-test-aarch64` | ubuntu-24.04-arm64 | Native build + test + artifact upload |
-  | `build-test-qemu-armv7m` | ubuntu-latest | Build MPS2_AN385 QEMU firmware + test via `run_qemu.py` |
+  | Job                      | Runner             | Approach                                                       |
+  | ------------------------ | ------------------ | -------------------------------------------------------------- |
+  | `build-armhf`            | ubuntu-latest      | Cross-compile, `MICROPY_STANDALONE=1 -static`, artifact upload |
+  | `test-armhf`             | ubuntu-latest      | Download artifact, run under `qemu-arm`                        |
+  | `build-mipsel`           | ubuntu-latest      | Cross-compile (coverage variant), static, artifact upload      |
+  | `test-mipsel`            | ubuntu-latest      | Download artifact, run under `qemu-mipsel`                     |
+  | `build-test-aarch64`     | ubuntu-24.04-arm64 | Native build + test + artifact upload                          |
+  | `build-test-qemu-armv7m` | ubuntu-latest      | Build MPS2_AN385 QEMU firmware + test via `run_qemu.py`        |
 
   `workflow_dispatch` input `mpy_tag` to test against any MicroPython release.
 
