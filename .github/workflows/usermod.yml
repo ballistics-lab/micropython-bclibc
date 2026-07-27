@@ -40,10 +40,38 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── AArch64: native, statically linked ──────────────────────────────────────
-  build-test-aarch64:
-    name: build + test (aarch64, static)
-    runs-on: ubuntu-24.04-arm
+  # ── Native/cross unix builds: aarch64 (native), armhf/mipsel (cross,
+  # tested under qemu-user-static) ────────────────────────────────────────────
+  # One matrix job instead of three near-identical ones -- all three build
+  # ports/unix with MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static via the exact
+  # same deplibs+build command shape, differing only in CROSS_COMPILE/apt
+  # packages/whether qemu-user-static is needed (empty cross_compile/qemu_bin
+  # for aarch64, since it runs natively on ubuntu-24.04-arm). armhf/mipsel
+  # binaries run directly with no explicit qemu-arm-static/qemu-mipsel-static
+  # wrapper -- qemu-user-static registers a binfmt_misc handler that
+  # intercepts them transparently, same as upstream MicroPython's own
+  # ci_unix_qemu_arm_*/ci_unix_qemu_mips_* recipe.
+  build-test-unix-static:
+    name: build + test (${{ matrix.arch }}, static)
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runs_on: ubuntu-24.04-arm
+            cross_compile: ""
+            apt: autoconf libtool libtool-bin libltdl-dev pkg-config
+          - arch: armhf
+            runs_on: ubuntu-latest
+            cross_compile: arm-linux-gnueabi-
+            apt: gcc-arm-linux-gnueabi g++-arm-linux-gnueabi libltdl-dev autoconf libtool libtool-bin pkg-config
+            qemu_bin: qemu-arm-static
+          - arch: mipsel
+            runs_on: ubuntu-latest
+            cross_compile: mipsel-linux-gnu-
+            apt: gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev autoconf libtool libtool-bin pkg-config
+            qemu_bin: qemu-mipsel-static
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,7 +88,17 @@ jobs:
         # ./autogen.sh rule handles the rest -- no manual libtoolize/
         # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
         # build our own static libffi.a instead of linking the system's.
-        run: sudo apt-get install -y autoconf libtool libtool-bin libltdl-dev pkg-config
+        run: sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install qemu-user-static
+        # No /usr/gnemul sysroot symlink needed -- the binary is fully
+        # static, so qemu-user-static's binfmt_misc handler runs it
+        # directly with no dynamic libraries to resolve at all. Not needed
+        # for aarch64 (native), hence the matrix.qemu_bin guard.
+        if: matrix.qemu_bin != ''
+        run: |
+          sudo apt-get install -y qemu-user-static
+          ${{ matrix.qemu_bin }} --version
 
       - name: Build mpy-cross
         # Built explicitly first, before FROZEN_MANIFEST ever appears on a
@@ -82,159 +120,44 @@ jobs:
         # BUILD must match the main build step's BUILD -- deplibs writes
         # libffi.a under $(BUILD)/lib/libffi/out/lib/, and the main build
         # looks for it there too; a mismatch is a real "ld: cannot find
-        # .../libffi.a" failure (confirmed by CI).
+        # .../libffi.a" failure (confirmed by CI). CROSS_COMPILE= (empty
+        # for aarch64) is a no-op command-line assignment, identical to
+        # omitting it -- same as the main build step below.
         run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/aarch64"
-          make -C "$MPY_DIR/ports/unix" BUILD="$BUILD" MICROPY_STANDALONE=1 deplibs
+          BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
+            CROSS_COMPILE=${{ matrix.cross_compile }} \
+            MICROPY_STANDALONE=1 deplibs
 
-      - name: Build usermod (aarch64, static)
+      - name: Build usermod (${{ matrix.arch }}, static)
         # BUILD is a local shell var, not a job/step env: -- a job-level
         # env: BUILD would leak into the "Build mpy-cross" / "Build libffi"
         # steps above too (they run `make` in the same job), and since
         # py/mkenv.mk sets BUILD ?= build, an inherited env var wins over
         # that default, making mpy-cross (or libffi's own build) end up
-        # rooted under usermod/build/aarch64 instead of its own default
-        # location -- confirmed by a real CI failure ("mpy-cross not found
-        # at .../mpy-cross/build/mpy-cross, please build it first" even
-        # though the earlier step built it, just at the wrong path).
+        # rooted under usermod/build/${{ matrix.arch }} instead of its own
+        # default location -- confirmed by a real CI failure ("mpy-cross
+        # not found at .../mpy-cross/build/mpy-cross, please build it
+        # first" even though the earlier step built it, just at the wrong
+        # path).
         run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/aarch64"
+          BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
+            CROSS_COMPILE=${{ matrix.cross_compile }} \
             MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$GITHUB_WORKSPACE/usermod/build/aarch64/micropython tests/test_bclibc.py"
+        run: "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tiny-bclibc-usermod-aarch64
-          path: usermod/build/aarch64/micropython
-          if-no-files-found: error
-
-  # ── ARMhf: cross-compiled, statically linked, tested under qemu-user-static ─
-  build-test-armhf:
-    name: build + test (armhf, static)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: 'true'
-          fetch-depth: 0
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
-      - name: Install packages
-        # No /usr/gnemul sysroot symlink needed -- the binary is fully
-        # static, so qemu-user-static's binfmt_misc handler runs it
-        # directly with no dynamic libraries to resolve at all.
-        run: |
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabi g++-arm-linux-gnueabi libltdl-dev \
-            autoconf libtool libtool-bin pkg-config
-          sudo apt-get install -y qemu-user-static
-          qemu-arm-static --version
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build libffi (deplibs)
-        # Same reasoning as the aarch64 job's identical step: MPY_DIR is a
-        # release tarball with lib/libffi already vendored, so no
-        # `submodules` step is needed (or possible) first. BUILD must match
-        # the main build step's BUILD (see that job's comment on the same
-        # step for why).
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/armhf"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=arm-linux-gnueabi- \
-            MICROPY_STANDALONE=1 deplibs
-
-      - name: Build usermod (armhf, static)
-        # BUILD is a local shell var, not a job env: -- see the aarch64
-        # job's identical step for why (leaks into mpy-cross/deplibs steps
-        # otherwise, via py/mkenv.mk's BUILD ?= build).
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/armhf"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=arm-linux-gnueabi- \
-            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
-            MP_BCLIBC_PRECISION=double -j"$(nproc)"
-
-      - name: Run tests
-        run: "$GITHUB_WORKSPACE/usermod/build/armhf/micropython tests/test_bclibc.py"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiny-bclibc-usermod-armhf
-          path: usermod/build/armhf/micropython
-          if-no-files-found: error
-
-  # ── MIPS LE: cross-compiled, statically linked, tested under qemu-user-static
-  build-test-mipsel:
-    name: build + test (mipsel, static)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: 'true'
-          fetch-depth: 0
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
-      - name: Install packages
-        run: |
-          sudo apt-get install -y \
-            gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev \
-            autoconf libtool libtool-bin pkg-config
-          sudo apt-get install -y qemu-user-static
-          qemu-mipsel-static --version
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build libffi (deplibs)
-        # BUILD must match the main build step's BUILD (see the aarch64
-        # job's comment on the same step for why).
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/mipsel"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=mipsel-linux-gnu- \
-            MICROPY_STANDALONE=1 deplibs
-
-      - name: Build usermod (mipsel, static)
-        # BUILD is a local shell var, not a job env: -- see the aarch64
-        # job's identical step for why (leaks into mpy-cross/deplibs steps
-        # otherwise, via py/mkenv.mk's BUILD ?= build).
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/mipsel"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=mipsel-linux-gnu- \
-            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
-            MP_BCLIBC_PRECISION=double -j"$(nproc)"
-
-      - name: Run tests
-        run: "$GITHUB_WORKSPACE/usermod/build/mipsel/micropython tests/test_bclibc.py"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiny-bclibc-usermod-mipsel
-          path: usermod/build/mipsel/micropython
+          name: tiny-bclibc-usermod-${{ matrix.arch }}
+          path: usermod/build/${{ matrix.arch }}/micropython
           if-no-files-found: error
 
   # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
