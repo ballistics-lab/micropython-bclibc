@@ -94,8 +94,19 @@ jobs:
 
       - name: Build ${{ matrix.arch }}
         working-directory: natmod
+        # esp-idf's export.sh puts its own python venv ahead of system
+        # PATH, which resolves to a *different* python3/pip than the one
+        # "Install Python tools" installed pyelftools/ar into -- mpy_ld.py
+        # then fails with "RuntimeError: Please run 'pip install ar' to
+        # link .a files" even though that pip install already ran
+        # (confirmed by a real CI failure specific to xtensawin, the only
+        # esp-idf-toolchain leg; plain xtensa/tarball-toolchain legs never
+        # source export.sh, so they don't hit this).
         run: |
-          if [ "${{ matrix.toolchain }}" = "esp-idf" ]; then source ../esp-idf/export.sh; fi
+          if [ "${{ matrix.toolchain }}" = "esp-idf" ]; then
+            source ../esp-idf/export.sh
+            pip install pyelftools ar
+          fi
           make ARCH=${{ matrix.arch }} MPY_DIR="$MPY_DIR" dist
 
       - uses: actions/upload-artifact@v7
