@@ -44,8 +44,6 @@ jobs:
   build-test-aarch64:
     name: build + test (aarch64, static)
     runs-on: ubuntu-24.04-arm
-    env:
-      BUILD: ${{ github.workspace }}/usermod/build/aarch64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -84,7 +82,17 @@ jobs:
         run: make -C "$MPY_DIR/ports/unix" MICROPY_STANDALONE=1 deplibs
 
       - name: Build usermod (aarch64, static)
+        # BUILD is a local shell var, not a job/step env: -- a job-level
+        # env: BUILD would leak into the "Build mpy-cross" / "Build libffi"
+        # steps above too (they run `make` in the same job), and since
+        # py/mkenv.mk sets BUILD ?= build, an inherited env var wins over
+        # that default, making mpy-cross (or libffi's own build) end up
+        # rooted under usermod/build/aarch64 instead of its own default
+        # location -- confirmed by a real CI failure ("mpy-cross not found
+        # at .../mpy-cross/build/mpy-cross, please build it first" even
+        # though the earlier step built it, just at the wrong path).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/aarch64"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
             MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
@@ -93,20 +101,18 @@ jobs:
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$BUILD/micropython tests/test_bclibc.py"
+        run: "$GITHUB_WORKSPACE/usermod/build/aarch64/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-aarch64
-          path: ${{ env.BUILD }}/micropython
+          path: usermod/build/aarch64/micropython
           if-no-files-found: error
 
   # ── ARMhf: cross-compiled, statically linked, tested under qemu-user-static ─
   build-test-armhf:
     name: build + test (armhf, static)
     runs-on: ubuntu-latest
-    env:
-      BUILD: ${{ github.workspace }}/usermod/build/armhf
     steps:
       - uses: actions/checkout@v7
         with:
@@ -141,7 +147,11 @@ jobs:
             MICROPY_STANDALONE=1 deplibs
 
       - name: Build usermod (armhf, static)
+        # BUILD is a local shell var, not a job env: -- see the aarch64
+        # job's identical step for why (leaks into mpy-cross/deplibs steps
+        # otherwise, via py/mkenv.mk's BUILD ?= build).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/armhf"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
             CROSS_COMPILE=arm-linux-gnueabi- \
@@ -151,20 +161,18 @@ jobs:
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$BUILD/micropython tests/test_bclibc.py"
+        run: "$GITHUB_WORKSPACE/usermod/build/armhf/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-armhf
-          path: ${{ env.BUILD }}/micropython
+          path: usermod/build/armhf/micropython
           if-no-files-found: error
 
   # ── MIPS LE: cross-compiled, statically linked, tested under qemu-user-static
   build-test-mipsel:
     name: build + test (mipsel, static)
     runs-on: ubuntu-latest
-    env:
-      BUILD: ${{ github.workspace }}/usermod/build/mipsel
     steps:
       - uses: actions/checkout@v7
         with:
@@ -193,7 +201,11 @@ jobs:
             MICROPY_STANDALONE=1 deplibs
 
       - name: Build usermod (mipsel, static)
+        # BUILD is a local shell var, not a job env: -- see the aarch64
+        # job's identical step for why (leaks into mpy-cross/deplibs steps
+        # otherwise, via py/mkenv.mk's BUILD ?= build).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/mipsel"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
             CROSS_COMPILE=mipsel-linux-gnu- \
@@ -203,12 +215,12 @@ jobs:
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$BUILD/micropython tests/test_bclibc.py"
+        run: "$GITHUB_WORKSPACE/usermod/build/mipsel/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-mipsel
-          path: ${{ env.BUILD }}/micropython
+          path: usermod/build/mipsel/micropython
           if-no-files-found: error
 
   # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
@@ -257,8 +269,6 @@ jobs:
   build-test-wasm:
     name: build + test (wasm)
     runs-on: ubuntu-latest
-    env:
-      BUILD: ${{ github.workspace }}/usermod/build/wasm
     steps:
       - uses: actions/checkout@v7
         with:
@@ -281,7 +291,11 @@ jobs:
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build + test (wasm)
+        # BUILD is a local shell var, not a job env: -- see the aarch64
+        # job's identical reasoning (leaks into the "Build mpy-cross" step
+        # above otherwise, via py/mkenv.mk's BUILD ?= build).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/wasm"
           source emsdk/emsdk_env.sh
           make -C "$MPY_DIR/ports/webassembly" \
             BUILD="$BUILD" \
@@ -294,8 +308,8 @@ jobs:
         with:
           name: tiny-bclibc-usermod-wasm
           path: |
-            ${{ env.BUILD }}/micropython.mjs
-            ${{ env.BUILD }}/micropython.wasm
+            usermod/build/wasm/micropython.mjs
+            usermod/build/wasm/micropython.wasm
           if-no-files-found: error
 
   # ── RP2040: frozen-tests firmware, tested via rp2040js emulator ─────────────
@@ -307,8 +321,6 @@ jobs:
   build-test-rp2040:
     name: build + test (rp2040)
     runs-on: ubuntu-latest
-    env:
-      BUILD: ${{ github.workspace }}/usermod/build/rp2040_test
     steps:
       - uses: actions/checkout@v7
         with:
@@ -318,7 +330,11 @@ jobs:
       - uses: ./.github/actions/clone-micropython
         with:
           mpy_tag: ${{ env.MPY_TAG }}
-          submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb
+          # lib/mbedtls: ports/rp2/CMakeLists.txt unconditionally lists it
+          # in GIT_SUBMODULES (needed even without wifi/BT) -- omitting it
+          # here fails CMake configure with "Cannot find source file:
+          # .../lib/mbedtls/library/aes.c" (a real CI failure).
+          submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb lib/mbedtls
           pico_sdk_submodules: 'true'
 
       - name: Install toolchain
@@ -333,7 +349,11 @@ jobs:
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build RP2040 test firmware (frozen tests, single precision)
+        # BUILD is a local shell var, not a job env: -- see the aarch64
+        # job's identical reasoning (leaks into the "Build mpy-cross" step
+        # above otherwise, via py/mkenv.mk's BUILD ?= build).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/rp2040_test"
           make -C "$MPY_DIR/ports/rp2" \
             BUILD="$BUILD" \
             BOARD=RPI_PICO \
@@ -356,12 +376,12 @@ jobs:
         working-directory: rp2040js
         run: |
           npx tsx demo/micropython-run.ts \
-            --image "$BUILD/firmware.uf2" \
+            --image "$GITHUB_WORKSPACE/usermod/build/rp2040_test/firmware.uf2" \
             --exec "import test_bclibc" \
             --timeout 120
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-rp2040-test
-          path: ${{ env.BUILD }}/firmware.uf2
+          path: usermod/build/rp2040_test/firmware.uf2
           if-no-files-found: error

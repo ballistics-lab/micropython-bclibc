@@ -128,8 +128,20 @@ else ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc))
 SRC          += $(_FDLIBM_SRCS) mem_shim.c
 CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
 
+else ifeq ($(ARCH),$(filter $(ARCH),xtensa xtensawin))
+# Xtensa: the xtensa-lx106/esp32 toolchains' own newlib libm.a pulls in
+# lib_a-s_lib_ver.o (fdlibm's _LIB_VERSION control global) to satisfy
+# atan2f/etc, and that object has a non-empty .data section -- mpy_ld.py
+# hard-rejects any .data in a linked native module (confirmed by a real CI
+# failure: "LinkError: .../libm.a:lib_a-s_lib_ver.o: .data non-empty").
+# Same fdlibm-from-source route as RISC-V above sidesteps it entirely.
+SRC          += $(_FDLIBM_SRCS) mem_shim.c
+CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
+
 else
-# ARM + Xtensa: newlib libm.a is self-contained and provides both precisions.
+# ARM (Cortex-M): newlib libm.a is self-contained and, unlike the Xtensa
+# toolchains above, doesn't pull in a non-empty .data object for the
+# trig functions this project uses.
 LINK_RUNTIME  = 1
 SRC          += mem_shim.c
 endif
