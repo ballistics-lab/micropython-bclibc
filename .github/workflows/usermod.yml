@@ -309,32 +309,28 @@ jobs:
         # job's identical reasoning (leaks into the "Build mpy-cross" step
         # above otherwise, via py/mkenv.mk's BUILD ?= build).
         #
-        # CC="emcc -Wno-unused-but-set-global": ports/webassembly/Makefile
-        # hardcodes -Werror with no override hook, and MicroPython
-        # v1.28.0's own main.c (external_call_depth) trips a newer
-        # emsdk/clang's -Wunused-but-set-global (confirmed by a real CI
-        # failure) -- "latest" emsdk is a moving target against a source
-        # tree pinned to an old tag.
-        #
-        # NOT done via CFLAGS=: a make command-line assignment is an
-        # "override" variable -- it blocks *every* in-makefile assignment
-        # to that name, including CFLAGS += ... (only an explicit `override
-        # CFLAGS += ...` in the makefile itself could append to it, and
-        # neither py.mk nor this port's Makefile use that). Passing CFLAGS=
-        # here doesn't add to the real flags, it *replaces* them outright,
-        # which is exactly what happened (confirmed by a real CI failure:
-        # every py/*.h include vanished, since $(INC) is one of the pieces
-        # normally appended via CFLAGS += $(INC)). CC has no += anywhere in
-        # either file, so overriding CC to "emcc <extra-flag>" is a safe
-        # drop-in: Make just runs $(CC) as the compiler invocation, and an
-        # extra leading flag baked into that string works the same as
-        # passing it directly on emcc's own command line.
+        # VARIANT=pyscript, not the default `standard` variant: the
+        # `standard` variant (-s ASYNCIFY) is broken against modern emsdk
+        # in multiple ways -- confirmed by a real CI failure here
+        # (-Werror on -Wunused-but-set-global in main.c's
+        # external_call_depth) and tracked upstream at
+        # micropython/micropython#19380 (filed against this exact
+        # combination: v1.28.0 + emsdk latest). A CFLAGS/CC override to
+        # silence just the warning was tried first and didn't actually
+        # take effect for reasons not fully understood; moot anyway, since
+        # upstream's own maintainer recommendation there is "use the
+        # pyscript variant" (it doesn't use ASYNCIFY at all) -- same
+        # variant a7p's own webassembly job already uses, which is why
+        # a7p never hit this. Our own FROZEN_MANIFEST overrides pyscript's
+        # default manifest.py (a large micropython-lib require() list we
+        # don't need) -- that's fine, VARIANT only changes the build
+        # config (JSFLAGS, no ASYNCIFY), the manifest default is separate
+        # and command-line FROZEN_MANIFEST= wins over it either way.
         run: |
           BUILD="$GITHUB_WORKSPACE/usermod/build/wasm"
           source emsdk/emsdk_env.sh
-          make -C "$MPY_DIR/ports/webassembly" \
+          make -C "$MPY_DIR/ports/webassembly" VARIANT=pyscript \
             BUILD="$BUILD" \
-            CC="emcc -Wno-unused-but-set-global" \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
             MP_BCLIBC_PRECISION=double
