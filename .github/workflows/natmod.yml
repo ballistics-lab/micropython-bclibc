@@ -31,25 +31,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x64 }
-          - { arch: x86, apt: gcc-multilib }
-          - { arch: armv6m, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
-          - { arch: armv7m, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
-          - { arch: armv7emsp, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
-          - { arch: armv7emdp, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
-          - {
-              arch: rv32imc,
-              apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
-            }
-          - {
-              arch: rv64imc,
-              apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
-            }
+          - arch: x64
+          - arch: x86
+            apt: gcc-multilib
+          - arch: armv6m
+            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
+          - arch: armv7m
+            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
+          - arch: armv7emsp
+            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
+          - arch: armv7emdp
+            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
+          - arch: rv32imc
+            apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
+          - arch: rv64imc
+            apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
           # xtensa/xtensawin need a toolchain tarball / esp-idf, not a plain
           # apt package -- handled by their own steps below, not the generic
           # "Install cross-compiler" step every other entry uses.
-          - { arch: xtensa, toolchain: xtensa-lx106 }
-          - { arch: xtensawin, toolchain: esp-idf }
+          - arch: xtensa
+            toolchain: xtensa-lx106
+          - arch: xtensawin
+            toolchain: esp-idf
 
     steps:
       - uses: actions/checkout@v7
@@ -115,12 +118,34 @@ jobs:
           path: natmod/build/${{ matrix.arch }}*/
           if-no-files-found: error
 
-  # ── Test on x64 host ───────────────────────────────────────────────────────
-  test-x64:
-    name: test (x64 / micropython)
+  # ── Test built artifacts (x64 native, x86 32-bit, armv7m via QEMU) ────────
+  # One matrix job instead of three near-identical ones -- each leg only
+  # differs in toolchain/build-deps and how the interpreter gets built
+  # (plain unix, 32-bit unix, or QEMU firmware), same `if: matrix.X` style
+  # the build job above already uses. Mirrors a7p's own natmod job, which
+  # folds its (single, x64-only) test step into the build matrix the same
+  # way rather than a separate job.
+  test:
+    name: test (${{ matrix.label }})
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            build_dir: x64_dp
+            kind: unix
+            label: x64 / micropython
+          - arch: x86
+            build_dir: x86_dp
+            kind: unix32
+            label: x86 / micropython 32-bit
+          - arch: armv7m
+            build_dir: armv7m_sp
+            kind: qemu
+            label: armv7m / QEMU Cortex-M3
     steps:
       - uses: actions/checkout@v7
         with:
@@ -131,92 +156,52 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install micropython unix build deps
+        if: matrix.kind == 'unix'
         run: sudo apt-get install -y libffi-dev pkg-config
 
-      - name: Build micropython unix/standard (matches natmod .mpy version)
-        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: tiny-bclibc-x64
-          path: natmod/build/
-
-      - name: Symlink module for testing
-        run: ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
-
-      - name: Run tests
-        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
-
-  # ── Test on x86 host ───────────────────────────────────────────────────────
-  test-x86:
-    name: test (x86 / micropython 32-bit)
-    needs: build
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
       - name: Install 32-bit build deps
+        if: matrix.kind == 'unix32'
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -q
           sudo apt-get install -y gcc-multilib libffi-dev:i386 pkg-config
 
-      - name: Build micropython unix/standard 32-bit
-        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard MICROPY_FORCE_32BIT=1
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: tiny-bclibc-x86
-          path: natmod/build/
-
-      - name: Symlink module for testing
-        run: ln -sf ../natmod/build/x86_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
-
-      - name: Run tests
-        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
-
-  # ── Test on emulated Cortex-M3 via QEMU (armv7m, single precision) ────────
-  test-qemu-arm:
-    name: test (armv7m / QEMU Cortex-M3)
-    needs: build
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
-      - name: Install toolchain + QEMU
+      - name: Install QEMU toolchain
+        if: matrix.kind == 'qemu'
         run: |
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
           pip install pyelftools ar pyserial
 
+      - name: Build micropython unix/standard (matches natmod .mpy version)
+        if: matrix.kind == 'unix'
+        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard
+
+      - name: Build micropython unix/standard 32-bit
+        if: matrix.kind == 'unix32'
+        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard MICROPY_FORCE_32BIT=1
+
       - name: Build mpy-cross
+        if: matrix.kind == 'qemu'
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
+        if: matrix.kind == 'qemu'
         run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
 
       - uses: actions/download-artifact@v8
         with:
-          name: tiny-bclibc-armv7m
+          name: tiny-bclibc-${{ matrix.arch }}
           path: natmod/build/
 
       - name: Symlink module for testing
-        run: ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+        run: ln -sf ../natmod/build/${{ matrix.build_dir }}/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+
+      - name: Run tests
+        if: matrix.kind != 'qemu'
+        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
 
       - name: Run tests via QEMU
+        if: matrix.kind == 'qemu'
         run: |
           python3 natmod/ci/run_qemu.py \
             "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
