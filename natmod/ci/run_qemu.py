@@ -5,8 +5,7 @@ Usage:
   python3 ci/run_qemu.py <firmware.elf> <natmod-dir> [--machine MACHINE] [--qemu-extra ARGS]
 
 <natmod-dir> must contain:
-  _tiny_bclibc.mpy  — native module built for the target architecture
-  tiny_bclibc.mpy   — bytecode wrapper (compiled from src/tiny_bclibc.py)
+  tiny_bclibc.mpy   — merged native+wrapper module (see natmod/Makefile)
   test_bclibc.py    — test suite
 
 Examples:
@@ -37,14 +36,12 @@ def read_file(path: str) -> bytes:
         return f.read()
 
 
-def inject_modules(native_mpy: bytes, wrapper_mpy: bytes) -> bytes:
-    """Mount _tiny_bclibc.mpy (native) and tiny_bclibc.mpy (bytecode) from RAM buffers."""
-    native_repr = repr(native_mpy).encode()
-    wrapper_repr = repr(wrapper_mpy).encode()
+def inject_modules(module_mpy: bytes) -> bytes:
+    """Mount tiny_bclibc.mpy (merged native+wrapper) from a RAM buffer."""
+    module_repr = repr(module_mpy).encode()
     return (
         b"import sys, io, vfs\n"
-        b"__native = " + native_repr + b"\n"
-        b"__wrapper = " + wrapper_repr + b"\n"
+        b"__module = " + module_repr + b"\n"
         b"class _F(io.IOBase):\n"
         b"  def __init__(self,d): self.d=d; self.off=0\n"
         b"  def ioctl(self,r,a): return 0 if r==4 else -1\n"
@@ -55,15 +52,14 @@ def inject_modules(native_mpy: bytes, wrapper_mpy: bytes) -> bytes:
         b"  def mount(self,r,m): pass\n"
         b"  def chdir(self,p): pass\n"
         b"  def stat(self,p):\n"
-        b"    if p in ('/_tiny_bclibc.mpy','/tiny_bclibc.mpy'): return (0,)*10\n"
+        b"    if p == '/tiny_bclibc.mpy': return (0,)*10\n"
         b"    raise OSError(-2)\n"
         b"  def open(self,p,m):\n"
-        b"    return _F(__native if '_tiny_bclibc' in p else __wrapper)\n"
+        b"    return _F(__module)\n"
         b"vfs.mount(_FS(),'/__remote')\n"
         b"sys.path.insert(0,'/__remote')\n"
-        b"import _tiny_bclibc\n"
         b"import tiny_bclibc\n"
-        b"del __native,__wrapper\n"
+        b"del __module\n"
         b"import gc;gc.collect()\n"
     )
 
@@ -75,7 +71,7 @@ def main() -> None:
     ap.add_argument("firmware", help="Path to firmware.elf")
     ap.add_argument(
         "natmod_dir",
-        help="Directory with _tiny_bclibc.mpy / tiny_bclibc.mpy / test_bclibc.py",
+        help="Directory with tiny_bclibc.mpy / test_bclibc.py",
     )
     ap.add_argument(
         "--machine",
@@ -87,8 +83,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    native_data = read_file(os.path.join(args.natmod_dir, "_tiny_bclibc.mpy"))
-    wrapper_data = read_file(os.path.join(args.natmod_dir, "tiny_bclibc.mpy"))
+    module_data = read_file(os.path.join(args.natmod_dir, "tiny_bclibc.mpy"))
     test_src = read_file(os.path.join(args.natmod_dir, "test_bclibc.py"))
 
     extra = f" {args.qemu_extra}" if args.qemu_extra else ""
@@ -107,8 +102,8 @@ def main() -> None:
     pyb = Pyboard(f"execpty:{qemu_cmd}")
     pyb.enter_raw_repl()
 
-    print("[QEMU] Injecting _tiny_bclibc.mpy + tiny_bclibc.mpy ...", flush=True)
-    pyb.exec_(inject_modules(native_data, wrapper_data), timeout=30)
+    print("[QEMU] Injecting tiny_bclibc.mpy ...", flush=True)
+    pyb.exec_(inject_modules(module_data), timeout=30)
 
     print("[QEMU] Running test_bclibc.py ...", flush=True)
     output = pyb.exec_(test_src, timeout=120)

@@ -141,10 +141,8 @@ jobs:
           name: tiny-bclibc-x64
           path: natmod/build/
 
-      - name: Symlink modules for testing
-        run: |
-          ln -sf ../natmod/build/x64_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-          ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+      - name: Symlink module for testing
+        run: ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
       - name: Run tests
         run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
@@ -178,10 +176,8 @@ jobs:
           name: tiny-bclibc-x86
           path: natmod/build/
 
-      - name: Symlink modules for testing
-        run: |
-          ln -sf ../natmod/build/x86_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-          ln -sf ../natmod/build/x86_dp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+      - name: Symlink module for testing
+        run: ln -sf ../natmod/build/x86_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
       - name: Run tests
         run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
@@ -217,10 +213,8 @@ jobs:
           name: tiny-bclibc-armv7m
           path: natmod/build/
 
-      - name: Symlink modules for testing
-        run: |
-          ln -sf ../natmod/build/armv7m_sp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-          ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+      - name: Symlink module for testing
+        run: ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
       - name: Run tests via QEMU
         run: |

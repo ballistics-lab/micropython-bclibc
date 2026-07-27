@@ -137,7 +137,9 @@ make ARCH=rv32imc    dist   # ESP32-C3/C6 (RISC-V 32), single     → natmod/bui
 make ARCH=rv64imc    dist   # RISC-V 64, single                  → natmod/build/rv64imc_sp/
 ```
 
-Output per target: `natmod/build/<arch>_<sp|dp>/_tiny_bclibc.mpy` + `natmod/build/<arch>_<sp|dp>/tiny_bclibc.mpy`
+Output per target: a single `natmod/build/<arch>_<sp|dp>/tiny_bclibc.mpy` — the native part
+and `src/tiny_bclibc.py` are merged into one file (see `natmod/Makefile`'s `SRC`), so only
+one file needs to be copied to the device / uploaded as a release artifact.
 
 `bc.version()` returns `"1.1.3-sp"` or `"1.1.3-dp"`.
 
@@ -165,11 +167,10 @@ make -C "$MPY_DIR/ports/unix" VARIANT=standard
 MPY="$MPY_DIR/ports/unix/build-standard/micropython"
 
 # Build natmod (from natmod/)
-make ARCH=x64 dist   # → natmod/build/x64_dp/_tiny_bclibc.mpy  natmod/build/x64_dp/tiny_bclibc.mpy
+make ARCH=x64 dist   # → natmod/build/x64_dp/tiny_bclibc.mpy
 
-# Symlink .mpy files into tests/ so test_bclibc.py can import them
-ln -sf ../natmod/build/x64_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+# Symlink the .mpy into tests/ so test_bclibc.py can import it
+ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
 # Run tests (natmod)
 $MPY tests/test_bclibc.py
@@ -375,8 +376,7 @@ make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
 
 # Build natmod
 make -C natmod ARCH=armv7m MPY_DIR="$MPY_DIR" dist
-ln -sf ../natmod/build/armv7m_sp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
 # Run tests through the QEMU pty bridge
 python3 natmod/ci/run_qemu.py \
@@ -681,8 +681,8 @@ using `integrate_at()` + a range loop instead of storing the full trajectory.
 ### Test methodology
 
 The comparison runs the full trajectory integration twice — once with the float64 natmod
-(`build/x64_dp/_tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=double`) and once with the float32
-natmod (`build/x64_sp/_tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=single`) — and diffs the output
+(`build/x64_dp/tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=double`) and once with the float32
+natmod (`build/x64_sp/tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=single`) — and diffs the output
 row by row. `find_zero_angle` is also compared between the two builds.
 
 **Important:** `range_step_ft` in the `Request` is the *output sampling step* only.

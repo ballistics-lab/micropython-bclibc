@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### natmod now builds a single merged `tiny_bclibc.mpy` (was two files)
+
+`natmod/Makefile` now lists `src/tiny_bclibc.py` in `SRC` alongside the native `.c` sources,
+so `dynruntime.mk`'s own merge rule produces one `tiny_bclibc.mpy` per architecture instead
+of a separate `_tiny_bclibc.mpy` (native) + `tiny_bclibc.mpy` (bytecode wrapper) pair —
+matching the approach already used by [a7p's own natmod build](https://github.com/o-murphy/a7p).
+One file is simpler to deploy (`mip install` / copy to device / attach as a release asset).
+
+`src/tiny_bclibc.py` gained a `try: from _tiny_bclibc import ... / except ImportError:`
+fallback (mirroring a7p's `_a7p` pattern) to handle the merged build, where there's no
+separate `_tiny_bclibc` module to import — the native part's `mpy_init()` already left its
+functions and constants as bare globals of this same module. The usermod build (real,
+separately-compiled `_tiny_bclibc` module) is unaffected.
+
+CI (`natmod.yml`), `natmod/ci/run_qemu.py`, and `tests/precision_compare.py` updated to the
+single-file layout.
+
 #### Precision flag unified across all build systems
 
 The precision selection is now controlled by a **single** environment / make variable:

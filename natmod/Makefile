@@ -42,11 +42,10 @@ else
 _PREC_SUFFIX := _dp
 endif
 
-MOD         = _tiny_bclibc_$(ARCH)$(_PREC_SUFFIX)
+MOD         = tiny_bclibc_$(ARCH)$(_PREC_SUFFIX)
 BCLIBC_ROOT = ../bclibc
 SRC_DIR     = ../src
 BUILD       = build/$(ARCH)$(_PREC_SUFFIX)
-MPY_CROSS  ?= $(MPY_DIR)/mpy-cross/build/mpy-cross
 VERSION_H   = generated/bclibc_mp/version.h
 VERSION_IN  = ../version.h.in
 
@@ -54,10 +53,20 @@ VERSION_IN  = ../version.h.in
 # are found by filename only.  dynruntime.mk then computes the object as
 # $(BUILD)/tiny_bclibc_mp.o (arch-specific), not $(BUILD)/../src/tiny_bclibc_mp.o
 # (shared across all arches, which causes "incompatible arch" when x64 and x86
-# builds share the same object file).
+# builds share the same object file). Covers .py too, now that tiny_bclibc.py
+# is part of SRC (mpy-cross output is arch-specific bytecode, same reasoning).
 vpath %.c $(SRC_DIR)
+vpath %.py $(SRC_DIR)
 
-SRC = tiny_bclibc_mp.c
+# tiny_bclibc.py alongside the .c sources -- dynruntime.mk's own SRC_MPY/
+# --merge rule mpy-cross-compiles it and merges it with the native part into
+# one tiny_bclibc.mpy (see docs/develop/natmod.rst "Defining a native
+# module", and a7p's natmod/Makefile for the same pattern). tiny_bclibc.py's
+# own top-level code runs in the same globals namespace the native part
+# populates -- no `import _tiny_bclibc` finds anything on this path, which is
+# why tiny_bclibc.py's own try/except ImportError fallback captures the bare
+# globals mpy_init() left behind instead.
+SRC = tiny_bclibc_mp.c tiny_bclibc.py
 
 # ── Shared math-library sources ───────────────────────────────────────────────
 #
@@ -217,10 +226,8 @@ submodules:
 	git submodule update --init --recursive
 
 dist: all
-	$(Q)mv $(MOD).mpy $(BUILD)/_tiny_bclibc.mpy
-	$(ECHO) "  MPY   $(BUILD)/tiny_bclibc.mpy"
-	$(Q)$(MPY_CROSS) -march=$(ARCH) $(SRC_DIR)/tiny_bclibc.py -o $(BUILD)/tiny_bclibc.mpy
-	$(ECHO) "  →  $(BUILD)/_tiny_bclibc.mpy"
+	$(Q)mv $(MOD).mpy $(BUILD)/tiny_bclibc.mpy
+	$(Q)rm -f $(BUILD)/$(MOD).native.mpy
 	$(ECHO) "  →  $(BUILD)/tiny_bclibc.mpy"
 
 clean:
