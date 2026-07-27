@@ -79,7 +79,13 @@ jobs:
         # clone, where it's an empty submodule placeholder) -- running
         # `git submodule` against it would just fail ("not a git
         # repository").
-        run: make -C "$MPY_DIR/ports/unix" MICROPY_STANDALONE=1 deplibs
+        # BUILD must match the main build step's BUILD -- deplibs writes
+        # libffi.a under $(BUILD)/lib/libffi/out/lib/, and the main build
+        # looks for it there too; a mismatch is a real "ld: cannot find
+        # .../libffi.a" failure (confirmed by CI).
+        run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/aarch64"
+          make -C "$MPY_DIR/ports/unix" BUILD="$BUILD" MICROPY_STANDALONE=1 deplibs
 
       - name: Build usermod (aarch64, static)
         # BUILD is a local shell var, not a job/step env: -- a job-level
@@ -140,9 +146,13 @@ jobs:
       - name: Build libffi (deplibs)
         # Same reasoning as the aarch64 job's identical step: MPY_DIR is a
         # release tarball with lib/libffi already vendored, so no
-        # `submodules` step is needed (or possible) first.
+        # `submodules` step is needed (or possible) first. BUILD must match
+        # the main build step's BUILD (see that job's comment on the same
+        # step for why).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/armhf"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
             CROSS_COMPILE=arm-linux-gnueabi- \
             MICROPY_STANDALONE=1 deplibs
 
@@ -195,8 +205,12 @@ jobs:
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build libffi (deplibs)
+        # BUILD must match the main build step's BUILD (see the aarch64
+        # job's comment on the same step for why).
         run: |
+          BUILD="$GITHUB_WORKSPACE/usermod/build/mipsel"
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
             CROSS_COMPILE=mipsel-linux-gnu- \
             MICROPY_STANDALONE=1 deplibs
 
@@ -294,11 +308,23 @@ jobs:
         # BUILD is a local shell var, not a job env: -- see the aarch64
         # job's identical reasoning (leaks into the "Build mpy-cross" step
         # above otherwise, via py/mkenv.mk's BUILD ?= build).
+        #
+        # CFLAGS="-Wno-unused-but-set-global": ports/webassembly/Makefile
+        # hardcodes -Werror with no override hook, and MicroPython
+        # v1.28.0's own main.c (external_call_depth) trips a newer
+        # emsdk/clang's -Wunused-but-set-global (confirmed by a real CI
+        # failure) -- "latest" emsdk is a moving target against a source
+        # tree pinned to an old tag. Passing CFLAGS here works because it's
+        # a genuine -Wno-X (disables the diagnostic outright), not
+        # -Wno-error=X (which would need to appear *after* the Makefile's
+        # own -Werror to take effect, and command-line CFLAGS is appended
+        # to, not appended after, by the Makefile's own += lines).
         run: |
           BUILD="$GITHUB_WORKSPACE/usermod/build/wasm"
           source emsdk/emsdk_env.sh
           make -C "$MPY_DIR/ports/webassembly" \
             BUILD="$BUILD" \
+            CFLAGS="-Wno-unused-but-set-global" \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
             MP_BCLIBC_PRECISION=double

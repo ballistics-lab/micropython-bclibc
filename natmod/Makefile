@@ -183,9 +183,14 @@ endif
 _TINY_HEADERS := $(wildcard $(BCLIBC_ROOT)/tiny_bclibc/include/tiny_bclibc/*.h)
 $(SRC_O): $(_TINY_HEADERS)
 
-# ── RISC-V: add libgcc.a for soft-float builtins ─────────────────────────────
+# ── RISC-V + Xtensa: add libgcc.a for soft-float builtins ────────────────────
 # Must be after include so CROSS and CFLAGS_ARCH are set by dynruntime.mk.
-ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc))
+# Both use the fdlibm-from-source route above (no LINK_RUNTIME, which used
+# to pull libgcc in implicitly via the toolchain's own libm.a) -- without
+# this, xtensa fails with "undefined symbol: __lesf2" (a real CI failure):
+# fdlibm's single-precision comparisons lower to libgcc soft-float calls on
+# a target with no hardware FPU (xtensa-lx106/esp32 have none for this).
+ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc xtensa xtensawin))
 MPY_LD_FLAGS += -l$(realpath $(shell $(CROSS)gcc $(CFLAGS_ARCH) --print-libgcc-file-name))
 endif
 
