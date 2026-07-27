@@ -21,62 +21,35 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── Build all architectures + precisions in parallel ───────────────────────
+  # ── Build every arch, one precision each (derived from ARCH's own FPU in
+  # natmod/Makefile -- no more separate sp/dp matrix legs; see that file's
+  # header for why) ───────────────────────────────────────────────────────────
   build:
-    name: build (${{ matrix.arch }}${{ matrix.suffix }})
+    name: build (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # ── Single precision (float) — default for all MCU archs ─────────
-          - { arch: x64, suffix: _sp, target: x64sp }
-          - { arch: x86, suffix: _sp, target: x86sp, apt: gcc-multilib }
-          - {
-              arch: armv6m,
-              suffix: _sp,
-              target: rp2040,
-              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
-            }
-          - {
-              arch: armv7m,
-              suffix: _sp,
-              target: armv7m,
-              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
-            }
-          - {
-              arch: armv7emsp,
-              suffix: _sp,
-              target: rp2350,
-              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
-            }
-          - {
-              arch: armv7emdp,
-              suffix: _sp,
-              target: stm32h7,
-              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
-            }
+          - { arch: x64 }
+          - { arch: x86, apt: gcc-multilib }
+          - { arch: armv6m, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
+          - { arch: armv7m, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
+          - { arch: armv7emsp, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
+          - { arch: armv7emdp, apt: gcc-arm-none-eabi libnewlib-arm-none-eabi }
           - {
               arch: rv32imc,
-              suffix: _sp,
-              target: esp32c3,
               apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
             }
           - {
               arch: rv64imc,
-              suffix: _sp,
-              target: rv64,
               apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf,
             }
-          # ── Double precision — host (x64/x86) and armv7emdp (hw double FPU)
-          - { arch: x64, suffix: _dp, target: x64 }
-          - { arch: x86, suffix: _dp, target: x86, apt: gcc-multilib }
-          - {
-              arch: armv7emdp,
-              suffix: _dp,
-              target: stm32h7dp,
-              apt: gcc-arm-none-eabi libnewlib-arm-none-eabi,
-            }
+          # xtensa/xtensawin need a toolchain tarball / esp-idf, not a plain
+          # apt package -- handled by their own steps below, not the generic
+          # "Install cross-compiler" step every other entry uses.
+          - { arch: xtensa, toolchain: xtensa-lx106 }
+          - { arch: xtensawin, toolchain: esp-idf }
 
     steps:
       - uses: actions/checkout@v7
@@ -91,34 +64,52 @@ jobs:
         if: matrix.apt != ''
         run: sudo apt-get install -y ${{ matrix.apt }}
 
+      - name: Install xtensa (esp8266) toolchain
+        if: matrix.toolchain == 'xtensa-lx106'
+        # Same recipe as a7p's own natmod job (and MicroPython's own
+        # ci_esp8266_setup) -- there's no apt package for this target.
+        run: |
+          wget -q https://micropython.org/resources/xtensa-lx106-elf-standalone.tar.gz
+          tar xzf xtensa-lx106-elf-standalone.tar.gz
+          echo "$PWD/xtensa-lx106-elf/bin" >> "$GITHUB_PATH"
+
+      - name: Install esp-idf (xtensawin toolchain)
+        if: matrix.toolchain == 'esp-idf'
+        # Same recipe as a7p's own natmod job (and MicroPython's own
+        # ci_esp32_idf_setup).
+        env:
+          IDF_VER: v5.4
+        run: |
+          git clone --depth 1 --branch $IDF_VER https://github.com/espressif/esp-idf.git
+          git -C esp-idf submodule update --init --recursive --filter=tree:0
+          ./esp-idf/install.sh
+          source esp-idf/export.sh
+          echo "$PATH" | tr ':' '\n' | grep -i esp-idf >> "$GITHUB_PATH" || true
+
       - name: Install Python tools
         run: pip install pyelftools ar
 
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build ${{ matrix.target }}
+      - name: Build ${{ matrix.arch }}
         working-directory: natmod
-        run: make ${{ matrix.target }} MPY_DIR="$MPY_DIR"
+        run: |
+          if [ "${{ matrix.toolchain }}" = "esp-idf" ]; then source ../esp-idf/export.sh; fi
+          make ARCH=${{ matrix.arch }} MPY_DIR="$MPY_DIR" dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tiny-bclibc-${{ matrix.arch }}${{ matrix.suffix }}
-          path: natmod/build/${{ matrix.arch }}${{ matrix.suffix }}/
+          name: tiny-bclibc-${{ matrix.arch }}
+          path: natmod/build/${{ matrix.arch }}*/
           if-no-files-found: error
 
-  # ── Test on x64 host — both sp and dp variants ────────────────────────────
+  # ── Test on x64 host ───────────────────────────────────────────────────────
   test-x64:
-    name: test (x64${{ matrix.suffix }} / micropython)
+    name: test (x64 / micropython)
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { suffix: _sp, precision: single }
-          - { suffix: _dp, precision: double }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -136,29 +127,23 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tiny-bclibc-x64${{ matrix.suffix }}
-          path: natmod/build/x64${{ matrix.suffix }}/
+          name: tiny-bclibc-x64
+          path: natmod/build/
 
       - name: Symlink modules for testing
         run: |
-          ln -sf ../natmod/build/x64${{ matrix.suffix }}/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-          ln -sf ../natmod/build/x64${{ matrix.suffix }}/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+          ln -sf ../natmod/build/x64_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
+          ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
 
       - name: Run tests
         run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
 
-  # ── Test on x86 host — both sp and dp variants ────────────────────────────
+  # ── Test on x86 host ───────────────────────────────────────────────────────
   test-x86:
-    name: test (x86${{ matrix.suffix }} / micropython 32-bit)
+    name: test (x86 / micropython 32-bit)
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { suffix: _sp, precision: single }
-          - { suffix: _dp, precision: double }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -179,20 +164,20 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tiny-bclibc-x86${{ matrix.suffix }}
-          path: natmod/build/x86${{ matrix.suffix }}/
+          name: tiny-bclibc-x86
+          path: natmod/build/
 
       - name: Symlink modules for testing
         run: |
-          ln -sf ../natmod/build/x86${{ matrix.suffix }}/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-          ln -sf ../natmod/build/x86${{ matrix.suffix }}/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
+          ln -sf ../natmod/build/x86_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
+          ln -sf ../natmod/build/x86_dp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
 
       - name: Run tests
         run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
 
   # ── Test on emulated Cortex-M3 via QEMU (armv7m, single precision) ────────
   test-qemu-arm:
-    name: test (armv7m_sp / QEMU Cortex-M3)
+    name: test (armv7m / QEMU Cortex-M3)
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -218,8 +203,8 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tiny-bclibc-armv7m_sp
-          path: natmod/build/armv7m_sp/
+          name: tiny-bclibc-armv7m
+          path: natmod/build/
 
       - name: Symlink modules for testing
         run: |
@@ -238,68 +223,13 @@ jobs:
   # verifies that the armv6m .mpy is correctly generated; hardware testing on
   # actual RP2040 hardware is outside the scope of this CI.
 
+  # xtensa/xtensawin (esp8266/esp32): same situation as armv6m above -- the
+  # build job verifies the .mpy links cleanly, but there's no QEMU-equivalent
+  # execution test for these in this workflow (matches a7p's own natmod job,
+  # which also only build-checks these ARCHes, not runs them).
+
   # aarch64: dynruntime.mk in MicroPython ≤ v1.28 explicitly does not support
-  # aarch64 as a native module link target. Jobs removed until upstream adds
-  # support. Makefile targets (make aarch64 / make aarch64sp) are kept for
-  # future use once a compatible MicroPython version is available.
-
-  # ── Experimental: armhf native .mpy via Docker/QEMU ───────────────────────
-  # Probes what native arch the armhf unix port reports (sys.implementation._mpy)
-  # then attempts to build and run a matching .mpy inside the container.
-  # DISABLED: not completely tested: look at https://github.com/ballistics-lab/bclibc/actions/runs/28057833858/job/83064511114
-  # test-armhf:
-  #   name: test (armhf / QEMU Docker — experimental)
-  #   if: ${{ !cancelled() }}
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v7
-
-  #     - name: Fetch MicroPython ${{ env.MPY_TAG }}
-  #       run: |
-  #         VER="${MPY_TAG#v}"
-  #         wget -q "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz" -O mpy.tar.xz
-  #         tar xf mpy.tar.xz && rm mpy.tar.xz
-  #         echo "MPY_VER=$VER" >> $GITHUB_ENV
-
-  #     - name: Set up QEMU for linux/arm/v7
-  #       uses: docker/setup-qemu-action@v3
-  #       with:
-  #         platforms: linux/arm/v7
-
-  #     - name: Write build/test script
-  #       run: |
-  #         cat > /tmp/run_armhf.sh << 'SCRIPT'
-  #         set -e
-  #         apt-get update -q
-  #         apt-get install -y -q --no-install-recommends \
-  #           build-essential libffi-dev pkg-config python3 python3-pip \
-  #           gcc-arm-none-eabi libnewlib-arm-none-eabi
-  #         pip3 install -q --break-system-packages pyelftools ar
-  #         MPY_DIR="/work/micropython-${MPY_VER}"
-  #         make -C "$MPY_DIR/mpy-cross"
-  #         make -C "$MPY_DIR/ports/unix" VARIANT=standard
-  #         MPY="$MPY_DIR/ports/unix/build-standard/micropython"
-  #         ARCH_ID=$("$MPY" -c 'import sys; print(sys.implementation._mpy >> 10)')
-  #         ARCHS=(NONE x86 x64 armv6 armv6m armv7m armv7em armv7emsp armv7emdp xtensa xtensawin rv32imc rv64imc aarch64)
-  #         ARCH="${ARCHS[$ARCH_ID]:-UNKNOWN}"
-  #         echo "armhf MicroPython native arch: $ARCH (id=$ARCH_ID)"
-  #         if [ "$ARCH" = "NONE" ] || [ "$ARCH" = "UNKNOWN" ]; then
-  #           echo "No native module support on armhf" >&2; exit 1
-  #         fi
-  #         cd /work/natmod
-  #         make ARCH="$ARCH" PRECISION=single MPY_DIR="$MPY_DIR"
-  #         SUFF=sp
-  #         ln -sf "build/${ARCH}_${SUFF}/_tiny_bclibc.mpy" ../tests/_tiny_bclibc.mpy
-  #         ln -sf "build/${ARCH}_${SUFF}/tiny_bclibc.mpy"  ../tests/tiny_bclibc.mpy
-  #         "$MPY" ../tests/test_bclibc.py
-  #         SCRIPT
-  #         chmod +x /tmp/run_armhf.sh
-
-  #     - name: Build and test in armhf container
-  #       run: |
-  #         docker run --rm --platform linux/arm/v7 \
-  #           -v "$GITHUB_WORKSPACE:/work" \
-  #           -v "/tmp/run_armhf.sh:/run_armhf.sh" \
-  #           -e MPY_VER="${{ env.MPY_VER }}" \
-  #           arm32v7/debian:bookworm-slim \
-  #           bash /run_armhf.sh
+  # aarch64 as a native module link target. No job for it here until
+  # upstream adds support -- it's covered today via usermod.yml instead
+  # (usermod has no such ARCH restriction: it compiles straight into the
+  # port's own build, not through dynruntime.mk).

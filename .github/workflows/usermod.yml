@@ -1,5 +1,24 @@
 name: usermod
 
+# natmod already covers x64/x86 (host/dev) and rp2040 (armv6m, stock
+# firmware) -- see natmod.yml -- so this workflow only builds what natmod
+# categorically can't reach at all (aarch64/armhf/mipsel: no such
+# dynruntime.mk ARCH; wasm: no WASM ARCH), plus two genuine functional
+# execution tests natmod's own build-only coverage doesn't provide
+# (qemu-armv7m, rp2040-test-only).
+#
+# No wrapper Makefile for usermod (a7p doesn't have one for its own usermod
+# either -- see usermod/micropython.mk's own header comment) -- every build
+# is the direct `make -C $MPY_DIR/ports/... ...` sequence, inlined here,
+# same as a7p's own usermod job in that project's micropython.yml. Static
+# linking (MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static) for aarch64/armhf/
+# mipsel is a deliberate real-deployability requirement, not a CI nicety --
+# see micropython/micropython#17456.
+#
+# No Docker anywhere in this workflow: every toolchain here is a plain apt
+# package (or, for wasm, a plain emsdk checkout) installable directly on
+# ubuntu-latest.
+
 on:
   pull_request:
     paths:
@@ -21,79 +40,12 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── ARMhf: cross-compile inside Docker (Ubuntu 22.04) + test under qemu-arm ──
-  build-test-armhf:
-    name: build + test (armhf / qemu-arm)
-    runs-on: ubuntu-26.04-arm
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: 'true'
-          fetch-depth: 0
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
-      - name: Install QEMU
-        run: sudo apt-get install -y qemu-user
-
-      - name: Build armhf usermod (Docker)
-        working-directory: usermod
-        run: make armhf MPY_DIR="$MPY_DIR"
-
-      - name: Run tests
-        run: |
-          qemu-arm usermod/build/armhf_dp/micropython \
-            tests/test_bclibc.py
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiny-bclibc-usermod-armhf
-          path: usermod/build/armhf_dp/micropython
-          if-no-files-found: error
-
-  # ── MIPS LE: build inside Docker (Ubuntu 22.04) + test under qemu-mipsel ────
-  # mpy-cross, submodules, deplibs, and the main build all happen inside the
-  # container; output lands on the host via volume mount.
-  # git clone is used (not tarball) so Docker's `make submodules` has a real
-  # git repo and can run `git submodule update --init`.
-  build-test-mipsel:
-    name: build + test (mipsel / qemu-mipsel)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: 'true'
-          fetch-depth: 0
-
-      - uses: ./.github/actions/clone-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-          submodules: lib/libffi lib/mbedtls lib/micropython-lib lib/berkeley-db-1.xx
-
-      - name: Install QEMU user-mode emulation
-        run: sudo apt-get install -y qemu-user
-
-      - name: Build mipsel usermod (Docker, Ubuntu 22.04)
-        working-directory: usermod
-        run: make mipsel MPY_DIR="$MPY_DIR"
-
-      - name: Run tests
-        run: |
-          qemu-mipsel usermod/build/mipsel_dp/micropython \
-            tests/test_bclibc.py
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiny-bclibc-usermod-mipsel
-          path: usermod/build/mipsel_dp/micropython
-          if-no-files-found: error
-
-  # ── AArch64: native ubuntu-26.04-arm runner — build + test + artifact ───
+  # ── AArch64: native, statically linked ──────────────────────────────────────
   build-test-aarch64:
-    name: build + test (aarch64)
-    runs-on: ubuntu-26.04-arm
+    name: build + test (aarch64, static)
+    runs-on: ubuntu-24.04-arm
+    env:
+      BUILD: ${{ github.workspace }}/usermod/build/aarch64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -105,54 +57,56 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install build deps
-        run: sudo apt-get install -y libffi-dev pkg-config
+        # autoconf/libtool/libtool-bin/libltdl-dev are for
+        # MICROPY_STANDALONE=1's own autotools build of lib/libffi (its own
+        # ./autogen.sh rule handles the rest -- no manual libtoolize/
+        # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
+        # build our own static libffi.a instead of linking the system's.
+        run: sudo apt-get install -y autoconf libtool libtool-bin libltdl-dev pkg-config
 
       - name: Build mpy-cross
+        # Built explicitly first, before FROZEN_MANIFEST ever appears on a
+        # command line -- avoids py/mkenv.mk's auto-build rule for
+        # mpy-cross, which resets USER_C_MODULES= for that recursive make
+        # but not FROZEN_MANIFEST= (leaks through MAKEFLAGS otherwise).
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build usermod (native aarch64, double precision)
-        working-directory: usermod
-        run: make x64 MPY_DIR="$MPY_DIR"
+      - name: Build libffi (deplibs)
+        # MICROPY_STANDALONE=1 only makes libffi a DEPLIBS entry, not an
+        # actual prerequisite of the default build (`deplibs:
+        # $(DEPLIBS)` is its own separate Makefile target) -- must run as
+        # its own step before the main build. No `submodules` step needed
+        # first: MPY_DIR here is the official release tarball, which ships
+        # lib/libffi's full source already vendored in (unlike a plain git
+        # clone, where it's an empty submodule placeholder) -- running
+        # `git submodule` against it would just fail ("not a git
+        # repository").
+        run: make -C "$MPY_DIR/ports/unix" MICROPY_STANDALONE=1 deplibs
+
+      - name: Build usermod (aarch64, static)
+        run: |
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
+            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: |
-          usermod/build/x64_dp/micropython \
-            tests/test_bclibc.py
+        run: "$BUILD/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-aarch64
-          path: usermod/build/x64_dp/micropython
+          path: ${{ env.BUILD }}/micropython
           if-no-files-found: error
 
-  # ── armv7m_sp: QEMU Cortex-M3 firmware with usermod baked in ─────────────
-  #
-  # Builds ports/qemu BOARD=MPS2_AN385 with USER_C_MODULES + FROZEN_MANIFEST
-  # so that both _tiny_bclibc (C module) and tiny_bclibc.py (Python wrapper)
-  # are embedded in the firmware.  Tests run via usermod/ci/run_qemu.py which
-  # uses pyboard to execute test_bclibc.py over the QEMU UART — no .mpy files
-  # needed (unlike the natmod variant).
-  build-test-qemu-armv7m:
-    name: build + test (armv7m_sp / QEMU Cortex-M3)
-    runs-on: ubuntu-26.04-arm
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: 'true'
-          fetch-depth: 0
-
-      - uses: ./.github/actions/fetch-micropython
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
-
-      - name: Build + test (Docker)
-        working-directory: usermod
-        run: make qemu-armv7m MPY_DIR="$MPY_DIR"
-
-  # ── x64: native builds, test, artifact ───────────────────────────────────
-  build-test-x64:
-    name: build + test (x64)
+  # ── ARMhf: cross-compiled, statically linked, tested under qemu-user-static ─
+  build-test-armhf:
+    name: build + test (armhf, static)
     runs-on: ubuntu-latest
+    env:
+      BUILD: ${{ github.workspace }}/usermod/build/armhf
     steps:
       - uses: actions/checkout@v7
         with:
@@ -163,34 +117,107 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Install deps
-        run: sudo apt-get install -y libffi-dev
+      - name: Install packages
+        # No /usr/gnemul sysroot symlink needed -- the binary is fully
+        # static, so qemu-user-static's binfmt_misc handler runs it
+        # directly with no dynamic libraries to resolve at all.
+        run: |
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabi g++-arm-linux-gnueabi libltdl-dev \
+            autoconf libtool libtool-bin pkg-config
+          sudo apt-get install -y qemu-user-static
+          qemu-arm-static --version
 
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build x64 dp + sp
-        working-directory: usermod
+      - name: Build libffi (deplibs)
+        # Same reasoning as the aarch64 job's identical step: MPY_DIR is a
+        # release tarball with lib/libffi already vendored, so no
+        # `submodules` step is needed (or possible) first.
         run: |
-          make x64   MPY_DIR="$MPY_DIR"
-          make x64sp MPY_DIR="$MPY_DIR"
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            CROSS_COMPILE=arm-linux-gnueabi- \
+            MICROPY_STANDALONE=1 deplibs
 
-      - name: Test x64 dp + sp
+      - name: Build usermod (armhf, static)
         run: |
-          usermod/build/x64_dp/micropython tests/test_bclibc.py
-          usermod/build/x64_sp/micropython tests/test_bclibc.py
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
+            CROSS_COMPILE=arm-linux-gnueabi- \
+            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+
+      - name: Run tests
+        run: "$BUILD/micropython tests/test_bclibc.py"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tiny-bclibc-usermod-x64
-          path: |
-            usermod/build/x64_dp/micropython
-            usermod/build/x64_sp/micropython
+          name: tiny-bclibc-usermod-armhf
+          path: ${{ env.BUILD }}/micropython
           if-no-files-found: error
 
-  # ── x86: 32-bit standalone builds, test, artifact ────────────────────────
-  build-test-x86:
-    name: build + test (x86)
+  # ── MIPS LE: cross-compiled, statically linked, tested under qemu-user-static
+  build-test-mipsel:
+    name: build + test (mipsel, static)
+    runs-on: ubuntu-latest
+    env:
+      BUILD: ${{ github.workspace }}/usermod/build/mipsel
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: 'true'
+          fetch-depth: 0
+
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+
+      - name: Install packages
+        run: |
+          sudo apt-get install -y \
+            gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev \
+            autoconf libtool libtool-bin pkg-config
+          sudo apt-get install -y qemu-user-static
+          qemu-mipsel-static --version
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build libffi (deplibs)
+        run: |
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            CROSS_COMPILE=mipsel-linux-gnu- \
+            MICROPY_STANDALONE=1 deplibs
+
+      - name: Build usermod (mipsel, static)
+        run: |
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$BUILD" \
+            CROSS_COMPILE=mipsel-linux-gnu- \
+            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+
+      - name: Run tests
+        run: "$BUILD/micropython tests/test_bclibc.py"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-mipsel
+          path: ${{ env.BUILD }}/micropython
+          if-no-files-found: error
+
+  # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
+  # A genuine functional execution test (real firmware.elf, run under QEMU),
+  # not just a build-check -- what natmod's own armv7m ARCH coverage doesn't
+  # provide, so it stays regardless of natmod-first. No FPU on Cortex-M3,
+  # hence single precision.
+  build-test-qemu-armv7m:
+    name: build + test (armv7m / QEMU Cortex-M3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -202,29 +229,36 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Build x86 dp + sp
-        working-directory: usermod
+      - name: Install toolchain + QEMU
         run: |
-          make x86   MPY_DIR="$MPY_DIR"
-          make x86sp MPY_DIR="$MPY_DIR"
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
+          pip install pyserial
 
-      - name: Test x86 dp + sp
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
         run: |
-          usermod/build/x86_dp/micropython tests/test_bclibc.py
-          usermod/build/x86_sp/micropython tests/test_bclibc.py
+          make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=single
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tiny-bclibc-usermod-x86
-          path: |
-            usermod/build/x86_dp/micropython
-            usermod/build/x86_sp/micropython
-          if-no-files-found: error
+      - name: Run tests via QEMU
+        run: |
+          python3 usermod/ci/run_qemu.py \
+            "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
+            tests/
 
-  # ── WebAssembly: build dp + sp inside Docker (Emscripten), test via Node ─
+  # ── WebAssembly ───────────────────────────────────────────────────────────────
+  # JS/browser numbers are double-precision natively -- no size/speed
+  # benefit to single precision here, so double only.
   build-test-wasm:
     name: build + test (wasm)
     runs-on: ubuntu-latest
+    env:
+      BUILD: ${{ github.workspace }}/usermod/build/wasm
     steps:
       - uses: actions/checkout@v7
         with:
@@ -236,26 +270,45 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
           submodules: lib/micropython-lib
 
-      - name: Build + test wasm dp + sp (Docker)
-        working-directory: usermod
+      - name: Install emsdk
+        # Same recipe as natmod.yml/a7p's own webassembly job -- "latest"
+        # is what upstream itself pins to for this port.
         run: |
-          make wasm   MPY_DIR="$MPY_DIR"
-          make wasmsp MPY_DIR="$MPY_DIR"
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
+          (cd emsdk && ./emsdk install latest && ./emsdk activate latest)
+
+      - name: Build mpy-cross
+        run: make -C "$MPY_DIR/mpy-cross"
+
+      - name: Build + test (wasm)
+        run: |
+          source emsdk/emsdk_env.sh
+          make -C "$MPY_DIR/ports/webassembly" \
+            BUILD="$BUILD" \
+            USER_C_MODULES="$GITHUB_WORKSPACE" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double
+          node "$BUILD/micropython.mjs" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-wasm
           path: |
-            usermod/build/wasm_dp/micropython.mjs
-            usermod/build/wasm_dp/micropython.wasm
-            usermod/build/wasm_sp/micropython.mjs
-            usermod/build/wasm_sp/micropython.wasm
+            ${{ env.BUILD }}/micropython.mjs
+            ${{ env.BUILD }}/micropython.wasm
           if-no-files-found: error
 
-  # ── RP2040: build firmware (sp + dp), test sp via rp2040js, upload UF2 ──
-  build-rp2040:
+  # ── RP2040: frozen-tests firmware, tested via rp2040js emulator ─────────────
+  # A genuine functional execution test, distinct from the plain rp2040
+  # firmware build natmod's own armv6m coverage already makes redundant.
+  # CMake port -- USER_C_MODULES points at usermod/micropython.cmake
+  # directly, not the repo root (CMake's USER_C_MODULES takes a file, not a
+  # directory to glob).
+  build-test-rp2040:
     name: build + test (rp2040)
     runs-on: ubuntu-latest
+    env:
+      BUILD: ${{ github.workspace }}/usermod/build/rp2040_test
     steps:
       - uses: actions/checkout@v7
         with:
@@ -279,15 +332,13 @@ jobs:
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build RP2040 sp + dp
-        working-directory: usermod
+      - name: Build RP2040 test firmware (frozen tests, single precision)
         run: |
-          make rp2040   MPY_DIR="$MPY_DIR"
-          make rp2040dp MPY_DIR="$MPY_DIR"
-
-      - name: Build RP2040 sp test firmware (frozen tests, CI only)
-        working-directory: usermod
-        run: make rp2040test MPY_DIR="$MPY_DIR"
+          make -C "$MPY_DIR/ports/rp2" \
+            BUILD="$BUILD" \
+            BOARD=RPI_PICO \
+            USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest_test.py"
 
       - name: Get node
         uses: actions/setup-node@v7
@@ -295,25 +346,22 @@ jobs:
           node-version: "24.x"
 
       - name: Get and patch rp2040js emulator
-        working-directory: usermod
         run: |
           git clone https://github.com/wokwi/rp2040js
           cd rp2040js
           npm install
-          cp ../ci/micropython-run.ts demo/micropython-run.ts
+          cp ../usermod/ci/micropython-run.ts demo/micropython-run.ts
 
-      - name: Test rp2040_sp firmware via rp2040js emulator
-        working-directory: usermod/rp2040js
+      - name: Test firmware via rp2040js emulator
+        working-directory: rp2040js
         run: |
           npx tsx demo/micropython-run.ts \
-            --image ../build/rp2040_sp_test/firmware.uf2 \
+            --image "$BUILD/firmware.uf2" \
             --exec "import test_bclibc" \
             --timeout 120
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tiny-bclibc-usermod-rp2040
-          path: |
-            usermod/build/rp2040_sp/firmware.uf2
-            usermod/build/rp2040_dp/firmware.uf2
+          name: tiny-bclibc-usermod-rp2040-test
+          path: ${{ env.BUILD }}/firmware.uf2
           if-no-files-found: error

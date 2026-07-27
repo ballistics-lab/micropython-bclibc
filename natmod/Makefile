@@ -16,10 +16,21 @@ ARCH    ?= x64
 MPY_DIR ?= micropython
 
 # ── Precision ─────────────────────────────────────────────────────────────────
-# MP_BCLIBC_PRECISION=double → _dp suffix  (default on x64/x86)
-# MP_BCLIBC_PRECISION=single → _sp suffix  (default on MCU)
+# Derived from ARCH's actual FPU, not a separate knob you need to remember:
+# there's no point building (let alone shipping) a "double" variant for a
+# target with no double-precision FPU, or a "single" variant for one that
+# has one. Override with MP_BCLIBC_PRECISION= only if you specifically need
+# the other precision for your own build (e.g. testing) -- CI never does.
 #
-ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
+#   armv7emdp        → double (Cortex-M7, double-precision FPU -- the "dp" in
+#                       the ARCH name)
+#   x64/x86/aarch64   → double (host/dev target, no MCU FPU constraint)
+#   everything else   → single (armv6m/armv7m/armv7emsp/xtensa/xtensawin/
+#                       rv32imc/rv64imc: either no FPU at all, or single-
+#                       precision only)
+ifeq ($(ARCH),armv7emdp)
+MP_BCLIBC_PRECISION ?= double
+else ifeq ($(ARCH),$(filter $(ARCH),x64 x86 aarch64))
 MP_BCLIBC_PRECISION ?= double
 else
 MP_BCLIBC_PRECISION ?= single
@@ -183,56 +194,10 @@ $(VERSION_H): $(VERSION_IN)
 
 $(BUILD)/tiny_bclibc_mp.o: $(VERSION_H)
 
-# ── Convenience aliases ────────────────────────────────────────────────────────
-.PHONY: submodules x64 x64sp x86 x86sp aarch64 aarch64sp rp2040 rp2350 stm32f4 armv7m stm32h7 stm32h7dp esp32s3 esp32 esp32c3 esp32c6 rv64 dist clean
+.PHONY: submodules dist clean
 
 submodules:
 	git submodule update --init --recursive
-
-x64:
-	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=double dist
-
-x64sp:
-	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=single dist
-
-aarch64:
-	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=double dist
-
-aarch64sp:
-	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=single dist
-
-x86:
-	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=double dist
-
-x86sp:
-	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=single dist
-
-rp2040:
-	$(MAKE) ARCH=armv6m MP_BCLIBC_PRECISION=single dist
-
-armv7m:
-	$(MAKE) ARCH=armv7m MP_BCLIBC_PRECISION=single dist
-
-rp2350 stm32f4:
-	$(MAKE) ARCH=armv7emsp MP_BCLIBC_PRECISION=single dist
-
-stm32h7:
-	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=single dist
-
-stm32h7dp:
-	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=double dist
-
-esp32s3:
-	$(MAKE) ARCH=xtensawin MP_BCLIBC_PRECISION=single dist
-
-esp32:
-	$(MAKE) ARCH=xtensa MP_BCLIBC_PRECISION=single dist
-
-esp32c3 esp32c6:
-	$(MAKE) ARCH=rv32imc MP_BCLIBC_PRECISION=single dist
-
-rv64:
-	$(MAKE) ARCH=rv64imc MP_BCLIBC_PRECISION=single dist
 
 dist: all
 	$(Q)mv $(MOD).mpy $(BUILD)/_tiny_bclibc.mpy
