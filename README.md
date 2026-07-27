@@ -295,15 +295,22 @@ python3 /path/to/micropython-bclibc/usermod/ci/run_qemu.py \
 
 ### WebAssembly
 
-JS/browser numbers are double-precision natively, so double is the sensible choice here:
+JS/browser numbers are double-precision natively, so double is the sensible choice here.
+
+`VARIANT=pyscript`, not the default `standard` variant: `standard` (`-s ASYNCIFY`)
+is broken against modern emsdk releases -- see
+[micropython/micropython#19380](https://github.com/micropython/micropython/issues/19380).
+`pyscript` doesn't use ASYNCIFY and isn't affected. Our own `FROZEN_MANIFEST`
+below overrides `pyscript`'s own (large, micropython-lib-heavy) default manifest,
+so nothing extra gets pulled in from it:
 
 ```bash
-make -C /path/to/micropython-1.28.0/ports/webassembly \
+make -C /path/to/micropython-1.28.0/ports/webassembly VARIANT=pyscript \
     USER_C_MODULES=/path/to/micropython-bclibc \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
     MP_BCLIBC_PRECISION=double
 
-node build/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
+node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
 ### natmod vs usermod comparison
