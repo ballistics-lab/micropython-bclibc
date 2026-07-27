@@ -32,24 +32,20 @@ and all flag / index constants.
 │   └── math_shim.c             # math shim for x64/x86 natmod builds
 │
 ├── natmod/                     # Native module (.mpy) build
-│   ├── Makefile                # make x64 / armv6m / esp32c3 / …
+│   ├── Makefile                # make ARCH=<x64|armv6m|xtensawin|…> dist
 │   ├── ci/run_qemu.py          # QEMU UART bridge for natmod CI tests
 │   ├── examples/               # Usage examples
 │   └── patches/                # MicroPython patches (if any)
 │
 ├── usermod/                    # Usermod (baked-into-firmware) build
-│   ├── Makefile                # make x64 / armhf / mipsel / rp2040 / …
-│   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES
-│   ├── micropython.cmake       # CMake entry point for RP2040 / pico-sdk
+│   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES (Make ports)
+│   ├── micropython.cmake       # Picked up by CMake via USER_C_MODULES (RP2040 / pico-sdk)
 │   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release)
 │   ├── manifest_test.py        # CI-only: manifest.py + test_bclibc.py (rp2040test)
-│   ├── Dockerfile.x86          # Ubuntu 22.04 + gcc-multilib (x86 builds)
-│   ├── Dockerfile.armhf        # Ubuntu 22.04 + gcc-arm-linux-gnueabihf
-│   ├── Dockerfile.armv7m       # Ubuntu 22.04 + gcc-arm-none-eabi + qemu-system-arm
-│   ├── Dockerfile.mipsel       # Ubuntu 22.04 + gcc-mipsel-linux-gnu
-│   ├── Dockerfile.webassembly  # emscripten/emsdk:latest (WebAssembly builds)
 │   ├── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │   └── ci/micropython-run.ts   # rp2040js emulator test runner
+│                               # No usermod/Makefile — build directly against the
+│                               # port's own Makefile/CMakeLists, same as a7p's usermod.
 │
 ├── ffimod/                     # FFI-based access (any unix arch)
 │   ├── _tiny_bclibc.py         # MicroPython ffi wrapper for libtiny_bclibc.so
@@ -123,26 +119,22 @@ sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi \
 
 ## Build
 
-All commands are run from `natmod/` unless noted otherwise.
-
-Precision suffix: `_dp` = double, `_sp` = single.
-Default precision: **double** for x64/x86 host, **single** for all MCU targets.
+All commands are run from `natmod/`. There's a single `make ARCH=<value> dist`
+entry point — no per-board alias targets to keep in sync — and no `sp`/`dp` flag to pick:
+precision is derived automatically from what FPU that `ARCH` actually has.
 
 ```bash
-make x64        # x64 double           → natmod/build/x64_dp/
-make x64sp      # x64 single           → natmod/build/x64_sp/
-make x86        # x86 double           → natmod/build/x86_dp/
-make x86sp      # x86 single           → natmod/build/x86_sp/
-make rp2040     # armv6m    single     → natmod/build/armv6m_sp/    — Raspberry Pi Pico
-make armv7m     # armv7m    single     → natmod/build/armv7m_sp/    — Cortex-M3
-make rp2350     # armv7emsp single     → natmod/build/armv7emsp_sp/ — RP2350
-make stm32f4    # armv7emsp single     → natmod/build/armv7emsp_sp/ — STM32F4
-make stm32h7    # armv7emdp single     → natmod/build/armv7emdp_sp/ — STM32H7
-make stm32h7dp  # armv7emdp double     → natmod/build/armv7emdp_dp/ — STM32H7 (DP FPU)
-make esp32s3    # xtensawin single     → natmod/build/xtensawin_sp/ — ESP32-S3
-make esp32      # xtensa    single     → natmod/build/xtensa_sp/    — ESP32
-make esp32c3    # rv32imc   single     → natmod/build/rv32imc_sp/   — ESP32-C3 / C6
-make rv64       # rv64imc   single     → natmod/build/rv64imc_sp/   — RISC-V 64
+make ARCH=x64        dist   # x64, double        (host FPU)      → natmod/build/x64_dp/
+make ARCH=x86        dist   # x86, double        (host FPU)      → natmod/build/x86_dp/
+make ARCH=aarch64    dist   # aarch64, double    (host FPU)      → natmod/build/aarch64_dp/
+make ARCH=armv6m     dist   # Cortex-M0+, single (no FPU)        → natmod/build/armv6m_sp/  — Raspberry Pi Pico
+make ARCH=armv7m     dist   # Cortex-M3, single  (no FPU)        → natmod/build/armv7m_sp/  — generic Cortex-M3
+make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp_sp/ — RP2350, STM32F4
+make ARCH=armv7emdp  dist   # Cortex-M7, double-FPU              → natmod/build/armv7emdp_dp/ — STM32H7
+make ARCH=xtensawin  dist   # ESP32/ESP32-S3, single             → natmod/build/xtensawin_sp/
+make ARCH=xtensa     dist   # ESP8266, single                    → natmod/build/xtensa_sp/
+make ARCH=rv32imc    dist   # ESP32-C3/C6 (RISC-V 32), single     → natmod/build/rv32imc_sp/
+make ARCH=rv64imc    dist   # RISC-V 64, single                  → natmod/build/rv64imc_sp/
 ```
 
 Output per target: `natmod/build/<arch>_<sp|dp>/_tiny_bclibc.mpy` + `natmod/build/<arch>_<sp|dp>/tiny_bclibc.mpy`
@@ -153,12 +145,16 @@ Output per target: `natmod/build/<arch>_<sp|dp>/_tiny_bclibc.mpy` + `natmod/buil
 make clean      # rm -rf natmod/build/ natmod/generated/
 ```
 
-### Custom MPY_DIR or precision
+### Custom MPY_DIR or precision override
+
+If you specifically need the *other* precision than what an `ARCH` gets by default
+(e.g. a single-precision build for host testing), pass `MP_BCLIBC_PRECISION=` directly —
+CI never does this, it's a build-it-yourself option:
 
 ```bash
 make ARCH=armv6m MPY_DIR=/path/to/micropython-1.28.0
-make ARCH=armv7emdp MP_BCLIBC_PRECISION=double   # double on Cortex-M7  → build/armv7emdp_dp/
-make ARCH=x64 MP_BCLIBC_PRECISION=single         # single on host       → build/x64_sp/
+make ARCH=armv7emdp MP_BCLIBC_PRECISION=single   # single on a double-FPU chip → build/armv7emdp_sp/
+make ARCH=x64 MP_BCLIBC_PRECISION=single         # single on host              → build/x64_sp/
 ```
 
 ## Test (x64 / x86 host)
@@ -169,7 +165,7 @@ make -C "$MPY_DIR/ports/unix" VARIANT=standard
 MPY="$MPY_DIR/ports/unix/build-standard/micropython"
 
 # Build natmod (from natmod/)
-make x64        # → natmod/build/x64_dp/_tiny_bclibc.mpy  natmod/build/x64_dp/tiny_bclibc.mpy
+make ARCH=x64 dist   # → natmod/build/x64_dp/_tiny_bclibc.mpy  natmod/build/x64_dp/tiny_bclibc.mpy
 
 # Symlink .mpy files into tests/ so test_bclibc.py can import them
 ln -sf ../natmod/build/x64_dp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
@@ -193,72 +189,60 @@ Expected output ends with `=== done ===` and all lines read `PASS`.
 `USER_C_MODULES`. No `.mpy` file needs to be copied to the device — the module is always
 available as a built-in. Use this approach when:
 
-- you own the firmware build (RP2040, ESP32, custom STM32 …)
-- you want zero-overhead import (no filesystem read, no bytecode loading)
-- you need a fully static / standalone unix binary for deployment or CI
+- natmod can't reach your target at all (aarch64, armhf, mipsel, wasm — no such
+  `dynruntime.mk` ARCH); for everything else (x64, x86, RP2040 on stock firmware, …)
+  prefer natmod above — it needs no firmware rebuild
+- you need a fully static / standalone unix binary for deployment (aarch64/armhf/mipsel)
+- you need a genuine build+run test under an emulator (QEMU Cortex-M3, rp2040js)
 
-### Build targets
+There is **no `usermod/Makefile`** — same as a7p's own usermod integration. You build
+directly against the target port's own Makefile/CMakeLists, pointing `USER_C_MODULES` at
+this repo (for Make-based ports) or at `usermod/micropython.cmake` (for CMake-based
+ports like RP2040). `usermod/micropython.mk` / `usermod/micropython.cmake` are the entire
+"how to build with bclibc" story; there's nothing else to configure.
 
-All commands are run from `usermod/`.
+Precision is *not* a separate build variant here: `usermod/micropython.mk` defaults to
+single precision, `usermod/micropython.cmake` too — pass `MP_BCLIBC_PRECISION=double` on
+the port's own build command line if your target has a double-precision FPU (or is a
+general-purpose Linux/JS target, which always gets it in CI — see below).
+
+### AArch64 / ARMhf / MIPS LE (static unix binary)
+
+`MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static"` is required for real deployability to a
+minimal target Linux system that can't be assumed to have a matching `ld.so`/libc — not
+just a CI nicety (see [micropython/micropython#17456](https://github.com/micropython/micropython/pull/17456)).
+`MICROPY_STANDALONE=1` only adds `lib/libffi` to `DEPLIBS`; `deplibs` is its own Makefile
+target and must be run as a separate step before the main build.
 
 ```bash
-make x64          # x64 double (default)
-make x64sp        # x64 single
-make x86          # x86 double           [Docker — no host toolchain needed]
-make x86sp        # x86 single           [Docker]
-make aarch64      # AArch64 double  (cross: aarch64-linux-gnu-, static)
-make aarch64sp    # AArch64 single
-make armhf        # ARMv7hf double       [Docker — no host toolchain needed]
-make armhfsp      # ARMv7hf single       [Docker]
-make mipsel       # MIPS LE double       [Docker]
-make mipselsp     # MIPS LE single       [Docker]
-make wasm         # WebAssembly double   [Docker] → build/wasm_dp/micropython.{mjs,wasm}
-make wasmsp       # WebAssembly single   [Docker] → build/wasm_sp/micropython.{mjs,wasm}
-make qemu-armv7m  # Cortex-M3 build + test [Docker]
-make rp2040       # RP2040 single (cmake, pico-sdk) → build/rp2040_sp/firmware.uf2
-make rp2040dp     # RP2040 double                  → build/rp2040_dp/firmware.uf2
+cd /path/to/micropython-1.28.0
 
-# Precision override:
-make rp2040 MP_BCLIBC_PRECISION=single
-make rp2040 MP_BCLIBC_PRECISION=double
-make x64 MP_BCLIBC_PRECISION=single
+# 1. build lib/libffi as a static .a (needs autoconf/libtool/libtool-bin/libltdl-dev
+#    installed — no manual libtoolize/autoreconf, the port's own ./autogen.sh handles it)
+make -C ports/unix MICROPY_STANDALONE=1 deplibs
+
+# 2. build, with this repo's usermod pointed at via USER_C_MODULES
+make -C ports/unix VARIANT=standard \
+    MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
+    MP_BCLIBC_PRECISION=double
+
+build-standard/micropython /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
-Output for unix targets: `usermod/build/<target>/micropython`
-Output for rp2040: `usermod/build/rp2040_{sp,dp}/firmware.uf2`
+Cross-compiling (armhf/mipsel): add `CROSS_COMPILE=arm-linux-gnueabi-` or
+`CROSS_COMPILE=mipsel-linux-gnu-` to both commands above. The resulting static binary
+runs directly under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed —
+there's no dynamic linking left to resolve.
 
-`MP_BCLIBC_PRECISION=single|double` for all ports (unix, cmake, Docker).
-
-### Prerequisites
-
-```bash
-# x64 / x64sp — host gcc only (already installed)
-
-# aarch64 / aarch64sp — cross-compiler on host
-sudo apt-get install gcc-aarch64-linux-gnu
-
-# x86, armhf, mipsel, wasm, qemu-armv7m — Docker only, no host toolchain needed:
-#   Docker images are built automatically on first run from usermod/Dockerfile.*
-
-# rp2040 / rp2040dp — bare-metal ARM toolchain
-sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi
-```
-
-`MPY_DIR` must be set explicitly or default to `micropython` (local symlink at repo root).
-
-### Test (unix host)
+### RP2040 (CMake / pico-sdk)
 
 ```bash
-cd usermod
-make x64 MPY_DIR=/path/to/micropython-1.28.0
-build/x64_dp/micropython tests/test_bclibc.py
-```
-
-### Test (RP2040 — hardware)
-
-```bash
-make rp2040 MPY_DIR=/path/to/micropython-1.28.0
-# flash build/rp2040_sp/firmware.uf2 to the board, then from the REPL:
+make -C /path/to/micropython-1.28.0/ports/rp2 BOARD=RPI_PICO \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+# flash build-RPI_PICO/firmware.uf2 to the board, then from the REPL:
 # >>> import tiny_bclibc; tiny_bclibc.version()
 # '1.1.3-sp'
 ```
@@ -272,49 +256,54 @@ vfs.VfsLfs2.mkfs(bdev)
 vfs.mount(bdev, '/')
 ```
 
-### Test (RP2040 — rp2040js emulator)
+### RP2040 (rp2040js emulator, no board needed)
 
 Runs `test_bclibc.py` on the firmware in the
-[wokwi/rp2040js](https://github.com/wokwi/rp2040js) JavaScript emulator — no board
-needed.  The test suite is baked into a separate `rp2040test` firmware so that release
-builds remain clean.
+[wokwi/rp2040js](https://github.com/wokwi/rp2040js) JavaScript emulator. Uses
+`manifest_test.py` (manifest.py + test_bclibc.py) instead of the release manifest, so
+release builds stay clean of test code:
 
 ```bash
 # Prerequisites: Node.js ≥ 18, cmake, gcc-arm-none-eabi
-cd usermod
-make rp2040test MPY_DIR=/path/to/micropython-1.28.0
+make -C /path/to/micropython-1.28.0/ports/rp2 BOARD=RPI_PICO \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest_test.py
+
 git clone https://github.com/wokwi/rp2040js && cd rp2040js && npm install
-cp ../ci/micropython-run.ts demo/micropython-run.ts
+cp /path/to/micropython-bclibc/usermod/ci/micropython-run.ts demo/micropython-run.ts
 npx tsx demo/micropython-run.ts \
-    --image ../build/rp2040_sp_test/firmware.uf2 \
+    --image /path/to/micropython-1.28.0/ports/rp2/build-RPI_PICO/firmware.uf2 \
     --exec "import test_bclibc" \
     --timeout 120
 ```
 
-### Test (QEMU Cortex-M3 / armv7m_sp)
+### QEMU Cortex-M3 (armv7m, build + run test)
 
-Runs entirely inside Docker — no host toolchain needed:
+No FPU on Cortex-M3, so single precision (the port's own default — no override needed):
 
 ```bash
-cd usermod
-make qemu-armv7m MPY_DIR=/path/to/micropython-1.28.0
+sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
+
+make -C /path/to/micropython-1.28.0/ports/qemu BOARD=MPS2_AN385 \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+
+python3 /path/to/micropython-bclibc/usermod/ci/run_qemu.py \
+    /path/to/micropython-1.28.0/ports/qemu/build-MPS2_AN385/firmware.elf \
+    /path/to/micropython-bclibc/tests/
 ```
 
-The `qemu-armv7m` target builds the Docker image on first run, then inside the container:
-mpy-cross → version header → MPS2_AN385 firmware → `ci/run_qemu.py` test.
+### WebAssembly
 
-### Test (armhf / qemu-arm)
-
-```bash
-cd usermod
-make armhf MPY_DIR=/path/to/micropython-1.28.0
-qemu-arm build/armhf_dp/micropython ../tests/test_bclibc.py
-```
-
-The build runs inside Docker (`Dockerfile.armhf`). Only `qemu-arm` is needed on the host:
+JS/browser numbers are double-precision natively, so double is the sensible choice here:
 
 ```bash
-sudo apt-get install qemu-user
+make -C /path/to/micropython-1.28.0/ports/webassembly \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
+    MP_BCLIBC_PRECISION=double
+
+node build/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
 ### natmod vs usermod comparison
@@ -378,7 +367,7 @@ make -C "$MPY_DIR/mpy-cross"
 make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
 
 # Build natmod
-make armv7m
+make -C natmod ARCH=armv7m MPY_DIR="$MPY_DIR" dist
 ln -sf ../natmod/build/armv7m_sp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
 ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
 
@@ -388,30 +377,11 @@ python3 natmod/ci/run_qemu.py \
     tests/
 ```
 
-## Test (QEMU — Cortex-M0 / armv6m)
-
-Uses MicroPython's `MICROBIT` QEMU board (nRF51 SOC, `cortex-m0`).
-
-```bash
-sudo apt-get install qemu-system-arm
-pip install pyserial
-
-# Build MicroPython cross-compiler and QEMU firmware (one-time)
-make -C "$MPY_DIR/mpy-cross"
-make -C "$MPY_DIR/ports/qemu" BOARD=MICROBIT
-
-# Build natmod
-make rp2040
-ln -sf ../natmod/build/armv6m_sp/_tiny_bclibc.mpy tests/_tiny_bclibc.mpy
-ln -sf ../natmod/build/armv6m_sp/tiny_bclibc.mpy  tests/tiny_bclibc.mpy
-
-# Run tests through the QEMU pty bridge
-python3 natmod/ci/run_qemu.py \
-    "$MPY_DIR/ports/qemu/build-MICROBIT/firmware.elf" \
-    tests/ \
-    --machine microbit \
-    --qemu-extra "-global nrf51-soc.flash-size=1048576 -global nrf51-soc.sram-size=262144"
-```
+Cortex-M0/armv6m (RP2040) has no QEMU runtime test: MicroPython's `MICROBIT` QEMU board
+firmware does not support loading native `.mpy` modules on Cortex-M0, and no other QEMU
+ARM board emulates armv6m native modules. The `natmod` CI job still build-checks
+`ARCH=armv6m` (link-only, not run); real hardware testing on RP2040 is outside the scope
+of this repo's CI.
 
 ## Module API
 
@@ -743,8 +713,8 @@ variation). Float32 is sufficient for all supported MCU targets.
 
 ```bash
 # Build both precision variants (from natmod/)
-make x64     # → natmod/build/x64_dp/  (float64, default)
-make x64sp   # → natmod/build/x64_sp/  (float32)
+make ARCH=x64 dist                            # → natmod/build/x64_dp/  (float64, default)
+make ARCH=x64 MP_BCLIBC_PRECISION=single dist  # → natmod/build/x64_sp/  (float32, override)
 
 # Run comparison (from /, requires CPython 3.10+)
 python3 tests/precision_compare.py
