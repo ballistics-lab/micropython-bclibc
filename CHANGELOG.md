@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-28
+
 #### natmod now builds a single merged `tiny_bclibc.mpy` (was two files)
 
 `natmod/Makefile` now lists `src/tiny_bclibc.py` in `SRC` alongside the native `.c` sources,
@@ -42,6 +44,16 @@ uniform across the entire project.
 
 ### Fixed
 
+#### `natmod/Makefile` — `dist` left build junk behind instead of a single `tiny_bclibc.mpy`
+
+`dist`'s cleanup step tried to remove `$(BUILD)/$(MOD).native.mpy` — a filename
+`dynruntime.mk` never actually produces. The real intermediate native-only artifact is
+`$(BUILD)/$(MOD).mpy`, so `rm -f` silently removed nothing, and every build dir kept its
+`.o` files, `.config.h`, and that raw native `.mpy` sitting alongside the real merged
+`tiny_bclibc.mpy` output. `dist` now removes the correct file plus `$(SRC_O)`/`$(CONFIG_H)`
+(the actual `dynruntime.mk` variables, not hardcoded names) — `build/<arch>_<precision>/`
+now contains exactly the one file it's meant to.
+
 #### `src/tiny_bclibc_mp.c` — `-Wdouble-promotion` in wasm_sp (Emscripten/Clang)
 
 Emscripten adds `-Wdouble-promotion` to the compiler flags *after* `CFLAGS_USERMOD`, so
@@ -71,6 +83,29 @@ startup (`cp -r /mpy /mpy_build`) and running all in-container commands against
 mipsel, mipselsp, wasm, wasmsp, qemu-armv7m).
 
 ### Added
+
+#### New `release.yml` workflow — automated GitHub Releases for natmod
+
+Pushing a `v*` tag now builds every natmod arch (by calling `natmod.yml` as a reusable
+workflow via its new `workflow_call` trigger, instead of duplicating the 10-arch matrix)
+and publishes a GitHub Release with:
+
+- One `tiny_bclibc_<arch>.native.mpy` asset per architecture.
+- A `package.json` that `mip`/`mpremote mip install` can install directly, using the
+  optional per-entry native-code compatibility tag schema proposed upstream
+  ([micropython/micropython#19532](https://github.com/micropython/micropython/pull/19532),
+  [micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144)):
+  `["tiny_bclibc.mpy", "<asset url>", <tag>]` per arch, so a given board only pulls the
+  variant that matches it.
+
+`tools/build_release_assets.py` reads each built `.mpy`'s own on-disk header (version,
+sub-version, arch, and — if present — the RISC-V extension-flags vuint) to compute that
+tag directly, mirroring the exact validation `mp_raw_code_load()` does in
+`py/persistentcode.c` — no dependency on build-directory naming, and no running
+MicroPython interpreter needed. Standalone script, stdlib only.
+
+The assembled assets + `package.json` are also uploaded as a `tiny-bclibc-release-<tag>`
+workflow artifact, independent of whether the GitHub Release itself gets created.
 
 #### `usermod/` — RP2040 emulator testing via rp2040js
 
@@ -338,5 +373,6 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/ballistics-lab/bclibc/compare/v1.1.2...v1.1.3

@@ -147,6 +147,26 @@ one file needs to be copied to the device / uploaded as a release artifact.
 make clean      # rm -rf natmod/build/ natmod/generated/
 ```
 
+### Install a released build via `mip`
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds every arch above
+(by calling `natmod.yml` as a reusable workflow) and publishes a GitHub Release with one
+`tiny_bclibc_<arch>.native.mpy` asset per architecture, plus a `package.json`
+(see `tools/build_release_assets.py`). Each board picks the matching variant on its own,
+via the optional per-entry native-code compatibility tag schema proposed upstream
+([micropython/micropython#19532](https://github.com/micropython/micropython/pull/19532),
+[micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144)):
+
+```bash
+mpremote mip install https://github.com/o-murphy/micropython-bclibc/releases/download/vX.Y.Z/package.json
+```
+
+```python
+# or on-device:
+import mip
+mip.install("https://github.com/o-murphy/micropython-bclibc/releases/download/vX.Y.Z/package.json")
+```
+
 ### Custom MPY_DIR or precision override
 
 If you specifically need the *other* precision than what an `ARCH` gets by default
