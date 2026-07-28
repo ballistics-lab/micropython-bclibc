@@ -227,7 +227,7 @@ submodules:
 
 dist: all
 	$(Q)mv $(MOD).mpy $(BUILD)/tiny_bclibc.mpy
-	$(Q)rm -f $(BUILD)/$(MOD).native.mpy
+	$(Q)rm -f $(BUILD)/$(MOD).mpy $(SRC_O) $(CONFIG_H)
 	$(ECHO) "  →  $(BUILD)/tiny_bclibc.mpy"
 
 clean:
