@@ -70,10 +70,15 @@ target_compile_definitions(usermod_tiny_bclibc INTERFACE
 )
 
 # ── Precision ──────────────────────────────────────────────────────────────────
-# Використовуємо MP_BCLIBC_PRECISION (той самий флаг, що в Makefile)
-#   MP_BCLIBC_PRECISION=single → вмикаємо TINY_BCLIBC_SINGLE_PRECISION
-#   MP_BCLIBC_PRECISION=double → нічого не додаємо (код використовує double за замовчуванням)
-if(MP_BCLIBC_PRECISION STREQUAL "single")
+# Same MP_BCLIBC_PRECISION flag as usermod/micropython.mk (Make-based ports)
+# -- and now the same default: single, not double. This file is used by the
+# CMake-based ports (rp2, esp32, ...), which in practice always means a real
+# MCU -- most have no double-precision FPU at all (RP2040/RP2350 included),
+# so single is the sensible out-of-the-box default, letting a casual user
+# just point USER_C_MODULES at this file with no extra flags. Pass
+# -DMP_BCLIBC_PRECISION=double explicitly if your board's FPU actually
+# supports it and you want the extra precision.
+if(NOT MP_BCLIBC_PRECISION STREQUAL "double")
     target_compile_definitions(usermod_tiny_bclibc INTERFACE
         TINY_BCLIBC_SINGLE_PRECISION
         TINY_BCLIBC_FAST_ZERO_FIND

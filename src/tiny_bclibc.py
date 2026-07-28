@@ -15,7 +15,140 @@ Usage:
 import uctypes
 from micropython import const
 from collections import namedtuple as _namedtuple
-import _tiny_bclibc as _m
+
+try:
+    from _tiny_bclibc import (
+        # Trajectory filter flags
+        TRAJ_FLAG_NONE,
+        TRAJ_FLAG_RANGE,
+        TRAJ_FLAG_ZERO,
+        TRAJ_FLAG_ZERO_UP,
+        TRAJ_FLAG_ZERO_DOWN,
+        TRAJ_FLAG_MACH,
+        TRAJ_FLAG_APEX,
+        TRAJ_FLAG_MRT,
+        TRAJ_FLAG_ALL,
+        # Trajectory column indices
+        T_TIME,
+        T_DISTANCE,
+        T_VELOCITY,
+        T_MACH,
+        T_HEIGHT,
+        T_SLANT_HEIGHT,
+        T_DROP_ANGLE,
+        T_WINDAGE,
+        T_WINDAGE_ANGLE,
+        T_SLANT_DISTANCE,
+        T_ANGLE,
+        T_DENSITY_RATIO,
+        T_DRAG,
+        T_ENERGY,
+        T_OGW,
+        T_FLAG,
+        # Interpolation keys
+        INTERP_TIME,
+        INTERP_MACH,
+        INTERP_POS_X,
+        INTERP_POS_Y,
+        INTERP_POS_Z,
+        INTERP_VEL_X,
+        INTERP_VEL_Y,
+        INTERP_VEL_Z,
+        # Buffer-sizing constants (kept private -- see below)
+        SHOT_HOLDER_SIZE as _SHOT_HOLDER_SIZE,
+        TRAJ_DATA_SIZE as _TRAJ_DATA_SIZE,
+        # Public passthrough
+        version,
+        # Low-level native calls, aliased so the wrapper functions of the
+        # same name below can call into them
+        integrate as _integrate,
+        integrate_at as _integrate_at,
+        integrate_stream as _integrate_stream,
+        find_zero_angle as _find_zero_angle,
+        find_apex as _find_apex,
+        find_max_range as _find_max_range,
+    )
+except ImportError:
+    # Merged natmod build (see natmod/Makefile) -- no separate _tiny_bclibc
+    # module exists; mpy_init() already populated all of the above as bare
+    # globals of *this* module (see docs/develop/natmod.rst "Defining a
+    # native module"). TRAJ_FLAG_*/T_*/INTERP_*/version are meant to be
+    # public here too, so those need no action either way.
+    #
+    # SHOT_HOLDER_SIZE/TRAJ_DATA_SIZE are implementation details (only used
+    # to size internal buffers below) that the usermod build already keeps
+    # private via the `as _X` aliasing above -- del the public names here so
+    # this build doesn't leak them onto tiny_bclibc where the usermod build
+    # never would.
+    #
+    # integrate/integrate_at/integrate_stream/find_zero_angle/find_apex/
+    # find_max_range collide with this file's own wrapper functions of the
+    # same name below -- capture each native global under its private alias
+    # *before* the matching `def` executes and overwrites it, or the
+    # wrapper would end up calling itself instead of the native function.
+    _SHOT_HOLDER_SIZE = SHOT_HOLDER_SIZE
+    _TRAJ_DATA_SIZE = TRAJ_DATA_SIZE
+    _integrate = integrate
+    _integrate_at = integrate_at
+    _integrate_stream = integrate_stream
+    _find_zero_angle = find_zero_angle
+    _find_apex = find_apex
+    _find_max_range = find_max_range
+    del SHOT_HOLDER_SIZE, TRAJ_DATA_SIZE
+
+# Public API -- marks the re-exported native constants/version as
+# intentionally unreferenced within this file (ruff F401 / pyright
+# reportUnusedImport both respect __all__), instead of scattering
+# per-line suppression comments.
+__all__ = [
+    "Wind",
+    "Config",
+    "Shot",
+    "Request",
+    "version",
+    "integrate",
+    "integrate_at",
+    "integrate_stream",
+    "find_zero_angle",
+    "find_apex",
+    "find_max_range",
+    "DRAG_G1",
+    "DRAG_G7",
+    "DRAG_CUSTOM",
+    "TRAJ_FLAG_NONE",
+    "TRAJ_FLAG_RANGE",
+    "TRAJ_FLAG_ZERO",
+    "TRAJ_FLAG_ZERO_UP",
+    "TRAJ_FLAG_ZERO_DOWN",
+    "TRAJ_FLAG_MACH",
+    "TRAJ_FLAG_APEX",
+    "TRAJ_FLAG_MRT",
+    "TRAJ_FLAG_ALL",
+    "T_TIME",
+    "T_DISTANCE",
+    "T_VELOCITY",
+    "T_MACH",
+    "T_HEIGHT",
+    "T_SLANT_HEIGHT",
+    "T_DROP_ANGLE",
+    "T_WINDAGE",
+    "T_WINDAGE_ANGLE",
+    "T_SLANT_DISTANCE",
+    "T_ANGLE",
+    "T_DENSITY_RATIO",
+    "T_DRAG",
+    "T_ENERGY",
+    "T_OGW",
+    "T_FLAG",
+    "INTERP_TIME",
+    "INTERP_MACH",
+    "INTERP_POS_X",
+    "INTERP_POS_Y",
+    "INTERP_POS_Z",
+    "INTERP_VEL_X",
+    "INTERP_VEL_Y",
+    "INTERP_VEL_Z",
+]
 
 _NaN = float("nan")
 _INF = 1e8  # TINY_BCLIBC_MAX_WIND_DIST_FT
@@ -24,45 +157,6 @@ _INF = 1e8  # TINY_BCLIBC_MAX_WIND_DIST_FT
 DRAG_G1 = const(0)
 DRAG_G7 = const(1)
 DRAG_CUSTOM = const(2)
-
-# ── Trajectory filter flags (re-exported from natmod) ─────────────────────────
-TRAJ_FLAG_NONE = _m.TRAJ_FLAG_NONE
-TRAJ_FLAG_RANGE = _m.TRAJ_FLAG_RANGE
-TRAJ_FLAG_ZERO = _m.TRAJ_FLAG_ZERO
-TRAJ_FLAG_ZERO_UP = _m.TRAJ_FLAG_ZERO_UP
-TRAJ_FLAG_ZERO_DOWN = _m.TRAJ_FLAG_ZERO_DOWN
-TRAJ_FLAG_MACH = _m.TRAJ_FLAG_MACH
-TRAJ_FLAG_APEX = _m.TRAJ_FLAG_APEX
-TRAJ_FLAG_MRT = _m.TRAJ_FLAG_MRT
-TRAJ_FLAG_ALL = _m.TRAJ_FLAG_ALL
-
-# ── Trajectory column indices ─────────────────────────────────────────────────
-T_TIME = _m.T_TIME
-T_DISTANCE = _m.T_DISTANCE
-T_VELOCITY = _m.T_VELOCITY
-T_MACH = _m.T_MACH
-T_HEIGHT = _m.T_HEIGHT
-T_SLANT_HEIGHT = _m.T_SLANT_HEIGHT
-T_DROP_ANGLE = _m.T_DROP_ANGLE
-T_WINDAGE = _m.T_WINDAGE
-T_WINDAGE_ANGLE = _m.T_WINDAGE_ANGLE
-T_SLANT_DISTANCE = _m.T_SLANT_DISTANCE
-T_ANGLE = _m.T_ANGLE
-T_DENSITY_RATIO = _m.T_DENSITY_RATIO
-T_DRAG = _m.T_DRAG
-T_ENERGY = _m.T_ENERGY
-T_OGW = _m.T_OGW
-T_FLAG = _m.T_FLAG
-
-# ── Interpolation keys ────────────────────────────────────────────────────────
-INTERP_TIME = _m.INTERP_TIME
-INTERP_MACH = _m.INTERP_MACH
-INTERP_POS_X = _m.INTERP_POS_X
-INTERP_POS_Y = _m.INTERP_POS_Y
-INTERP_POS_Z = _m.INTERP_POS_Z
-INTERP_VEL_X = _m.INTERP_VEL_X
-INTERP_VEL_Y = _m.INTERP_VEL_Y
-INTERP_VEL_Z = _m.INTERP_VEL_Z
 
 # ── Buffer sizes ──────────────────────────────────────────────────────────────
 # Shot header: 17*4 + 6*4 + 4 + 1 + 1 + 2 = 100 bytes  (<-prefixed, no padding)
@@ -183,7 +277,6 @@ def Config(
 
 
 # ── Shot: zero-copy factory ───────────────────────────────────────────────────
-_SHOT_HOLDER_SIZE = _m.SHOT_HOLDER_SIZE
 _Shot = _namedtuple("Shot", ("buf", "s", "holder"))
 
 
@@ -259,7 +352,6 @@ def Shot(
 
 
 # ── Request: zero-copy factory ────────────────────────────────────────────────
-_TRAJ_DATA_SIZE = _m.TRAJ_DATA_SIZE
 _Request = _namedtuple("Request", ("buf", "s", "traj"))
 
 
@@ -281,28 +373,27 @@ def Request(
 
 
 # ── API wrappers ──────────────────────────────────────────────────────────────
-version = _m.version
 
 
 def integrate(shot, req):
-    return _m.integrate(shot.buf, shot.holder, req.buf, req.traj)
+    return _integrate(shot.buf, shot.holder, req.buf, req.traj)
 
 
 def integrate_at(shot, interp, val):
-    return _m.integrate_at(shot.buf, shot.holder, interp, val)
+    return _integrate_at(shot.buf, shot.holder, interp, val)
 
 
 def integrate_stream(shot, req, cb):
-    return _m.integrate_stream(shot.buf, shot.holder, req.buf, cb)
+    return _integrate_stream(shot.buf, shot.holder, req.buf, cb)
 
 
 def find_zero_angle(shot, dist_ft):
-    return _m.find_zero_angle(shot.buf, shot.holder, dist_ft)
+    return _find_zero_angle(shot.buf, shot.holder, dist_ft)
 
 
 def find_apex(shot):
-    return _m.find_apex(shot.buf, shot.holder)
+    return _find_apex(shot.buf, shot.holder)
 
 
 def find_max_range(shot, lo, hi):
-    return _m.find_max_range(shot.buf, shot.holder, lo, hi)
+    return _find_max_range(shot.buf, shot.holder, lo, hi)

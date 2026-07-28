@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-28
+
+#### natmod now builds a single merged `tiny_bclibc.mpy` (was two files)
+
+`natmod/Makefile` now lists `src/tiny_bclibc.py` in `SRC` alongside the native `.c` sources,
+so `dynruntime.mk`'s own merge rule produces one `tiny_bclibc.mpy` per architecture instead
+of a separate `_tiny_bclibc.mpy` (native) + `tiny_bclibc.mpy` (bytecode wrapper) pair —
+matching the approach already used by [a7p's own natmod build](https://github.com/o-murphy/a7p).
+One file is simpler to deploy (`mip install` / copy to device / attach as a release asset).
+
+`src/tiny_bclibc.py` gained a `try: from _tiny_bclibc import ... / except ImportError:`
+fallback (mirroring a7p's `_a7p` pattern) to handle the merged build, where there's no
+separate `_tiny_bclibc` module to import — the native part's `mpy_init()` already left its
+functions and constants as bare globals of this same module. The usermod build (real,
+separately-compiled `_tiny_bclibc` module) is unaffected.
+
+CI (`natmod.yml`), `natmod/ci/run_qemu.py`, and `tests/precision_compare.py` updated to the
+single-file layout.
+
 #### Precision flag unified across all build systems
 
 The precision selection is now controlled by a **single** environment / make variable:
@@ -24,6 +43,16 @@ to remember different flags for different build modes and makes the user experie
 uniform across the entire project.
 
 ### Fixed
+
+#### `natmod/Makefile` — `dist` left build junk behind instead of a single `tiny_bclibc.mpy`
+
+`dist`'s cleanup step tried to remove `$(BUILD)/$(MOD).native.mpy` — a filename
+`dynruntime.mk` never actually produces. The real intermediate native-only artifact is
+`$(BUILD)/$(MOD).mpy`, so `rm -f` silently removed nothing, and every build dir kept its
+`.o` files, `.config.h`, and that raw native `.mpy` sitting alongside the real merged
+`tiny_bclibc.mpy` output. `dist` now removes the correct file plus `$(SRC_O)`/`$(CONFIG_H)`
+(the actual `dynruntime.mk` variables, not hardcoded names) — `build/<arch>_<precision>/`
+now contains exactly the one file it's meant to.
 
 #### `src/tiny_bclibc_mp.c` — `-Wdouble-promotion` in wasm_sp (Emscripten/Clang)
 
@@ -54,6 +83,29 @@ startup (`cp -r /mpy /mpy_build`) and running all in-container commands against
 mipsel, mipselsp, wasm, wasmsp, qemu-armv7m).
 
 ### Added
+
+#### New `release.yml` workflow — automated GitHub Releases for natmod
+
+Pushing a `v*` tag now builds every natmod arch (by calling `natmod.yml` as a reusable
+workflow via its new `workflow_call` trigger, instead of duplicating the 10-arch matrix)
+and publishes a GitHub Release with:
+
+- One `tiny_bclibc_<arch>.native.mpy` asset per architecture.
+- A `package.json` that `mip`/`mpremote mip install` can install directly, using the
+  optional per-entry native-code compatibility tag schema proposed upstream
+  ([micropython/micropython#19532](https://github.com/micropython/micropython/pull/19532),
+  [micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144)):
+  `["tiny_bclibc.mpy", "<asset url>", <tag>]` per arch, so a given board only pulls the
+  variant that matches it.
+
+`tools/build_release_assets.py` reads each built `.mpy`'s own on-disk header (version,
+sub-version, arch, and — if present — the RISC-V extension-flags vuint) to compute that
+tag directly, mirroring the exact validation `mp_raw_code_load()` does in
+`py/persistentcode.c` — no dependency on build-directory naming, and no running
+MicroPython interpreter needed. Standalone script, stdlib only.
+
+The assembled assets + `package.json` are also uploaded as a `tiny-bclibc-release-<tag>`
+workflow artifact, independent of whether the GitHub Release itself gets created.
 
 #### `usermod/` — RP2040 emulator testing via rp2040js
 
@@ -321,5 +373,6 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/ballistics-lab/bclibc/compare/v1.1.2...v1.1.3

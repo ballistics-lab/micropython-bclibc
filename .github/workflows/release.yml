@@ -1,0 +1,88 @@
+name: release
+
+# Builds every natmod arch (by calling natmod.yml as a reusable workflow --
+# see its own workflow_call trigger -- instead of keeping a second copy of
+# that matrix in sync by hand), then publishes a GitHub release for the
+# pushed tag with one *.native.mpy asset per arch plus a package.json that
+# `mpremote mip install` / `mip.install()` can point at directly. Uses the
+# per-entry native code compatibility tag schema proposed upstream:
+#   https://github.com/micropython/micropython/pull/19532
+#   https://github.com/micropython/micropython-lib/pull/1144
+# See tools/build_release_assets.py for how the assets and package.json are
+# assembled -- it reads each file's own compat tag directly from its .mpy
+# header, so it takes the built files as plain positional arguments.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/natmod.yml
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tiny-bclibc-*
+          path: artifacts
+
+      - name: Assemble release assets + package.json
+        run: |
+          python3 tools/build_release_assets.py \
+            --tag "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --out-dir release_assets \
+            artifacts/*/*/tiny_bclibc.mpy
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-release-${{ github.ref_name }}
+          path: release_assets/
+          if-no-files-found: error
+
+      - name: Extract release metadata
+        id: meta
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          PRERELEASE=false
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION=${{ steps.meta.outputs.version }}
+          BODY=$(awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{found=0} found" CHANGELOG.md | sed '/^[[:space:]]*$/d' | head -50)
+          if [ -z "$BODY" ]; then
+            BODY="See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details."
+          fi
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: ${{ steps.changelog.outputs.body }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          files: release_assets/*

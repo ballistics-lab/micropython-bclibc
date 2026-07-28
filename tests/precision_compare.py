@@ -19,8 +19,7 @@ import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MPY = shutil.which("micropython") or "micropython"
-_NATIVE_LINK = os.path.join(_HERE, "_tiny_bclibc.mpy")
-_BYTECODE_LINK = os.path.join(_HERE, "tiny_bclibc.mpy")
+_MODULE_LINK = os.path.join(_HERE, "tiny_bclibc.mpy")
 _WORKER = os.path.join(_HERE, "precision_run.py")
 
 _FT_TO_CM = 30.48
@@ -28,8 +27,7 @@ _FPS_TO_MPS = 0.3048
 
 
 def _run(build_dir: str) -> dict:
-    shutil.copy(os.path.join(_HERE, build_dir, "_tiny_bclibc.mpy"), _NATIVE_LINK)
-    shutil.copy(os.path.join(_HERE, build_dir, "tiny_bclibc.mpy"), _BYTECODE_LINK)
+    shutil.copy(os.path.join(_HERE, build_dir, "tiny_bclibc.mpy"), _MODULE_LINK)
     try:
         result = subprocess.run(
             [_MPY, _WORKER],
@@ -39,11 +37,10 @@ def _run(build_dir: str) -> dict:
             timeout=60,
         )
     finally:
-        for p in (_NATIVE_LINK, _BYTECODE_LINK):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        try:
+            os.remove(_MODULE_LINK)
+        except OSError:
+            pass
 
     if result.returncode != 0:
         print("ERROR running", build_dir, file=sys.stderr)

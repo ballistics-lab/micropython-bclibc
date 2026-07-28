@@ -16,10 +16,21 @@ ARCH    ?= x64
 MPY_DIR ?= micropython
 
 # ── Precision ─────────────────────────────────────────────────────────────────
-# MP_BCLIBC_PRECISION=double → _dp suffix  (default on x64/x86)
-# MP_BCLIBC_PRECISION=single → _sp suffix  (default on MCU)
+# Derived from ARCH's actual FPU, not a separate knob you need to remember:
+# there's no point building (let alone shipping) a "double" variant for a
+# target with no double-precision FPU, or a "single" variant for one that
+# has one. Override with MP_BCLIBC_PRECISION= only if you specifically need
+# the other precision for your own build (e.g. testing) -- CI never does.
 #
-ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
+#   armv7emdp        → double (Cortex-M7, double-precision FPU -- the "dp" in
+#                       the ARCH name)
+#   x64/x86/aarch64   → double (host/dev target, no MCU FPU constraint)
+#   everything else   → single (armv6m/armv7m/armv7emsp/xtensa/xtensawin/
+#                       rv32imc/rv64imc: either no FPU at all, or single-
+#                       precision only)
+ifeq ($(ARCH),armv7emdp)
+MP_BCLIBC_PRECISION ?= double
+else ifeq ($(ARCH),$(filter $(ARCH),x64 x86 aarch64))
 MP_BCLIBC_PRECISION ?= double
 else
 MP_BCLIBC_PRECISION ?= single
@@ -31,11 +42,10 @@ else
 _PREC_SUFFIX := _dp
 endif
 
-MOD         = _tiny_bclibc_$(ARCH)$(_PREC_SUFFIX)
+MOD         = tiny_bclibc_$(ARCH)$(_PREC_SUFFIX)
 BCLIBC_ROOT = ../bclibc
 SRC_DIR     = ../src
 BUILD       = build/$(ARCH)$(_PREC_SUFFIX)
-MPY_CROSS  ?= $(MPY_DIR)/mpy-cross/build/mpy-cross
 VERSION_H   = generated/bclibc_mp/version.h
 VERSION_IN  = ../version.h.in
 
@@ -43,10 +53,20 @@ VERSION_IN  = ../version.h.in
 # are found by filename only.  dynruntime.mk then computes the object as
 # $(BUILD)/tiny_bclibc_mp.o (arch-specific), not $(BUILD)/../src/tiny_bclibc_mp.o
 # (shared across all arches, which causes "incompatible arch" when x64 and x86
-# builds share the same object file).
+# builds share the same object file). Covers .py too, now that tiny_bclibc.py
+# is part of SRC (mpy-cross output is arch-specific bytecode, same reasoning).
 vpath %.c $(SRC_DIR)
+vpath %.py $(SRC_DIR)
 
-SRC = tiny_bclibc_mp.c
+# tiny_bclibc.py alongside the .c sources -- dynruntime.mk's own SRC_MPY/
+# --merge rule mpy-cross-compiles it and merges it with the native part into
+# one tiny_bclibc.mpy (see docs/develop/natmod.rst "Defining a native
+# module", and a7p's natmod/Makefile for the same pattern). tiny_bclibc.py's
+# own top-level code runs in the same globals namespace the native part
+# populates -- no `import _tiny_bclibc` finds anything on this path, which is
+# why tiny_bclibc.py's own try/except ImportError fallback captures the bare
+# globals mpy_init() left behind instead.
+SRC = tiny_bclibc_mp.c tiny_bclibc.py
 
 # ── Shared math-library sources ───────────────────────────────────────────────
 #
@@ -117,8 +137,20 @@ else ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc))
 SRC          += $(_FDLIBM_SRCS) mem_shim.c
 CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
 
+else ifeq ($(ARCH),$(filter $(ARCH),xtensa xtensawin))
+# Xtensa: the xtensa-lx106/esp32 toolchains' own newlib libm.a pulls in
+# lib_a-s_lib_ver.o (fdlibm's _LIB_VERSION control global) to satisfy
+# atan2f/etc, and that object has a non-empty .data section -- mpy_ld.py
+# hard-rejects any .data in a linked native module (confirmed by a real CI
+# failure: "LinkError: .../libm.a:lib_a-s_lib_ver.o: .data non-empty").
+# Same fdlibm-from-source route as RISC-V above sidesteps it entirely.
+SRC          += $(_FDLIBM_SRCS) mem_shim.c
+CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
+
 else
-# ARM + Xtensa: newlib libm.a is self-contained and provides both precisions.
+# ARM (Cortex-M): newlib libm.a is self-contained and, unlike the Xtensa
+# toolchains above, doesn't pull in a non-empty .data object for the
+# trig functions this project uses.
 LINK_RUNTIME  = 1
 SRC          += mem_shim.c
 endif
@@ -160,9 +192,14 @@ endif
 _TINY_HEADERS := $(wildcard $(BCLIBC_ROOT)/tiny_bclibc/include/tiny_bclibc/*.h)
 $(SRC_O): $(_TINY_HEADERS)
 
-# ── RISC-V: add libgcc.a for soft-float builtins ─────────────────────────────
+# ── RISC-V + Xtensa: add libgcc.a for soft-float builtins ────────────────────
 # Must be after include so CROSS and CFLAGS_ARCH are set by dynruntime.mk.
-ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc))
+# Both use the fdlibm-from-source route above (no LINK_RUNTIME, which used
+# to pull libgcc in implicitly via the toolchain's own libm.a) -- without
+# this, xtensa fails with "undefined symbol: __lesf2" (a real CI failure):
+# fdlibm's single-precision comparisons lower to libgcc soft-float calls on
+# a target with no hardware FPU (xtensa-lx106/esp32 have none for this).
+ifeq ($(ARCH),$(filter $(ARCH),rv32imc rv64imc xtensa xtensawin))
 MPY_LD_FLAGS += -l$(realpath $(shell $(CROSS)gcc $(CFLAGS_ARCH) --print-libgcc-file-name))
 endif
 
@@ -183,62 +220,14 @@ $(VERSION_H): $(VERSION_IN)
 
 $(BUILD)/tiny_bclibc_mp.o: $(VERSION_H)
 
-# ── Convenience aliases ────────────────────────────────────────────────────────
-.PHONY: submodules x64 x64sp x86 x86sp aarch64 aarch64sp rp2040 rp2350 stm32f4 armv7m stm32h7 stm32h7dp esp32s3 esp32 esp32c3 esp32c6 rv64 dist clean
+.PHONY: submodules dist clean
 
 submodules:
 	git submodule update --init --recursive
 
-x64:
-	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=double dist
-
-x64sp:
-	$(MAKE) ARCH=x64 MP_BCLIBC_PRECISION=single dist
-
-aarch64:
-	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=double dist
-
-aarch64sp:
-	$(MAKE) ARCH=aarch64 MP_BCLIBC_PRECISION=single dist
-
-x86:
-	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=double dist
-
-x86sp:
-	$(MAKE) ARCH=x86 MP_BCLIBC_PRECISION=single dist
-
-rp2040:
-	$(MAKE) ARCH=armv6m MP_BCLIBC_PRECISION=single dist
-
-armv7m:
-	$(MAKE) ARCH=armv7m MP_BCLIBC_PRECISION=single dist
-
-rp2350 stm32f4:
-	$(MAKE) ARCH=armv7emsp MP_BCLIBC_PRECISION=single dist
-
-stm32h7:
-	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=single dist
-
-stm32h7dp:
-	$(MAKE) ARCH=armv7emdp MP_BCLIBC_PRECISION=double dist
-
-esp32s3:
-	$(MAKE) ARCH=xtensawin MP_BCLIBC_PRECISION=single dist
-
-esp32:
-	$(MAKE) ARCH=xtensa MP_BCLIBC_PRECISION=single dist
-
-esp32c3 esp32c6:
-	$(MAKE) ARCH=rv32imc MP_BCLIBC_PRECISION=single dist
-
-rv64:
-	$(MAKE) ARCH=rv64imc MP_BCLIBC_PRECISION=single dist
-
 dist: all
-	$(Q)mv $(MOD).mpy $(BUILD)/_tiny_bclibc.mpy
-	$(ECHO) "  MPY   $(BUILD)/tiny_bclibc.mpy"
-	$(Q)$(MPY_CROSS) -march=$(ARCH) $(SRC_DIR)/tiny_bclibc.py -o $(BUILD)/tiny_bclibc.mpy
-	$(ECHO) "  →  $(BUILD)/_tiny_bclibc.mpy"
+	$(Q)mv $(MOD).mpy $(BUILD)/tiny_bclibc.mpy
+	$(Q)rm -f $(BUILD)/$(MOD).mpy $(SRC_O) $(CONFIG_H)
 	$(ECHO) "  →  $(BUILD)/tiny_bclibc.mpy"
 
 clean:
