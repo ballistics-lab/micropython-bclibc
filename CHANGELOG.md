@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-28
+
+### Fixed
+
+#### `release.yml` — concurrency group collided with its own `natmod.yml` call
+
+Both workflows used `group: ${{ github.workflow }}-${{ github.ref }}`. Inside a
+`workflow_call`ed workflow, `github.workflow` resolves to the *caller's* name, not
+the called file's own — so `natmod.yml`, when invoked from `release.yml`, computed
+the exact same concurrency group as `release.yml` itself (`release-<ref>`).
+`release.yml`'s `cancel-in-progress: false` meant the called workflow could never
+enter its own caller's group, and the job never even started (0 jobs, run marked
+failure). Switched both to a literal `natmod-`/`release-` prefix instead of the
+dynamic `${{ github.workflow }}`, so the two groups can never collide regardless of
+which one calls the other.
+
+#### `natmod/Makefile` — `aarch64` was documented but never actually buildable
+
+The `ARCH=` help comment, precision-selection, and math-library-selection blocks
+all listed `aarch64` alongside `x64`/`x86`, but `dynruntime.mk` (as of MicroPython
+<=v1.28) has no `ARCH=aarch64` branch at all — `make ARCH=aarch64 dist` has always
+failed with `architecture 'aarch64' not supported`, regardless of anything in this
+project's own Makefile. Removed the dead references; `aarch64` is already covered
+separately via `usermod` (links straight into the port's build, no `dynruntime.mk`
+involved) and `ffimod` (`libtiny_bclibc.so` via the `ffi` module).
+
+### Added
+
+#### `tools/nmip.py` — bootstrap installer for testing the tagged `package.json` scheme today
+
+A drop-in copy of the micropython-lib#1144 branch's `mip`, installed under a
+different name (`nmip`) so it doesn't collide with (or need to replace) the
+frozen, unpatched `mip` already on stock firmware. Lets anyone try the per-entry
+native-code compatibility tag scheme
+([micropython/micropython#19532](https://github.com/micropython/micropython/pull/19532),
+[micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144))
+against this project's real multi-arch release right now, without rebuilding
+firmware, while the upstream PRs are still under review — see the new
+"Install a released build via `mip`" section in the README.
+
+### Changed
+
+#### `tools/build_release_assets.py` — `--repo` is now optional; relative URLs by default
+
+Without `--repo`, `package.json`'s `urls` entries are now bare asset filenames
+instead of full `https://github.com/...` links. `mip` resolves relative URLs
+against wherever it fetched `package.json` from
+(`base_url = package_json_url.rpartition("/")[0]` in `_install_json`), and every
+asset a GitHub release publishes — `package.json` included — lives under the same
+`.../releases/download/<tag>/` path, so this stays correct across forks and repo
+renames without needing to know the repo name at all. `release.yml` no longer
+passes `--repo`. Pass it explicitly to get the old absolute-URL behavior back.
+
 ## [1.2.0] - 2026-07-28
 
 #### natmod now builds a single merged `tiny_bclibc.mpy` (was two files)
@@ -373,6 +426,7 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/ballistics-lab/bclibc/compare/v1.1.2...v1.1.3

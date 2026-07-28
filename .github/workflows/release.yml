@@ -44,10 +44,14 @@ jobs:
           path: artifacts
 
       - name: Assemble release assets + package.json
+        # No --repo: package.json's urls are bare filenames, resolved by mip
+        # relative to wherever it fetched package.json from. Every asset in a
+        # GitHub release (package.json included) lives under the same
+        # .../releases/download/<tag>/ path, so this stays correct across
+        # forks/renames without needing to know the repo at all.
         run: |
           python3 tools/build_release_assets.py \
             --tag "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
             --out-dir release_assets \
             artifacts/*/*/tiny_bclibc.mpy
 

@@ -18,8 +18,15 @@ does in py/persistentcode.c. The on-disk layout is NOT the same as
 sys.implementation._mpy (see read_mpy_tag() below), but composes into the
 same shape.
 
+By default `urls` entries use bare filenames (no repo/host baked in): mip
+resolves relative URLs against wherever it fetched package.json *from*
+(base_url = package_json_url.rpartition("/")[0] in _install_json), and every
+asset a GitHub release publishes -- package.json included -- lives under the
+exact same .../releases/download/<tag>/ path. That keeps this portable across
+forks/renames. Pass --repo to get absolute github.com/... URLs instead.
+
 Usage:
-    build_release_assets.py --tag v0.3.0 --repo owner/repo --out-dir DIR \\
+    build_release_assets.py --tag v0.3.0 --out-dir DIR \\
         natmod/build/*/tiny_bclibc.mpy
 """
 
@@ -114,7 +121,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tag", required=True, help="release tag, e.g. v0.3.0")
     ap.add_argument(
-        "--repo", required=True, help="owner/repo, for the asset download URLs"
+        "--repo",
+        default=None,
+        help="owner/repo -- if given, urls are absolute github.com/.../releases/"
+        "download/<tag>/<asset> links; if omitted (default), urls are bare "
+        "asset filenames, resolved by mip relative to wherever it fetched "
+        "package.json from",
     )
     ap.add_argument(
         "--out-dir", required=True, help="directory to write release assets into"
@@ -142,9 +154,10 @@ def main():
         shutil.copy(src, os.path.join(args.out_dir, asset_name))
 
         tag = info["mpy"]
-        url = (
-            f"https://github.com/{args.repo}/releases/download/{args.tag}/{asset_name}"
-        )
+        if args.repo:
+            url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{asset_name}"
+        else:
+            url = asset_name
         urls.append(["tiny_bclibc.mpy", url, tag])
         print(
             f"{info['arch']}: abi={info['version']}.{info['subver']} tag={tag} -> {asset_name}"

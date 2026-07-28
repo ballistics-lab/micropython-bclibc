@@ -9,11 +9,11 @@
 This repository provides three integration modes for using `tiny_bclibc` from
 MicroPython — choose the one that fits your target and deployment constraints:
 
-| Approach | Location | Architectures | Module deployment |
-|----------|----------|--------------|-------------------|
-| **natmod** (`.mpy`) | `natmod/` | x64, x86, armv6m–armv7emdp, xtensa, rv32/64imc | Copy `.mpy` to device filesystem |
-| **usermod** (baked-in) | `usermod/` | any port with `USER_C_MODULES` support | Built into firmware — no file to copy |
-| **FFI** (`libtiny_bclibc.so`) | `ffimod/` | any unix port arch | `import _tiny_bclibc` from `ffimod/` |
+| Approach                      | Location   | Architectures                                  | Module deployment                     |
+| ----------------------------- | ---------- | ---------------------------------------------- | ------------------------------------- |
+| **natmod** (`.mpy`)           | `natmod/`  | x64, x86, armv6m–armv7emdp, xtensa, rv32/64imc | Copy `.mpy` to device filesystem      |
+| **usermod** (baked-in)        | `usermod/` | any port with `USER_C_MODULES` support         | Built into firmware — no file to copy |
+| **FFI** (`libtiny_bclibc.so`) | `ffimod/`  | any unix port arch                             | `import _tiny_bclibc` from `ffimod/`  |
 
 All three expose the same Python API: `Shot`, `Request`, `Wind`, `Config`,
 `integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`, `find_max_range`,
@@ -78,10 +78,10 @@ device filesystem (or embedding them into firmware via `FROZEN_MANIFEST`).
 
 Supported only on architectures that `mpy_ld.py` can link:
 
-| Approach | Architectures | Requires |
-|----------|--------------|---------|
-| Native `.mpy` natmod | x64, x86, armv6m–armv7emdp, xtensa, rv32/64imc | `mpy_ld.py` linker support |
-| FFI (`libtiny_bclibc.so`) | **any** unix port arch (aarch64, mipsel, …) | `libffi`, shared library build |
+| Approach                  | Architectures                                  | Requires                       |
+| ------------------------- | ---------------------------------------------- | ------------------------------ |
+| Native `.mpy` natmod      | x64, x86, armv6m–armv7emdp, xtensa, rv32/64imc | `mpy_ld.py` linker support     |
+| FFI (`libtiny_bclibc.so`) | **any** unix port arch (aarch64, mipsel, …)    | `libffi`, shared library build |
 
 ## Prerequisites
 
@@ -104,13 +104,13 @@ export MPY_DIR=$(pwd)/micropython-1.28.0
 
 ### Cross-compilers
 
-| Target | Package (Debian/Ubuntu) |
-|--------|-------------------------|
-| x64 | `gcc` (host compiler, already installed) |
-| x86 | `gcc-multilib` |
-| RP2040 / Cortex-M | `gcc-arm-none-eabi libnewlib-arm-none-eabi` |
+| Target                     | Package (Debian/Ubuntu)                                |
+| -------------------------- | ------------------------------------------------------ |
+| x64                        | `gcc` (host compiler, already installed)               |
+| x86                        | `gcc-multilib`                                         |
+| RP2040 / Cortex-M          | `gcc-arm-none-eabi libnewlib-arm-none-eabi`            |
 | ESP32-C3/C6 (RISC-V 32/64) | `gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf` |
-| ESP32 / ESP32-S3 | `xtensa-esp32{s3}-elf-gcc` (from ESP-IDF) |
+| ESP32 / ESP32-S3           | `xtensa-esp32{s3}-elf-gcc` (from ESP-IDF)              |
 
 ```bash
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi \
@@ -126,7 +126,6 @@ precision is derived automatically from what FPU that `ARCH` actually has.
 ```bash
 make ARCH=x64        dist   # x64, double        (host FPU)      → natmod/build/x64_dp/
 make ARCH=x86        dist   # x86, double        (host FPU)      → natmod/build/x86_dp/
-make ARCH=aarch64    dist   # aarch64, double    (host FPU)      → natmod/build/aarch64_dp/
 make ARCH=armv6m     dist   # Cortex-M0+, single (no FPU)        → natmod/build/armv6m_sp/  — Raspberry Pi Pico
 make ARCH=armv7m     dist   # Cortex-M3, single  (no FPU)        → natmod/build/armv7m_sp/  — generic Cortex-M3
 make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp_sp/ — RP2350, STM32F4
@@ -155,16 +154,40 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds every arch
 (see `tools/build_release_assets.py`). Each board picks the matching variant on its own,
 via the optional per-entry native-code compatibility tag schema proposed upstream
 ([micropython/micropython#19532](https://github.com/micropython/micropython/pull/19532),
-[micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144)):
+[micropython/micropython-lib#1144](https://github.com/micropython/micropython-lib/pull/1144);
+see the discussion at [micropython/micropython#19479](https://github.com/micropython/micropython/issues/19479)).
+
+**Until that lands upstream**, the `mip` already on your device (frozen into stock firmware,
+or a stock `mpremote`) doesn't understand the tagged `urls` entries yet and will raise
+`ValueError: too many values to unpack` on this `package.json`. Bootstrap a patched `mip`
+first — `tools/nmip.py` is a drop-in copy of the micropython-lib#1144 branch, installed
+under a different name (`nmip`) so it doesn't collide with (and doesn't touch) the frozen
+`mip` module already on the device:
+
+```python
+>>> import mip
+>>> mip.install("github:ballistics-lab/micropython-bclibc/tools/nmip.py")
+Downloading github:ballistics-lab/micropython-bclibc/tools/nmip.py to /home/murphy/.micropython/lib
+Copying: /home/murphy/.micropython/lib/nmip.py
+Done
+>>> import nmip as mip
+>>> mip.install("https://github.com/ballistics-lab/micropython-bclibc/releases/download/v1.2.1")
+Installing https://github.com/ballistics-lab/micropython-bclibc/releases/download/v1.2.1/package.json to /home/murphy/.micropython/lib
+Copying: /home/murphy/.micropython/lib/tiny_bclibc.mpy
+Done
+```
+
+**Once the upstream PRs are merged and shipped in a MicroPython release**, plain `mip`
+(on-device) and `mpremote` (from the host) will handle this directly — no bootstrap needed:
 
 ```bash
-mpremote mip install https://github.com/o-murphy/micropython-bclibc/releases/download/vX.Y.Z/package.json
+mpremote mip install https://github.com/ballistics-lab/micropython-bclibc/releases/download/vX.Y.Z/package.json
 ```
 
 ```python
 # or on-device:
 import mip
-mip.install("https://github.com/o-murphy/micropython-bclibc/releases/download/vX.Y.Z/package.json")
+mip.install("https://github.com/ballistics-lab/micropython-bclibc/releases/download/vX.Y.Z/package.json")
 ```
 
 ### Custom MPY_DIR or precision override
@@ -336,14 +359,14 @@ node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclib
 
 ### natmod vs usermod comparison
 
-| | natmod | usermod |
-|--|--------|---------|
-| Module delivery | `.mpy` file on filesystem | Built into firmware |
-| Firmware re-flash needed | No | Yes (per build) |
-| Architectures | mpy_ld.py supported only | Any port with `USER_C_MODULES` |
-| Memory at import | Filesystem read + bytecode load | Instant (already in flash) |
-| RP2040 support | armv6m `.mpy` | cmake `USER_C_MODULES` |
-| Unix port support | Yes | Yes (also produces a micropython binary) |
+|                          | natmod                          | usermod                                  |
+| ------------------------ | ------------------------------- | ---------------------------------------- |
+| Module delivery          | `.mpy` file on filesystem       | Built into firmware                      |
+| Firmware re-flash needed | No                              | Yes (per build)                          |
+| Architectures            | mpy_ld.py supported only        | Any port with `USER_C_MODULES`           |
+| Memory at import         | Filesystem read + bytecode load | Instant (already in flash)               |
+| RP2040 support           | armv6m `.mpy`                   | cmake `USER_C_MODULES`                   |
+| Unix port support        | Yes                             | Yes (also produces a micropython binary) |
 
 ---
 
@@ -353,10 +376,10 @@ On architectures where `mpy_ld.py` does not yet support native modules (aarch64,
 and others), MicroPython's built-in `ffi` module can call `libtiny_bclibc.so` directly.
 Two entry points are available:
 
-| Module | Location | Description |
-|--------|----------|-------------|
-| `_tiny_bclibc.py` | `ffimod/` | Drop-in module with the full public API |
-| `test_ffi.py` | `tests/` | Runs full test suite against the FFI backend |
+| Module            | Location  | Description                                  |
+| ----------------- | --------- | -------------------------------------------- |
+| `_tiny_bclibc.py` | `ffimod/` | Drop-in module with the full public API      |
+| `test_ffi.py`     | `tests/`  | Runs full test suite against the FFI backend |
 
 ```bash
 # 1. Build libtiny_bclibc.so for the target platform (native or cross)
@@ -605,14 +628,14 @@ total, stop_reason = bc.integrate_stream(shot, req, on_row)
 
 ### `integrate` vs `integrate_stream`
 
-| | `integrate` | `integrate_stream` |
-|---|---|---|
-| Returns | `(list[tuple], reason)` | `(total_count, reason)` |
-| Heap allocation | `N × 16 floats` per trajectory | None |
-| Python call per point | No | Yes (1 `mp_call`) |
-| Random access to all rows | Yes | No — one at a time |
-| Early stop | No | Yes — return truthy from callback |
-| Best for | Post-processing, sorting, slicing, display of full table | Tight RAM (MCU), streaming to UART/display, early-exit on threshold |
+|                           | `integrate`                                              | `integrate_stream`                                                  |
+| ------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
+| Returns                   | `(list[tuple], reason)`                                  | `(total_count, reason)`                                             |
+| Heap allocation           | `N × 16 floats` per trajectory                           | None                                                                |
+| Python call per point     | No                                                       | Yes (1 `mp_call`)                                                   |
+| Random access to all rows | Yes                                                      | No — one at a time                                                  |
+| Early stop                | No                                                       | Yes — return truthy from callback                                   |
+| Best for                  | Post-processing, sorting, slicing, display of full table | Tight RAM (MCU), streaming to UART/display, early-exit on threshold |
 
 **Use `integrate`** when you need the full result set after integration — e.g. print a table, compare rows, pass to another function.
 
@@ -622,16 +645,16 @@ The Python overhead of `integrate_stream` (one `mp_call` per filtered point) is 
 
 ## Architecture notes
 
-| ARCH | Precision | Math library | BSS |
-|------|-----------|-------------|-----|
-| x64 / x86 | double (default) | musl libm_dbl (bundled in MicroPython) | 0 |
-| x64 / x86 | float (optional) | fdlibm single (bundled in MicroPython) | 0 |
-| armv6m | float only | newlib libm.a (via LINK_RUNTIME) | 0 |
-| armv7m | float only | newlib libm.a (via LINK_RUNTIME) | 0 |
-| armv7emsp | float only | newlib libm.a (via LINK_RUNTIME) | 0 |
-| armv7emdp | float (default) / double | newlib libm.a (via LINK_RUNTIME) | 0 |
-| xtensawin / xtensa | float only | newlib libm.a (via LINK_RUNTIME) | 0 |
-| rv32imc / rv64imc | float only | fdlibm single + libgcc soft-float | 0 |
+| ARCH               | Precision                | Math library                           | BSS |
+| ------------------ | ------------------------ | -------------------------------------- | --- |
+| x64 / x86          | double (default)         | musl libm_dbl (bundled in MicroPython) | 0   |
+| x64 / x86          | float (optional)         | fdlibm single (bundled in MicroPython) | 0   |
+| armv6m             | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| armv7m             | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| armv7emsp          | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| armv7emdp          | float (default) / double | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| xtensawin / xtensa | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| rv32imc / rv64imc  | float only               | fdlibm single + libgcc soft-float      | 0   |
 
 > **RISC-V note:** picolibc triggers a `mpy_ld.py` bug on current MicroPython.
 > fdlibm is used as a workaround until the fix lands upstream.
@@ -648,11 +671,11 @@ trajectory, which is expensive on soft-float MCUs (Cortex-M0+, RISC-V without FP
 `TINY_BCLIBC_FAST_ZERO_FIND` is automatically defined when building with `MP_BCLIBC_PRECISION=single`.
 It applies two optimisations that do **not** affect the final angle accuracy:
 
-| Parameter | Default | Fast |
-|-----------|---------|------|
-| GSS step multiplier | 1× | 8× coarser (fewer RK4 steps per trajectory) |
-| GSS convergence `h` | `1e-5 rad` | `1e-2 rad` (~13 iterations vs ~25) |
-| Ridder's `acc` | `0.001 ft` | `0.01 ft` (3 mm — more than sufficient for `float`) |
+| Parameter           | Default    | Fast                                                |
+| ------------------- | ---------- | --------------------------------------------------- |
+| GSS step multiplier | 1×         | 8× coarser (fewer RK4 steps per trajectory)         |
+| GSS convergence `h` | `1e-5 rad` | `1e-2 rad` (~13 iterations vs ~25)                  |
+| Ridder's `acc`      | `0.001 ft` | `0.01 ft` (3 mm — more than sufficient for `float`) |
 
 The bracket bound (`angle_at_max`) is used only to constrain Ridder's search interval;
 its precision does not affect the output. Ridder's method always uses the original
@@ -669,26 +692,26 @@ Measured on x64 host, MicroPython v1.28, G7 drag, 168 gr @ 2750 fps.
 Each output row costs ~**653 B** of heap (allocated by `tiny_bclibc.integrate()`).
 
 | Range step | Rows (3 km) | Heap delta |
-|-----------|-------------|------------|
-| 100 m | 30 | ~19.5 KB |
-| 50 m | 60 | ~39 KB |
-| 25 m | 120 | ~78 KB |
-| 10 m | 300 | ~197 KB |
+| ---------- | ----------- | ---------- |
+| 100 m      | 30          | ~19.5 KB   |
+| 50 m       | 60          | ~39 KB     |
+| 25 m       | 120         | ~78 KB     |
+| 10 m       | 300         | ~197 KB    |
 
 ### Per-platform recommendation
 
-| Board | MCU | Arch | Usable heap¹ | Max step @ 3 km |
-|-------|-----|------|-------------|-----------------|
-| Raspberry Pi Pico | RP2040 | armv6m | ~192 KB | 10 m ✓ |
-| Raspberry Pi Pico 2 | RP2350 | armv7emsp | ~480 KB | 10 m ✓ |
-| STM32F401 (128 KB RAM) | Cortex-M4 | armv7emsp | ~64 KB | 50 m |
-| STM32F405/F407 (192 KB RAM) | Cortex-M4 | armv7emsp | ~128 KB | 25 m |
-| STM32H743 (1 MB RAM) | Cortex-M7 | armv7emdp | ~512 KB | 10 m ✓ |
-| ESP32 | Xtensa LX6 | xtensa | ~200 KB | 25 m |
-| ESP32-S3 | Xtensa LX7 | xtensawin | ~300 KB | 10 m ✓ |
-| ESP32-S3 + PSRAM | Xtensa LX7 | xtensawin | ~8 MB | 1 m ✓ |
-| ESP32-C3 | RISC-V | rv32imc | ~390 KB | 10 m ✓ |
-| ESP32-C6 | RISC-V | rv32imc | ~490 KB | 10 m ✓ |
+| Board                       | MCU        | Arch      | Usable heap¹ | Max step @ 3 km |
+| --------------------------- | ---------- | --------- | ------------ | --------------- |
+| Raspberry Pi Pico           | RP2040     | armv6m    | ~192 KB      | 10 m ✓          |
+| Raspberry Pi Pico 2         | RP2350     | armv7emsp | ~480 KB      | 10 m ✓          |
+| STM32F401 (128 KB RAM)      | Cortex-M4  | armv7emsp | ~64 KB       | 50 m            |
+| STM32F405/F407 (192 KB RAM) | Cortex-M4  | armv7emsp | ~128 KB      | 25 m            |
+| STM32H743 (1 MB RAM)        | Cortex-M7  | armv7emdp | ~512 KB      | 10 m ✓          |
+| ESP32                       | Xtensa LX6 | xtensa    | ~200 KB      | 25 m            |
+| ESP32-S3                    | Xtensa LX7 | xtensawin | ~300 KB      | 10 m ✓          |
+| ESP32-S3 + PSRAM            | Xtensa LX7 | xtensawin | ~8 MB        | 1 m ✓           |
+| ESP32-C3                    | RISC-V     | rv32imc   | ~390 KB      | 10 m ✓          |
+| ESP32-C6                    | RISC-V     | rv32imc   | ~490 KB      | 10 m ✓          |
 
 ¹ Approximate free heap after MicroPython runtime starts. Actual value depends on
 firmware variant, frozen modules, and Wi-Fi stack (ESP32).
@@ -724,12 +747,12 @@ is numerically valid.
 
 ### Results
 
-| Metric | Max deviation | At |
-|--------|--------------|-----|
-| Vertical drop (`height_ft`) | **0.108 cm** | 2975 m |
-| Velocity | **0.0015 fps** (0.0005 m/s) | 1125 m |
-| Mach number | **1.32 × 10⁻⁶** | — |
-| `find_zero_angle` (300 m zero) | **5 × 10⁻¹⁰ rad** (< 0.001 mrad) | — |
+| Metric                         | Max deviation                    | At     |
+| ------------------------------ | -------------------------------- | ------ |
+| Vertical drop (`height_ft`)    | **0.108 cm**                     | 2975 m |
+| Velocity                       | **0.0015 fps** (0.0005 m/s)      | 1125 m |
+| Mach number                    | **1.32 × 10⁻⁶**                  | —      |
+| `find_zero_angle` (300 m zero) | **5 × 10⁻¹⁰ rad** (< 0.001 mrad) | —      |
 
 Drop deviation grows slowly with distance and changes sign around 1200–1300 m (float32
 overshoots slightly, then undershoots). At 3000 m the accumulated error is ≈ 0.1 cm —

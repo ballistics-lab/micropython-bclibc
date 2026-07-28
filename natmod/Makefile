@@ -2,7 +2,6 @@
 #
 #   make                       → x64 (double, default)
 #   make ARCH=x86              → x86 32-bit (double, default)
-#   make ARCH=aarch64          → AArch64 Linux host (double, default)
 #   make ARCH=armv6m           → RP2040 / Cortex-M0+
 #   make ARCH=armv7m           → Cortex-M3
 #   make ARCH=armv7emsp        → Cortex-M4F / M7 single-precision FPU
@@ -11,6 +10,12 @@
 #   make ARCH=xtensa           → ESP8266 (Xtensa no-window)
 #   make ARCH=rv32imc          → ESP32-C3 / ESP32-C6 (RISC-V 32)
 #   make ARCH=rv64imc          → RISC-V 64
+#
+# No aarch64 here: dynruntime.mk (as of MicroPython <=v1.28) has no ARCH=aarch64
+# branch at all -- natmod can't target it, full stop, regardless of anything in
+# this file. aarch64 is covered separately via ../usermod (which links straight
+# into the port's own build instead of going through dynruntime.mk) and
+# ../ffimod (libtiny_bclibc.so via the ffi module, no native .mpy needed).
 #
 ARCH    ?= x64
 MPY_DIR ?= micropython
@@ -24,13 +29,13 @@ MPY_DIR ?= micropython
 #
 #   armv7emdp        → double (Cortex-M7, double-precision FPU -- the "dp" in
 #                       the ARCH name)
-#   x64/x86/aarch64   → double (host/dev target, no MCU FPU constraint)
+#   x64/x86          → double (host/dev target, no MCU FPU constraint)
 #   everything else   → single (armv6m/armv7m/armv7emsp/xtensa/xtensawin/
 #                       rv32imc/rv64imc: either no FPU at all, or single-
 #                       precision only)
 ifeq ($(ARCH),armv7emdp)
 MP_BCLIBC_PRECISION ?= double
-else ifeq ($(ARCH),$(filter $(ARCH),x64 x86 aarch64))
+else ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
 MP_BCLIBC_PRECISION ?= double
 else
 MP_BCLIBC_PRECISION ?= single
@@ -115,7 +120,7 @@ _LIBM_DBL_FLAGS := -I$(MPY_DIR)/lib/libm_dbl \
                    -I $(SRC_DIR)/math_shadow
 
 # ── Math library selection ────────────────────────────────────────────────────
-ifeq ($(ARCH),$(filter $(ARCH),x64 x86 aarch64))
+ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
 # Host (Linux): glibc libm.a uses IFUNC internals that can't be linked in a natmod.
 # GCC -O2 merges sin()+cos() → sincos() (GNU ext) → math_shim.c provides it.
 ifeq ($(MP_BCLIBC_PRECISION),single)
