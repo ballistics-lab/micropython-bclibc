@@ -23,7 +23,14 @@ on:
         default: "v1.28.0"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Literal "natmod-" prefix, not ${{ github.workflow }} -- when this workflow
+  # runs as a reusable workflow_call (from release.yml), github.workflow
+  # resolves to the CALLER's name ("release"), not this file's own. With the
+  # dynamic form, that collided with release.yml's own concurrency group
+  # (same "release-<ref>" string) and release.yml's cancel-in-progress: false
+  # meant this workflow_call could never even start (0 jobs, immediate
+  # failure) -- confirmed by a real run of release.yml.
+  group: natmod-${{ github.ref }}
   cancel-in-progress: true
 
 env:

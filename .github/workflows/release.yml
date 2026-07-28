@@ -18,7 +18,11 @@ on:
       - "v*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Literal "release-" prefix, not ${{ github.workflow }} -- kept consistent
+  # with natmod.yml's own group (see its comment): avoids the same class of
+  # caller/callee collision if this workflow ever gets called from another
+  # one too.
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
