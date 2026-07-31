@@ -223,11 +223,78 @@ jobs:
             "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
             tests/
 
-  # armv6m (RP2040) runtime test is not possible via QEMU: the MICROBIT board
-  # firmware does not support loading native .mpy for Cortex-M0, and no other
-  # QEMU ARM board emulates armv6m native modules. The build job above already
-  # verifies that the armv6m .mpy is correctly generated; hardware testing on
-  # actual RP2040 hardware is outside the scope of this CI.
+  # ── armv6m (RP2040): runtime test via the rp2040py emulator ────────────────
+  # Not possible via QEMU (the MICROBIT board firmware doesn't support loading
+  # native .mpy for Cortex-M0, and no other QEMU ARM board emulates armv6m
+  # native modules) - the `test` job's QEMU leg above only covers armv7m. A
+  # real RP2040 emulator sidesteps that entirely.
+  #
+  # Unlike usermod.yml's rp2040 job, the natmod .mpy here can't be pushed
+  # straight over the raw-REPL protocol the way a plain .py source file can -
+  # it's compiled bytecode, not text - so it has to be loaded from a mounted
+  # littlefs filesystem instead, same as on real hardware. Only
+  # tests/test_bclibc.py (still plain source) goes over raw-REPL.
+  # mklittlefs's first file always becomes main.py, so a throwaway
+  # placeholder eats that slot; its content doesn't matter because
+  # MicroPythonDevice always interrupts an in-progress main.py auto-run
+  # before running anything pushed over raw-REPL (confirmed against a real
+  # image - the placeholder still gets a harmless one-liner rather than
+  # relying on that timing).
+  test-armv6m:
+    name: test (armv6m / rp2040py)
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-armv6m
+          path: natmod/build/
+
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b3
+        with:
+          version: "0.1.0b3"
+
+      - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
+        run: |
+          echo "# placeholder, interrupted before it can run" > _mklittlefs_placeholder.py
+          rp2040py mklittlefs littlefs.img \
+            _mklittlefs_placeholder.py \
+            natmod/build/armv6m_sp/tiny_bclibc.mpy
+
+      - name: Run tests via rp2040py emulator
+        # See usermod.yml's rp2040 job for why "FAILED" is grepped from the
+        # output instead of relying on rp2040py's own exit code: MicroPython's
+        # raw REPL silently swallows an uncaught SystemExit (test_bclibc.py's
+        # own failure signal), with no traceback and no nonzero exit code.
+        #
+        # --image "$MPY_TAG" must resolve to the *same* firmware build the
+        # .mpy above was compiled against (bytecode/mpy-cross ABI has to
+        # match) - rp2040py resolves known tags to the right dated
+        # micropython.org filename itself (mp_retrieve.py), but only for
+        # tags already in its table. Bumping this workflow's default mpy_tag
+        # ahead of a corresponding rp2040py release fails loudly here
+        # ("Could not find micropython image") rather than silently, but
+        # still needs rp2040py's own table updated to actually pass again.
+        run: |
+          set -o pipefail
+          timeout 120 rp2040py micropython \
+            --image "${{ env.MPY_TAG }}" \
+            --littlefs littlefs.img \
+            tests/test_bclibc.py 2>&1 | tee test_bclibc.log
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error::rp2040py micropython exited with status $status"
+            exit "$status"
+          fi
+          if grep -q "FAILED" test_bclibc.log; then
+            echo "::error::test_bclibc reported failures"
+            exit 1
+          fi
 
   # xtensa/xtensawin (esp8266/esp32): same situation as armv6m above -- the
   # build job verifies the .mpy links cleanly, but there's no QEMU-equivalent
