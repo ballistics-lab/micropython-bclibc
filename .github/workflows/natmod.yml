@@ -263,6 +263,7 @@ jobs:
       - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b4
         with:
           version: "0.1.0b4"
+          python_version: "cpython-3.14.6"
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
