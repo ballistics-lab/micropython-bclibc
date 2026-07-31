@@ -255,15 +255,14 @@ jobs:
           name: tiny-bclibc-armv6m
           path: natmod/build/
 
-      # Pinned to a branch, not the v0.1.0b3 tag - see usermod.yml's rp2040 job for why. This job
-      # specifically also needs a second fix from that same branch: v0.1.0b3's `mklittlefs`
-      # aborts (SIGABRT) under PyPy after writing the image, because littlefs-python's C objects
-      # get finalized out of order during PyPy's interpreter shutdown - not reproducible under
-      # CPython (see rp2040py's docs/PORTING.md for the full writeup). That fix isn't pushed to
-      # this branch yet either, so this job still fails until it lands.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@update/mk-mklittlefs
+      # See usermod.yml's rp2040 job for the action.yml --python fix in v0.1.0b4. This job also
+      # specifically needs v0.1.0b4's second fix: v0.1.0b3's `mklittlefs` aborts (SIGABRT) under
+      # PyPy after writing the image, because littlefs-python's C objects get finalized out of
+      # order during PyPy's interpreter shutdown - not reproducible under CPython (see rp2040py's
+      # docs/PORTING.md for the full writeup).
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b4
         with:
-          version: "0.1.0b3"
+          version: "0.1.0b4"
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
