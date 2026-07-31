@@ -323,16 +323,14 @@ jobs:
 
       # v0.1.0b3's action.yml had a real bug (passed the *rp2040py package* version to
       # `uv tool install --python`, not an actual interpreter spec) - fixed in v0.1.0b4.
-      # `version` pins the installed rp2040py PyPI package itself, separately from this ref.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b4
+      # v0.1.0b5 fixes a second, more serious one: raw-REPL uploads over ~512 bytes (like
+      # tests/test_bclibc.py below, ~13KB) used to hang the device forever - see
+      # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
+      # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
+      # package itself, separately from this ref.
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b5
         with:
-          version: "0.1.0b4"
-
-      - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
-        run: |
-          echo "# placeholder, interrupted before it can run" > _mklittlefs_placeholder.py
-          rp2040py mklittlefs littlefs.img \
-            tests/test_bclibc.py --main test_bclibc.py
+          version: "0.1.0b5"
 
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
@@ -349,8 +347,9 @@ jobs:
         # than the device's raw-REPL exit status.
         run: |
           set -o pipefail
-          timeout 10m rp2040py micropython \
-            --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" 2>&1 | tee test_bclibc.log
+          timeout 120 rp2040py micropython \
+            --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" \
+            tests/test_bclibc.py 2>&1 | tee test_bclibc.log
           status=$?
           if [ "$status" -ne 0 ]; then
             echo "::error::rp2040py micropython exited with status $status"
