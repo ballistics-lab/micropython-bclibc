@@ -263,7 +263,6 @@ jobs:
       - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b4
         with:
           version: "0.1.0b4"
-          python_version: "cpython-3.14.6"
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
@@ -271,6 +270,7 @@ jobs:
           rp2040py mklittlefs littlefs.img \
             _mklittlefs_placeholder.py \
             natmod/build/armv6m_sp/tiny_bclibc.mpy
+            tests/test_bclibc.py --main test_bclibc.py
 
       - name: Run tests via rp2040py emulator
         # See usermod.yml's rp2040 job for why "FAILED" is grepped from the
@@ -290,8 +290,7 @@ jobs:
           set -o pipefail
           timeout 10m rp2040py micropython \
             --image "${{ env.MPY_TAG }}" \
-            --littlefs littlefs.img \
-            tests/test_bclibc.py 2>&1 | tee test_bclibc.log
+            --littlefs littlefs.img 2>&1 | tee test_bclibc.log
           status=$?
           if [ "$status" -ne 0 ]; then
             echo "::error::rp2040py micropython exited with status $status"

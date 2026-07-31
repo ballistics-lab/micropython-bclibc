@@ -327,7 +327,6 @@ jobs:
       - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b4
         with:
           version: "0.1.0b4"
-          python_version: "cpython-3.14.6"
 
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
