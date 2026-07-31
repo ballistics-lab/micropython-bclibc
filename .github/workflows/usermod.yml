@@ -321,7 +321,12 @@ jobs:
             USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py"
 
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b3
+      # Pinned to a branch, not the v0.1.0b3 tag: that release predates the composite action's
+      # own --python (interpreter) input fix - v0.1.0b3's action.yml passed the *rp2040py package*
+      # version to `uv tool install --python`, not an actual interpreter spec. Move this back to a
+      # tagged release once one ships with that fix. `version` still pins the installed rp2040py
+      # PyPI package itself, separately from this ref.
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@update/mk-mklittlefs
         with:
           version: "0.1.0b3"
 
