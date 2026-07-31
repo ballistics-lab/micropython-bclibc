@@ -328,6 +328,12 @@ jobs:
         with:
           version: "0.1.0b4"
 
+      - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
+        run: |
+          echo "# placeholder, interrupted before it can run" > _mklittlefs_placeholder.py
+          rp2040py mklittlefs littlefs.img \
+            tests/test_bclibc.py --main test_bclibc.py
+
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
         # over the raw-REPL protocol from the host and run in place, same as
@@ -344,8 +350,7 @@ jobs:
         run: |
           set -o pipefail
           timeout 10m rp2040py micropython \
-            --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" \
-            tests/test_bclibc.py 2>&1 | tee test_bclibc.log
+            --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" 2>&1 | tee test_bclibc.log
           status=$?
           if [ "$status" -ne 0 ]; then
             echo "::error::rp2040py micropython exited with status $status"
