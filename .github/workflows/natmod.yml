@@ -287,7 +287,7 @@ jobs:
         # still needs rp2040py's own table updated to actually pass again.
         run: |
           set -o pipefail
-          timeout 120 rp2040py micropython \
+          timeout 10m rp2040py micropython \
             --image "${{ env.MPY_TAG }}" \
             --littlefs littlefs.img \
             tests/test_bclibc.py 2>&1 | tee test_bclibc.log

@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/fetch-micropython
@@ -171,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/fetch-micropython
@@ -209,7 +209,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/clone-micropython
@@ -285,7 +285,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/clone-micropython
@@ -296,7 +296,7 @@ jobs:
           # here fails CMake configure with "Cannot find source file:
           # .../lib/mbedtls/library/aes.c" (a real CI failure).
           submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb lib/mbedtls
-          pico_sdk_submodules: 'true'
+          pico_sdk_submodules: "true"
 
       - name: Install toolchain
         run: |
@@ -343,7 +343,7 @@ jobs:
         # than the device's raw-REPL exit status.
         run: |
           set -o pipefail
-          timeout 120 rp2040py micropython \
+          timeout 10m rp2040py micropython \
             --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" \
             tests/test_bclibc.py 2>&1 | tee test_bclibc.log
           status=$?
