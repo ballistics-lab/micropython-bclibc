@@ -328,9 +328,9 @@ jobs:
       # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
       # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
       # package itself, separately from this ref.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b5
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b6
         with:
-          version: "0.1.0b5"
+          version: "0.1.0b6"
 
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
