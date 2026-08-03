@@ -101,13 +101,23 @@ jobs:
 
       - name: Install esp-idf (xtensawin toolchain)
         if: matrix.toolchain == 'esp-idf'
-        # Same recipe as a7p's own natmod job (and MicroPython's own
-        # ci_esp32_idf_setup).
+        # Unlike a7p's own natmod job (and MicroPython's own
+        # ci_esp32_idf_setup, tools/ci.sh), deliberately NOT running
+        # `git submodule update --init --recursive` here. Those recipes
+        # need it because they build the actual esp32 port against
+        # esp-idf's own components (bt/mbedtls/lwip/openthread/...) --
+        # this repo only ever uses esp-idf to obtain the
+        # xtensa-esp32s3-elf- toolchain that install.sh downloads
+        # separately from GitHub releases; nothing here touches IDF_PATH
+        # or any esp-idf header/component. The submodule step alone was
+        # ~3.5 of this step's ~6 minutes for zero benefit (confirmed via
+        # a real CI run's timestamps) -- esp-idf's own tools/tools.json,
+        # which install.sh reads, is a plain tracked file, not inside a
+        # submodule.
         env:
           IDF_VER: v5.4
         run: |
           git clone --depth 1 --branch $IDF_VER https://github.com/espressif/esp-idf.git
-          git -C esp-idf submodule update --init --recursive --filter=tree:0
           ./esp-idf/install.sh
           source esp-idf/export.sh
           echo "$PATH" | tr ':' '\n' | grep -i esp-idf >> "$GITHUB_PATH" || true
