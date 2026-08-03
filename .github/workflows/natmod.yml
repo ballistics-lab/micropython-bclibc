@@ -81,7 +81,14 @@ jobs:
 
       - name: Install cross-compiler
         if: matrix.apt != ''
-        run: sudo apt-get install -y ${{ matrix.apt }}
+        # apt-get update first -- the runner image's baked-in package index
+        # can already be stale by the time a job runs, pointing at a
+        # glibc/gcc version the mirror has since superseded (404 Not Found
+        # on install). Confirmed by a real CI failure on the x86 leg
+        # (libc6-dev-i386/libc6-x32/libc6-dev-x32 2.39-0ubuntu8.7, 404).
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ${{ matrix.apt }}
 
       - name: Install xtensa (esp8266) toolchain
         if: matrix.toolchain == 'xtensa-lx106'
@@ -173,7 +180,12 @@ jobs:
 
       - name: Install micropython unix build deps
         if: matrix.kind == 'unix'
-        run: sudo apt-get install -y libffi-dev pkg-config
+        # apt-get update first -- see the build job's "Install cross-compiler"
+        # step for why (stale baked-in runner package index, confirmed by
+        # repeated real CI 404s, not a one-off mirror blip).
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libffi-dev pkg-config
 
       - name: Install 32-bit build deps
         if: matrix.kind == 'unix32'
@@ -184,7 +196,11 @@ jobs:
 
       - name: Install QEMU toolchain
         if: matrix.kind == 'qemu'
+        # apt-get update first -- see the build job's "Install cross-compiler"
+        # step for why (stale baked-in runner package index, confirmed by
+        # repeated real CI 404s, not a one-off mirror blip).
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
           pip install pyelftools ar pyserial
 

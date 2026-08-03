@@ -88,7 +88,15 @@ jobs:
         # ./autogen.sh rule handles the rest -- no manual libtoolize/
         # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
         # build our own static libffi.a instead of linking the system's.
-        run: sudo apt-get install -y ${{ matrix.apt }}
+        #
+        # apt-get update first -- the runner image's baked-in package index
+        # can already be stale by the time a job runs, pointing at a
+        # package version the mirror has since superseded (404 Not Found on
+        # install). Confirmed by repeated real CI failures on natmod.yml's
+        # x86 leg, not a one-off mirror blip.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ${{ matrix.apt }}
 
       - name: Install qemu-user-static
         # No /usr/gnemul sysroot symlink needed -- the binary is fully
@@ -97,6 +105,7 @@ jobs:
         # for aarch64 (native), hence the matrix.qemu_bin guard.
         if: matrix.qemu_bin != ''
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y qemu-user-static
           ${{ matrix.qemu_bin }} --version
 
@@ -179,7 +188,10 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install toolchain + QEMU
+        # apt-get update first -- see build-test-unix-static's "Install
+        # build deps" step for why.
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
           pip install pyserial
@@ -299,7 +311,10 @@ jobs:
           pico_sdk_submodules: "true"
 
       - name: Install toolchain
+        # apt-get update first -- see build-test-unix-static's "Install
+        # build deps" step for why.
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y \
             cmake \
             gcc-arm-none-eabi \
