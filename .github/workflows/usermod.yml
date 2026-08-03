@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/fetch-micropython
@@ -88,7 +88,15 @@ jobs:
         # ./autogen.sh rule handles the rest -- no manual libtoolize/
         # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
         # build our own static libffi.a instead of linking the system's.
-        run: sudo apt-get install -y ${{ matrix.apt }}
+        #
+        # apt-get update first -- the runner image's baked-in package index
+        # can already be stale by the time a job runs, pointing at a
+        # package version the mirror has since superseded (404 Not Found on
+        # install). Confirmed by repeated real CI failures on natmod.yml's
+        # x86 leg, not a one-off mirror blip.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ${{ matrix.apt }}
 
       - name: Install qemu-user-static
         # No /usr/gnemul sysroot symlink needed -- the binary is fully
@@ -97,6 +105,7 @@ jobs:
         # for aarch64 (native), hence the matrix.qemu_bin guard.
         if: matrix.qemu_bin != ''
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y qemu-user-static
           ${{ matrix.qemu_bin }} --version
 
@@ -171,7 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/fetch-micropython
@@ -179,7 +188,10 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install toolchain + QEMU
+        # apt-get update first -- see build-test-unix-static's "Install
+        # build deps" step for why.
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
           pip install pyserial
@@ -209,7 +221,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/clone-micropython
@@ -267,19 +279,25 @@ jobs:
             usermod/build/wasm/micropython.wasm
           if-no-files-found: error
 
-  # ── RP2040: frozen-tests firmware, tested via rp2040js emulator ─────────────
+  # ── RP2040: usermod firmware, tested via the rp2040py emulator ──────────────
   # A genuine functional execution test, distinct from the plain rp2040
   # firmware build natmod's own armv6m coverage already makes redundant.
   # CMake port -- USER_C_MODULES points at usermod/micropython.cmake
   # directly, not the repo root (CMake's USER_C_MODULES takes a file, not a
   # directory to glob).
+  #
+  # Builds the *release* manifest (manifest.py, just tiny_bclibc.py frozen
+  # in) rather than a separate test-only firmware: tests/test_bclibc.py only
+  # needs tiny_bclibc importable, so rp2040py's `micropython <file>` mode
+  # pushes and runs it straight from the host over the raw-REPL protocol --
+  # no FROZEN_MANIFEST=manifest_test.py / second firmware build needed.
   build-test-rp2040:
     name: build + test (rp2040)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: 'true'
+          submodules: "true"
           fetch-depth: 0
 
       - uses: ./.github/actions/clone-micropython
@@ -290,10 +308,13 @@ jobs:
           # here fails CMake configure with "Cannot find source file:
           # .../lib/mbedtls/library/aes.c" (a real CI failure).
           submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb lib/mbedtls
-          pico_sdk_submodules: 'true'
+          pico_sdk_submodules: "true"
 
       - name: Install toolchain
+        # apt-get update first -- see build-test-unix-static's "Install
+        # build deps" step for why.
         run: |
+          sudo apt-get update -q
           sudo apt-get install -y \
             cmake \
             gcc-arm-none-eabi \
@@ -303,40 +324,59 @@ jobs:
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
-      - name: Build RP2040 test firmware (frozen tests, single precision)
+      - name: Build RP2040 firmware (single precision)
         # BUILD is a local shell var, not a job env: -- see the aarch64
         # job's identical reasoning (leaks into the "Build mpy-cross" step
         # above otherwise, via py/mkenv.mk's BUILD ?= build).
         run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/rp2040_test"
+          BUILD="$GITHUB_WORKSPACE/usermod/build/rp2040"
           make -C "$MPY_DIR/ports/rp2" \
             BUILD="$BUILD" \
             BOARD=RPI_PICO \
             USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest_test.py"
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py"
 
-      - name: Get node
-        uses: actions/setup-node@v7
+      # v0.1.0b3's action.yml had a real bug (passed the *rp2040py package* version to
+      # `uv tool install --python`, not an actual interpreter spec) - fixed in v0.1.0b4.
+      # v0.1.0b5 fixes a second, more serious one: raw-REPL uploads over ~512 bytes (like
+      # tests/test_bclibc.py below, ~13KB) used to hang the device forever - see
+      # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
+      # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
+      # package itself, separately from this ref.
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b6
         with:
-          node-version: "24.x"
+          version: "0.1.0b6"
 
-      - name: Get and patch rp2040js emulator
+      - name: Test firmware via rp2040py emulator
+        # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
+        # over the raw-REPL protocol from the host and run in place, same as
+        # `mpremote run`. `micropython -c/-m/<file>` runs non-interactively
+        # and exits with the device's own exception status (0/1), but
+        # MicroPython's raw REPL swallows an uncaught SystemExit silently
+        # (no traceback, no visible failure) -- confirmed against a real
+        # image, not assumed -- so test_bclibc.py's own `sys.exit(N)` on
+        # failure never surfaces as a nonzero rp2040py exit code. It does
+        # print "N test(s) FAILED" first though, so that's what's actually
+        # checked below, the same way the previous rp2040js-based harness
+        # keyed off the text appearing in the captured serial output rather
+        # than the device's raw-REPL exit status.
         run: |
-          git clone https://github.com/wokwi/rp2040js
-          cd rp2040js
-          npm install
-          cp ../usermod/ci/micropython-run.ts demo/micropython-run.ts
-
-      - name: Test firmware via rp2040js emulator
-        working-directory: rp2040js
-        run: |
-          npx tsx demo/micropython-run.ts \
-            --image "$GITHUB_WORKSPACE/usermod/build/rp2040_test/firmware.uf2" \
-            --exec "import test_bclibc" \
-            --timeout 120
+          set -o pipefail
+          timeout 120 rp2040py micropython \
+            --image "$GITHUB_WORKSPACE/usermod/build/rp2040/firmware.uf2" \
+            tests/test_bclibc.py 2>&1 | tee test_bclibc.log
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error::rp2040py micropython exited with status $status"
+            exit "$status"
+          fi
+          if grep -q "FAILED" test_bclibc.log; then
+            echo "::error::test_bclibc reported failures"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tiny-bclibc-usermod-rp2040-test
-          path: usermod/build/rp2040_test/firmware.uf2
+          name: tiny-bclibc-usermod-rp2040
+          path: usermod/build/rp2040/firmware.uf2
           if-no-files-found: error

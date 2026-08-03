@@ -40,10 +40,8 @@ and all flag / index constants.
 ├── usermod/                    # Usermod (baked-into-firmware) build
 │   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES (Make ports)
 │   ├── micropython.cmake       # Picked up by CMake via USER_C_MODULES (RP2040 / pico-sdk)
-│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release)
-│   ├── manifest_test.py        # CI-only: manifest.py + test_bclibc.py (rp2040test)
-│   ├── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
-│   └── ci/micropython-run.ts   # rp2040js emulator test runner
+│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release + CI)
+│   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │                               # No usermod/Makefile — build directly against the
 │                               # port's own Makefile/CMakeLists, same as a7p's usermod.
 │
@@ -300,25 +298,24 @@ vfs.VfsLfs2.mkfs(bdev)
 vfs.mount(bdev, '/')
 ```
 
-### RP2040 (rp2040js emulator, no board needed)
+### RP2040 (rp2040py emulator, no board needed)
 
-Runs `test_bclibc.py` on the firmware in the
-[wokwi/rp2040js](https://github.com/wokwi/rp2040js) JavaScript emulator. Uses
-`manifest_test.py` (manifest.py + test_bclibc.py) instead of the release manifest, so
-release builds stay clean of test code:
+Runs `test_bclibc.py` on the release firmware in the
+[o-murphy/rp2040py](https://github.com/o-murphy/rp2040py) Python emulator. `test_bclibc.py`
+only needs `tiny_bclibc` importable (already frozen in by the release `manifest.py`), so it's
+pushed straight from the host and run over the raw-REPL protocol - no separate test
+manifest/firmware build needed:
 
 ```bash
-# Prerequisites: Node.js ≥ 18, cmake, gcc-arm-none-eabi
+# Prerequisites: cmake, gcc-arm-none-eabi
 make -C /path/to/micropython-1.28.0/ports/rp2 BOARD=RPI_PICO \
     USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
-    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest_test.py
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
-git clone https://github.com/wokwi/rp2040js && cd rp2040js && npm install
-cp /path/to/micropython-bclibc/usermod/ci/micropython-run.ts demo/micropython-run.ts
-npx tsx demo/micropython-run.ts \
+pip install rp2040py[fs]   # or: uv tool install rp2040py[fs]
+rp2040py micropython \
     --image /path/to/micropython-1.28.0/ports/rp2/build-RPI_PICO/firmware.uf2 \
-    --exec "import test_bclibc" \
-    --timeout 120
+    tests/test_bclibc.py
 ```
 
 ### QEMU Cortex-M3 (armv7m, build + run test)
