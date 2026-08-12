@@ -343,7 +343,7 @@ jobs:
       # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
       # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
       # package itself, separately from this ref.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b6
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0
         with:
           version: "0.1.0b6"
 
