@@ -288,9 +288,9 @@ jobs:
       # writing the image, because littlefs-python's C objects get finalized out of order during
       # PyPy's interpreter shutdown - not reproducible under CPython (see rp2040py's docs/PORTING.md
       # for the full writeup).
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0b6
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.1.0
         with:
-          version: "0.1.0b6"
+          version: "0.1.0"
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
