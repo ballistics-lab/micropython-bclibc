@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+#### `usermod/patches/micropython/ports/webassembly/` — dead patches, never applied
+
+Three patches (`0001-main.c-fix-external-call-depth-unused`,
+`0002-library.js-fix-interrupt-char-abi`, `0003-api.js-fix-runpython-async`) were
+added alongside the first `usermod` wasm target, back when it still built the
+default `standard` variant. Nothing ever applied them: there is no `git apply` /
+`patch -p` step in `usermod.yml`, `natmod.yml` or `release.yml`, and the wasm job
+switched to `VARIANT=pyscript` — which doesn't use `-s ASYNCIFY` and so hits none
+of the three bugs. Two of them are moot upstream anyway: `main.c`'s
+`external_call_depth` is now guarded by `#if MICROPY_GC_SPLIT_HEAP_AUTO`, and
+`library.js`'s `mp_hal_get_interrupt_char` ccall already passes `[], []` on master.
+Only the `api.js` `runPython` async fix is still open upstream, and it only matters
+for `VARIANT=standard`, which this project does not build — bclibc is pure
+computation, no `await`/REPL/stack-switching, so ASYNCIFY buys it nothing but a
+bigger, slower `.wasm`. The rationale for `pyscript` and the upstream tracking link
+([micropython/micropython#19380](https://github.com/micropython/micropython/issues/19380))
+stay documented in `README.md` and in the `build-test-wasm` job comment.
+
 ## [1.2.1] - 2026-07-28
 
 ### Fixed
