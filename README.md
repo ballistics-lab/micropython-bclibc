@@ -232,8 +232,9 @@ Expected output ends with `=== done ===` and all lines read `PASS`.
 available as a built-in. Use this approach when:
 
 - natmod can't reach your target at all (aarch64, armhf, mipsel, wasm — no such
-  `dynruntime.mk` ARCH); for everything else (x64, x86, RP2040 on stock firmware, …)
-  prefer natmod above — it needs no firmware rebuild
+  `dynruntime.mk` ARCH; Windows — the port disables native code emit entirely, see
+  below); for everything else (x64, x86, RP2040 on stock firmware, …) prefer natmod
+  above — it needs no firmware rebuild
 - you need a fully static / standalone unix binary for deployment (aarch64/armhf/mipsel)
 - you need a genuine build+run test under an emulator (QEMU Cortex-M3, rp2040js)
 
@@ -354,6 +355,40 @@ make -C /path/to/micropython-1.28.0/ports/webassembly VARIANT=pyscript \
 node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
+### Windows (x86 / x64 / arm64)
+
+natmod is not an option on this port at all, whatever ARCH the `.mpy` was built for:
+`ports/windows/mpconfigport.h` sets `MICROPY_EMIT_X64 (0)`, and `py/persistentcode.c`
+gates `.mpy` native-code loading on `MICROPY_EMIT_MACHINE_CODE` — so there is nothing
+for a native module to load into. usermod is how `tiny_bclibc` runs on Windows.
+
+Built with MSYS2, the same way upstream MicroPython's own `build-mingw` CI job does:
+MINGW32 for x86, MINGW64 for x64, CLANGARM64 for arm64. Desktop targets, so double
+precision. CI builds and runs all three natively — x86/x64 on an x64 runner (WOW64
+runs the 32-bit exe with no emulation layer), arm64 on `windows-11-arm`.
+
+```bash
+# In an MSYS2 shell (MINGW64 here), with: make git python3 mingw-w64-x86_64-gcc
+make -C /path/to/micropython-1.28.0/mpy-cross
+make -C /path/to/micropython-1.28.0/ports/windows \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
+    MP_BCLIBC_PRECISION=double
+
+build-standard/micropython.exe /path/to/micropython-bclibc/tests/test_bclibc.py
+```
+
+Under CLANGARM64 four extra overrides are needed, all for MicroPython's own build
+system rather than for anything in this repo — `LDFLAGS_ARCH` (lld rejects `--cref`),
+`COMPILER_TARGET` (the gcc-compat wrapper's `-dumpmachine` doesn't say "mingw", which
+both drops `fmode.c` from mpy-cross and drops the `.exe` suffix), `STRIP=""` /
+`SIZE="true"` (that toolchain ships neither binary), plus `CFLAGS_EXTRA=-Wno-error`
+because `py/binary.c` and `shared/runtime/gchelper_generic.c` don't survive the port's
+gcc-tuned `-Werror` set under clang. See `.github/workflows/usermod.yml` for the full
+reasoning on each. This repo's own sources are clean under that warning set — they are
+compiled with `-Wall -Wpointer-arith -Wdouble-promotion -Werror` on the x86/x64 rows,
+which keep it.
+
 ### natmod vs usermod comparison
 
 |                          | natmod                          | usermod                                  |
@@ -364,6 +399,7 @@ node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclib
 | Memory at import         | Filesystem read + bytecode load | Instant (already in flash)               |
 | RP2040 support           | armv6m `.mpy`                   | cmake `USER_C_MODULES`                   |
 | Unix port support        | Yes                             | Yes (also produces a micropython binary) |
+| Windows port support     | No (port disables native emit)  | Yes (x86 / x64 / arm64, MSYS2)           |
 
 ---
 

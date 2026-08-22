@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### `usermod.yml` — Windows x86 / x64 / arm64, built and tested natively
+
+A new `build-test-windows` matrix job builds `ports/windows` with
+`USER_C_MODULES` under MSYS2 (MINGW32 for x86, MINGW64 for x64, CLANGARM64 for
+arm64) and runs `tests/test_bclibc.py` on the machine that built it — x86 and x64
+on `windows-latest` (WOW64 runs the 32-bit exe with no emulation layer), arm64 on
+`windows-11-arm`. This is coverage `natmod.yml` cannot provide even in principle:
+`ports/windows/mpconfigport.h` sets `MICROPY_EMIT_X64 (0)` and
+`py/persistentcode.c` gates `.mpy` native-code loading on
+`MICROPY_EMIT_MACHINE_CODE`, so a natmod `.mpy` has nothing to load into on this
+port whatever ARCH it was built for.
+
+The recipe (and in particular the four CLANGARM64 overrides — `LDFLAGS_ARCH`
+because lld rejects `--cref`, `COMPILER_TARGET` because the gcc-compat wrapper's
+`-dumpmachine` doesn't contain "mingw", `STRIP=""`/`SIZE="true"` because that
+toolchain ships neither binary) is transplanted from `o-murphy/micropython-wasm3`
+and `o-murphy/a7p`, which run this exact combination green. The arm64 row also
+passes `CFLAGS_EXTRA=-Wno-error`, because MicroPython's *own* `py/binary.c` and
+`shared/runtime/gchelper_generic.c` do not survive the port's gcc-tuned `-Werror`
+warning set under clang. Nothing of this repo's is exempted by that: the x86/x64
+rows keep `-Werror`, and `src/tiny_bclibc_mp.c` plus the `bclibc` sources were
+separately confirmed to compile clean under the port's exact set
+(`-Wall -Wpointer-arith -Wdouble-promotion -Werror`, double precision).
+
+### Changed
+
+#### `natmod.yml` / `usermod.yml` — rp2040py 0.2.4 → 0.3.1
+
+`natmod.yml`'s `mklittlefs` step was failing outright on this branch: rp2040py's
+file argument only accepted `.py`/`.js` before 0.2.5, so handing it
+`natmod/build/armv6m_sp/tiny_bclibc.mpy` died with *"File must have one of the
+following extensions: .py, .js"* (exit 2). 0.2.5 added `.mpy`; 0.3.1 is the
+current release and the action's own inputs (`version`, `python_version`) are
+unchanged across the range, as are the `mklittlefs -o` and `micropython --image`
+command lines both workflows use.
+
 ### Removed
 
 #### `usermod/patches/micropython/ports/webassembly/` — dead patches, never applied

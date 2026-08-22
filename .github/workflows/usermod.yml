@@ -3,9 +3,10 @@ name: usermod
 # natmod already covers x64/x86 (host/dev) and rp2040 (armv6m, stock
 # firmware) -- see natmod.yml -- so this workflow only builds what natmod
 # categorically can't reach at all (aarch64/armhf/mipsel: no such
-# dynruntime.mk ARCH; wasm: no WASM ARCH), plus two genuine functional
-# execution tests natmod's own build-only coverage doesn't provide
-# (qemu-armv7m, rp2040-test-only).
+# dynruntime.mk ARCH; wasm: no WASM ARCH; windows: the port disables native
+# emit, so a .mpy has nothing to load into whatever ARCH it was built for),
+# plus two genuine functional execution tests natmod's own build-only
+# coverage doesn't provide (qemu-armv7m, rp2040-test-only).
 #
 # No wrapper Makefile for usermod (a7p doesn't have one for its own usermod
 # either -- see usermod/micropython.mk's own header comment) -- every build
@@ -343,9 +344,9 @@ jobs:
       # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
       # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
       # package itself, separately from this ref.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.2.5
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.3.1
         with:
-          version: "0.2.5"
+          version: "0.3.1"
 
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
@@ -379,4 +380,197 @@ jobs:
         with:
           name: tiny-bclibc-usermod-rp2040
           path: usermod/build/rp2040/firmware.uf2
+          if-no-files-found: error
+
+  # ── Windows: x86 / x64 / arm64, build + test, all native ────────────────────
+  # natmod categorically cannot reach this port: ports/windows/mpconfigport.h
+  # sets MICROPY_EMIT_X64 (0), and py/persistentcode.c gates .mpy native-code
+  # loading on MICROPY_EMIT_MACHINE_CODE -- so a natmod .mpy has nothing to
+  # load into here, whatever ARCH it was built for. usermod is the only way
+  # tiny_bclibc runs on Windows at all, which is what makes this job a
+  # coverage addition rather than a duplicate of natmod's x64/x86 legs.
+  #
+  # All three arches build *and* run on the machine that built them: x86 and
+  # x64 on windows-latest (a real x64 box -- WOW64 runs the 32-bit exe
+  # natively, no emulation), arm64 on windows-11-arm. MSYS2 supplies the
+  # toolchain in every case, the same way upstream MicroPython's own
+  # build-mingw job does (see micropython/.github/workflows/ports_windows.yml).
+  #
+  # The recipe is transplanted wholesale from o-murphy/micropython-wasm3 and
+  # o-murphy/a7p, which run this exact combination green -- including the four
+  # CLANGARM64 overrides in the mpy-cross step below, none of which were
+  # guessed here.
+  build-test-windows:
+    name: build + test (windows ${{ matrix.arch_label }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch_label: x86
+            # MSYS2's plain MINGW32 environment ships an unprefixed gcc that
+            # targets i686-w64-mingw32 directly, so no CROSS_COMPILE override
+            # is needed -- same as upstream's own build-mingw job.
+            runs_on: windows-latest
+            msystem: MINGW32
+            msys_install: mingw-w64-i686-gcc
+            cflags_extra: ""
+          - arch_label: x64
+            # Same as x86 but MINGW64 (x86_64-w64-mingw32 gcc, unprefixed).
+            runs_on: windows-latest
+            msystem: MINGW64
+            msys_install: mingw-w64-x86_64-gcc
+            cflags_extra: ""
+          - arch_label: arm64
+            # -Wno-error: ports/windows/Makefile compiles -Werror with a
+            # warning set chosen for gcc, and MicroPython's *own* sources do
+            # not survive it under clang -- py/binary.c promotes a _Float16 to
+            # float, and shared/runtime/gchelper_generic.c declares
+            # deliberately uninitialized `register const long x19 asm("x19")`
+            # and friends to capture callee-saved registers for GC root
+            # scanning. Neither is this repo's code and neither is a bug.
+            # Warnings still print; they just stop failing the build. The
+            # x86/x64 rows keep -Werror, and this repo's own sources were
+            # separately confirmed clean under the port's exact warning set
+            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror, double
+            # precision) -- so nothing of ours goes unchecked here.
+            runs_on: windows-11-arm
+            msystem: CLANGARM64
+            msys_install: mingw-w64-clang-aarch64-gcc-compat mingw-w64-clang-aarch64-clang
+            cflags_extra: "-Wno-error"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "true"
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          # python3: py/mkenv.mk hardcodes PYTHON = python3 (used at build
+          # time to generate mpversion.h/qstrdefs/frozen_content) -- not
+          # pulled in by make/git/the compiler package, so without it the
+          # build dies with "python3: No such file or directory" the moment
+          # it needs to generate anything.
+          # curl/tar/xz: the MicroPython tarball fetch below. The repo's own
+          # .github/actions/fetch-micropython can't be reused here -- it is a
+          # composite action, so its steps declare their own `shell: bash`
+          # (git-bash on this runner, which has no wget) and a caller cannot
+          # override that to `msys2 {0}`.
+          install: make git python3 curl tar xz ${{ matrix.msys_install }}
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        shell: msys2 {0}
+        # Same tarball as every other job in this workflow (via
+        # .github/actions/fetch-micropython), just fetched inline for the
+        # reason in the install: comment above. MPY_DIR is exported as
+        # MSYS2's POSIX-style path ("/d/a/..."), not $GITHUB_WORKSPACE's
+        # native "D:\a\..." -- an unquoted backslash is MSYS2 bash's own
+        # escape character and gets *consumed* on a later `make` command
+        # line ("D:\a\x" -> "D:ax"), which is a real, previously observed
+        # CI failure on this exact port, not a hypothetical.
+        run: |
+          VER="${MPY_TAG#v}"
+          curl -fsSL -o mpy.tar.xz \
+            "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz"
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$(pwd)/micropython-${VER}" >> "$GITHUB_ENV"
+
+      - name: Mark checkout safe for MSYS2 git
+        shell: msys2 {0}
+        # usermod/micropython.mk derives the version.h it generates from
+        # `git describe` in the repo root. actions/checkout registers the
+        # workspace as a safe.directory for the *runner's* git, not for the
+        # separate git inside MSYS2, which then refuses with "dubious
+        # ownership". The .mk guards that call with `|| echo v0.0.0`, so
+        # this is not fatal either way -- it just keeps the artifact's
+        # version string real instead of 0.0.0.
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Build mpy-cross
+        shell: msys2 {0}
+        # Built explicitly first, for the same reason as every other job in
+        # this workflow: py/mkenv.mk's auto-build rule for mpy-cross resets
+        # USER_C_MODULES= for that recursive make but not FROZEN_MANIFEST=,
+        # which then leaks through MAKEFLAGS.
+        #
+        # The four overrides are all CLANGARM64-specific, applied to every
+        # row only because they are harmless no-ops on MINGW32/64:
+        #
+        #   LDFLAGS_ARCH -- mpy-cross/Makefile hardcodes
+        #     "-Wl,-Map=$@.map,--cref -Wl,--gc-sections" for every non-Darwin
+        #     host. Fine for GNU ld; CLANGARM64 links via clang+lld, and lld
+        #     rejects --cref outright ("unknown argument"). The map file's
+        #     cross-reference table is diagnostic-only.
+        #   COMPILER_TARGET -- mpy-cross/Makefile decides whether to compile
+        #     in ports/windows/fmode.c (which defines set_fmode_binary(),
+        #     called unconditionally under #ifdef _WIN32 in main.c) by
+        #     grepping `$(CC) -dumpmachine` for "mingw". The CLANGARM64
+        #     gcc-compat wrapper is clang underneath and reports a triple
+        #     that doesn't contain it, so fmode.c silently drops out and the
+        #     link fails on "undefined symbol: set_fmode_binary".
+        #   STRIP="" -- py/mkenv.mk sets STRIP = $(CROSS_COMPILE)strip
+        #     unconditionally and py/mkrules.mk runs it whenever the variable
+        #     is non-empty; CLANGARM64's gcc-compat ships no
+        #     aarch64-w64-mingw32-strip. Emptying it skips the step outright
+        #     (GNU Make's ifdef treats an empty value as undefined).
+        #   SIZE="true" -- same missing binary, but that recipe line has no
+        #     ifdef guard, so an empty value would break the shell syntax
+        #     rather than skip it. `true` is a real no-op that swallows its
+        #     arguments and exits 0.
+        run: |
+          make -C "$MPY_DIR/mpy-cross" \
+            LDFLAGS_ARCH="-Wl,--gc-sections" \
+            COMPILER_TARGET="mingw-forced" \
+            STRIP="" SIZE="true" -j"$(nproc)"
+
+      - name: Build usermod (windows ${{ matrix.arch_label }})
+        shell: msys2 {0}
+        # No `make -C ports/windows submodules` step: MPY_DIR is the official
+        # release tarball, which ships every submodule's source already
+        # vendored in, and the port declares no GIT_SUBMODULES of its own
+        # anyway.
+        #
+        # FROZEN_MANIFEST is this repo's own manifest alone, *not* combined
+        # with the port's default variants/manifest.py -- exactly what the
+        # unix jobs above do. The port default is a single `require("ssl")`,
+        # which is a frozen convenience, not something tiny_bclibc or
+        # tests/test_bclibc.py touches.
+        #
+        # $(pwd), not $GITHUB_WORKSPACE, for both paths -- see the tarball
+        # step's comment for the backslash-eating failure that motivates it.
+        # STRIP/SIZE: same missing-binary reason as the mpy-cross step;
+        # ports/windows reaches the identical generic py/mkrules.mk link
+        # recipe. COMPILER_TARGET is forced here for a *different* reason
+        # than in that step: py/mkrules.mk appends the .exe suffix to PROG
+        # only when `$(CC) -dumpmachine` contains "mingw", so without it the
+        # CLANGARM64 build would emit a differently-named binary than the
+        # two gcc rows and the steps below would have to guess. It has no
+        # other effect at all -- the whole tree uses COMPILER_TARGET in
+        # exactly two places, this one and mpy-cross's fmode.c check.
+        run: |
+          BUILD="$(pwd)/usermod/build/windows-${{ matrix.arch_label }}"
+          make -C "$MPY_DIR/ports/windows" \
+            BUILD="$BUILD" \
+            COMPILER_TARGET="mingw-forced" \
+            STRIP="" SIZE="true" \
+            CFLAGS_EXTRA="${{ matrix.cflags_extra }}" \
+            USER_C_MODULES="$(pwd)" \
+            FROZEN_MANIFEST="$(pwd)/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+
+      - name: Run tests
+        shell: msys2 {0}
+        # Runs natively on the machine that built it, no emulation. The exe
+        # is a real Windows binary, so tests/test_bclibc.py's own
+        # sys.exit(_failures) surfaces as this step's exit status directly --
+        # unlike the rp2040 job, which has to grep its output because the
+        # raw REPL swallows SystemExit.
+        run: |
+          ./usermod/build/windows-${{ matrix.arch_label }}/micropython.exe tests/test_bclibc.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-windows-${{ matrix.arch_label }}
+          path: usermod/build/windows-${{ matrix.arch_label }}/micropython.exe
           if-no-files-found: error
