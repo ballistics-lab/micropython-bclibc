@@ -35,6 +35,17 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `natmod.yml` / `usermod.yml` — added a `push` trigger
+
+Both workflows now run on `push` as well as `pull_request`, with the same path
+filter and no branch restriction, so a plain `git push` to a work branch runs
+the matrix without needing an open PR or a `workflow_dispatch` (the latter
+requires `actions: write`, which not every actor pushing here has). A branch
+that is also the head of an open PR gets both runs: the concurrency group keys
+on `github.ref`, which differs between `refs/heads/<branch>` and
+`refs/pull/<n>/merge`, so the two do not cancel each other. `release.yml` is
+unchanged — it already triggers on `push` of `v*` tags.
+
 #### `natmod.yml` / `usermod.yml` — rp2040py 0.2.4 → 0.3.1
 
 `natmod.yml`'s `mklittlefs` step was failing outright on this branch: rp2040py's

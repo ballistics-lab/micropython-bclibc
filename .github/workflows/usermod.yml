@@ -21,6 +21,18 @@ name: usermod
 # ubuntu-latest.
 
 on:
+  # Same path filter as the pull_request trigger below, on any branch: this is
+  # what makes a plain `git push` to a work branch run the matrix, without
+  # needing a PR open or a workflow_dispatch (which needs actions: write, not
+  # every actor pushing here has it). A branch that is also the head of an open
+  # PR gets both runs -- the concurrency group keys on github.ref, which differs
+  # between refs/heads/<branch> and refs/pull/<n>/merge, so they do not cancel
+  # each other. That duplication is the deliberate cost of the trigger.
+  push:
+    paths:
+      - "bclibc"
+      - "usermod/**"
+      - ".github/workflows/usermod.yml"
   pull_request:
     paths:
       - "bclibc"
