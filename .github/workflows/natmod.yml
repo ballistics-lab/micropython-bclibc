@@ -352,6 +352,14 @@ jobs:
         # usermod.yml's own armhf row is where a full-featured static armhf
         # build is actually exercised.
         #
+        # LDFLAGS_EXTRA=-static is load-bearing, not a nicety. The runner is
+        # arm64: its CPU executes AArch32, but its filesystem has no armhf
+        # glibc and no /lib/ld-linux-armhf.so.3, so a dynamically linked
+        # armhf binary dies with "cannot execute: required file not found"
+        # (exit 127) -- a real failure of the first version of this job. A
+        # static link has no interpreter to find. Same reason usermod.yml's
+        # armhf row links static.
+        #
         # BUILD stays outside natmod/build/, which the artifact download below
         # unpacks into.
         run: |
@@ -359,7 +367,8 @@ jobs:
             BUILD="$GITHUB_WORKSPACE/mpy-host-${{ matrix.arch }}" \
             CROSS_COMPILE=arm-linux-gnueabihf- \
             MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
-            CFLAGS_EXTRA="${{ matrix.host_float }}" -j"$(nproc)"
+            CFLAGS_EXTRA="${{ matrix.host_float }}" \
+            LDFLAGS_EXTRA="-static" -j"$(nproc)"
 
       - uses: actions/download-artifact@v8
         with:
