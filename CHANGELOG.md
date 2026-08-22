@@ -66,6 +66,41 @@ environment — no OS, the port's own libc, real flash layout. This runs
 Cortex-M code inside a Linux process, proving the native module and its
 relocations are correct on real ARM silicon, and nothing beyond that.
 
+#### `usermod.yml` — x64/x86 rows, and an ESP32 build
+
+`build-test-unix` gained `x64` and `x86` rows. Both duplicate ARCHes
+`natmod.yml` already builds and runs, which this workflow's header explicitly
+calls out as not its job — they are here anyway because the two build modes
+fail in different ways. A usermod links against the port's own libc and its
+globals live in firmware `.bss`; a natmod links against dynruntime and carries
+its own. "x64 natmod passes" says nothing about the usermod path on the same
+machine, and these are the only rows here where a failure is unambiguously this
+repo's code rather than a toolchain or an emulator. `x86` uses
+`MICROPY_FORCE_32BIT=1` with `gcc-multilib` and `libffi-dev:i386`, the same
+recipe `natmod.yml`'s own x86 leg uses.
+
+A new `build-esp32` job builds `ports/esp32` (`BOARD=ESP32_GENERIC`) with
+`USER_C_MODULES` under ESP-IDF v5.5.1 — the version `ports/esp32/README.md`
+names as recommended for this MicroPython release. **Build-only**, and not as a
+shortcut: there is no esp32 emulator to hand a firmware image to the way
+rp2040py takes a `.uf2`. It proves `tiny_bclibc` compiles and links into a real
+esp32 firmware under a compiler, libc and config unlike anything else here; it
+proves nothing runs.
+
+It is not a duplicate of `natmod.yml`'s `xtensawin` leg despite the shared ISA.
+That one builds a `.mpy` against dynruntime and only borrows the compiler out of
+esp-idf, deliberately skipping IDF's submodules. A usermod is compiled into the
+firmware, so this job clones esp-idf `--recursive`.
+
+Written CI-first rather than verified locally, which is unusual here and worth
+recording: `dl.espressif.com` and `components-file.espressif.com` are both
+refused by the development environment's egress policy, so neither the toolchain
+nor the IDF managed components (`espressif/mdns` always, `espressif/lan867x` for
+target esp32) can be fetched there. What is known to work on the runner is
+esp-idf's own `install.sh` — `natmod.yml`'s xtensawin leg has been doing exactly
+that, green. The open question this job settles is whether the
+managed-component fetch and the full port build follow.
+
 #### `usermod.yml` — the aarch64 row is a plain dynamic build again
 
 `build-test-unix-static` is now `build-test-unix`, and `MICROPY_STANDALONE=1

@@ -107,6 +107,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x64/x86 duplicate ARCHes natmod.yml already builds *and* runs,
+          # which is why this workflow's header calls itself the
+          # natmod-can't-reach-it half. They are here anyway, deliberately:
+          # the two build modes fail in genuinely different ways -- a usermod
+          # links against the port's own libc and its globals live in
+          # firmware .bss, a natmod links against dynruntime and carries its
+          # own -- so "x64 natmod passes" says nothing about the usermod
+          # path on the same machine. Cheap rows, and the only ones here
+          # where a failure is unambiguously this repo's code rather than a
+          # toolchain or an emulator.
+          - arch: x64
+            runs_on: ubuntu-latest
+            cross_compile: ""
+            link_label: ""
+            apt: libffi-dev pkg-config
+          - arch: x86
+            runs_on: ubuntu-latest
+            cross_compile: ""
+            link_label: ", 32-bit"
+            # Not a cross-compiler: MICROPY_FORCE_32BIT=1 makes the unix
+            # Makefile add -m32 to the host gcc, which needs gcc-multilib and
+            # the i386 libffi. Same recipe natmod.yml's own x86 test leg uses,
+            # including the dpkg --add-architecture step below.
+            force_32bit: "1"
+            apt: gcc-multilib libffi-dev:i386 pkg-config
           - arch: aarch64
             runs_on: ubuntu-24.04-arm
             cross_compile: ""
@@ -154,6 +179,9 @@ jobs:
         # install). Confirmed by repeated real CI failures on natmod.yml's
         # x86 leg, not a one-off mirror blip.
         run: |
+          if [ "${{ matrix.force_32bit }}" = "1" ]; then
+            sudo dpkg --add-architecture i386
+          fi
           sudo apt-get update -q
           sudo apt-get install -y ${{ matrix.apt }}
 
@@ -219,6 +247,9 @@ jobs:
             LINK_OPTS='MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static'
           else
             LINK_OPTS=''
+          fi
+          if [ "${{ matrix.force_32bit }}" = "1" ]; then
+            LINK_OPTS="$LINK_OPTS MICROPY_FORCE_32BIT=1"
           fi
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
@@ -645,4 +676,89 @@ jobs:
         with:
           name: tiny-bclibc-usermod-windows-${{ matrix.arch_label }}
           path: usermod/build/windows-${{ matrix.arch_label }}/micropython.exe
+          if-no-files-found: error
+
+  # ── ESP32: usermod firmware, build-only ─────────────────────────────────────
+  # Build-only, and that is not a shortcut -- there is no esp32 emulator to
+  # hand a firmware image to the way rp2040py takes an RP2040 .uf2 or
+  # qemu-system-arm takes a Cortex-M3 .elf. What this job proves is that
+  # tiny_bclibc compiles and links into a real esp32 firmware under the
+  # ESP-IDF toolchain, which is a genuinely different compiler, libc and
+  # config from everything else in this workflow. It does not prove anything
+  # runs.
+  #
+  # Not a duplicate of natmod.yml's xtensawin leg despite sharing an ISA: that
+  # one builds a .mpy against dynruntime and only borrows the compiler out of
+  # esp-idf, deliberately skipping IDF's own submodules. A usermod is compiled
+  # into the firmware, so this job needs the full IDF -- components,
+  # submodules and all -- which is why it clones with --recursive where
+  # natmod.yml explicitly does not.
+  #
+  # IDF v5.5.1 because that is what ports/esp32/README.md names as the current
+  # recommended version for this MicroPython release (5.3, 5.4, 5.4.1 and
+  # 5.4.2 are also supported). BOARD=ESP32_GENERIC: the mainstream target, and
+  # the xtensawin one, matching what natmod already covers as an ARCH.
+  #
+  # Written CI-first rather than verified locally, which is unusual for this
+  # repo and worth stating: dl.espressif.com and components-file.espressif.com
+  # are both refused by this development environment's egress policy, so the
+  # toolchain and the IDF managed components (espressif/mdns unconditionally,
+  # espressif/lan867x for target esp32) cannot be fetched here at all. What is
+  # known to work on the runner is esp-idf's own install.sh -- natmod.yml's
+  # xtensawin leg has been doing exactly that, green, for a while. The
+  # unknown this job settles is whether the managed-component fetch and the
+  # full port build follow.
+  build-esp32:
+    name: build (esp32 / ESP32_GENERIC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "true"
+          fetch-depth: 0
+
+      - uses: ./.github/actions/fetch-micropython
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+
+      - name: Install esp-idf
+        # --recursive, unlike natmod.yml's xtensawin leg: that one only wants
+        # the toolchain install.sh downloads, this one builds against IDF's
+        # own components. `install.sh esp32` limits the toolchain download to
+        # the one target rather than every chip IDF supports.
+        env:
+          IDF_VER: v5.5.1
+        run: |
+          git clone --depth 1 --recursive --branch "$IDF_VER" \
+            https://github.com/espressif/esp-idf.git
+          ./esp-idf/install.sh esp32
+
+      - name: Build mpy-cross
+        # Before export.sh is sourced anywhere: mpy-cross is a host tool and
+        # has no business being built inside IDF's own python/toolchain
+        # environment. Built explicitly for the usual reason -- see the unix
+        # job's own comment on py/mkenv.mk's auto-build rule.
+        run: make -C "$MPY_DIR/mpy-cross" -j"$(nproc)"
+
+      - name: Build ESP32 firmware
+        # USER_C_MODULES points at usermod/micropython.cmake itself, not at
+        # the repo root: CMake's USER_C_MODULES takes a file, not a directory
+        # to glob -- same as the rp2040 job above.
+        #
+        # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
+        # single-precision default is the right one and passing it explicitly
+        # would only invite it to drift from micropython.cmake's own default.
+        run: |
+          source esp-idf/export.sh
+          make -C "$MPY_DIR/ports/esp32" \
+            BOARD=ESP32_GENERIC \
+            USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-esp32
+          path: |
+            micropython-*/ports/esp32/build-ESP32_GENERIC/micropython.bin
+            micropython-*/ports/esp32/build-ESP32_GENERIC/firmware.bin
           if-no-files-found: error
