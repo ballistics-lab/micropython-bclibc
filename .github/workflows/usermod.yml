@@ -12,9 +12,12 @@ name: usermod
 # either -- see usermod/micropython.mk's own header comment) -- every build
 # is the direct `make -C $MPY_DIR/ports/... ...` sequence, inlined here,
 # same as a7p's own usermod job in that project's micropython.yml. Static
-# linking (MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static) for aarch64/armhf/
-# mipsel is a deliberate real-deployability requirement, not a CI nicety --
-# see micropython/micropython#17456.
+# linking (MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static) is applied to armhf and
+# mipsel only, and there it is load-bearing rather than aspirational: the arm64
+# runner has no armhf glibc and no /lib/ld-linux-armhf.so.3, and qemu-user runs
+# mipsel with no sysroot. aarch64 used to link static too, on a deployability
+# argument (micropython/micropython#17456) that did not survive scrutiny -- see
+# build-test-unix's own comment.
 #
 # No Docker anywhere in this workflow: every toolchain here is a plain apt
 # package (or, for wasm, a plain emsdk checkout) installable directly on
@@ -56,9 +59,9 @@ jobs:
   # ── Native/cross unix builds: aarch64 and armhf on real hardware, mipsel
   # under qemu-user-static ────────────────────────────────────────────────────
   # One matrix job instead of three near-identical ones -- all three build
-  # ports/unix with MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static via the exact
-  # same deplibs+build command shape, differing only in CROSS_COMPILE/apt
-  # packages/whether qemu-user-static is needed.
+  # ports/unix through the same command shape, differing in CROSS_COMPILE, apt
+  # packages, whether qemu-user-static is needed, and whether the link is
+  # static (see below).
   #
   # Only mipsel is emulated now. aarch64 was always native on ubuntu-24.04-arm;
   # armhf joined it there. That is measured, not assumed: micropython-wasm3
@@ -82,8 +85,23 @@ jobs:
   # The mipsel binary runs with no explicit qemu-mipsel-static wrapper --
   # qemu-user-static registers a binfmt_misc handler that intercepts it
   # transparently, same as upstream's own recipe.
-  build-test-unix-static:
-    name: build + test (${{ matrix.arch }}, static)
+  # One more thing this job no longer does uniformly: link static. aarch64
+  # used to, described as a deployability requirement, and that did not
+  # survive a second look. For armhf and mipsel a static link is load-bearing
+  # -- the arm64 runner carries no armhf glibc and no
+  # /lib/ld-linux-armhf.so.3, and qemu-user runs mipsel with no sysroot -- but
+  # aarch64 executes natively on the machine that builds it and needs nothing
+  # special, while release.yml only ever calls natmod.yml, so that binary is a
+  # CI artifact and never a release asset. Nobody on a minimal board receives
+  # it. The cost was an autotools apt set, a libffi-from-source deplibs pass
+  # and two glibc static-link warnings per build, one of which (dlopen) makes
+  # the whole thing partly self-defeating: a static glibc's dlopen still wants
+  # the matching shared libraries at run time, so it works on the machine you
+  # did not need a static binary for and stops working on the one you did --
+  # measured, not inferred. o-murphy/micropython-wasm3's aarch64 row has
+  # always been a plain native build; this now matches it.
+  build-test-unix:
+    name: build + test (${{ matrix.arch }}${{ matrix.link_label }})
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -92,14 +110,23 @@ jobs:
           - arch: aarch64
             runs_on: ubuntu-24.04-arm
             cross_compile: ""
-            apt: autoconf libtool libtool-bin libltdl-dev pkg-config
+            link_label: ""
+            # System libffi rather than one built from source: this row links
+            # against it dynamically now. Not assumed present on the image --
+            # micropython-wasm3's own aarch64 usermod row installs exactly
+            # these two and is green with them.
+            apt: libffi-dev pkg-config
           - arch: armhf
             runs_on: ubuntu-24.04-arm
             cross_compile: arm-linux-gnueabihf-
+            link_label: ", static"
+            standalone: "1"
             apt: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libltdl-dev autoconf libtool libtool-bin pkg-config
           - arch: mipsel
             runs_on: ubuntu-latest
             cross_compile: mipsel-linux-gnu-
+            link_label: ", static"
+            standalone: "1"
             apt: gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev autoconf libtool libtool-bin pkg-config
             qemu_bin: qemu-mipsel-static
     steps:
@@ -114,10 +141,12 @@ jobs:
 
       - name: Install build deps
         # autoconf/libtool/libtool-bin/libltdl-dev are for
-        # MICROPY_STANDALONE=1's own autotools build of lib/libffi (its own
-        # ./autogen.sh rule handles the rest -- no manual libtoolize/
-        # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
-        # build our own static libffi.a instead of linking the system's.
+        # MICROPY_STANDALONE=1's own autotools build of lib/libffi on the
+        # armhf/mipsel rows (its own ./autogen.sh rule handles the rest -- no
+        # manual libtoolize/autoreconf needed); those rows carry no libffi-dev,
+        # because STANDALONE means building a static libffi.a for the *target*
+        # instead of linking the host system's. aarch64 is the other way round
+        # -- plain dynamic link, so its apt list is just libffi-dev/pkg-config.
         #
         # apt-get update first -- the runner image's baked-in package index
         # can already be stale by the time a job runs, pointing at a
@@ -150,6 +179,7 @@ jobs:
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build libffi (deplibs)
+        if: matrix.standalone == '1'
         # MICROPY_STANDALONE=1 only makes libffi a DEPLIBS entry, not an
         # actual prerequisite of the default build (`deplibs:
         # $(DEPLIBS)` is its own separate Makefile target) -- must run as
@@ -172,7 +202,7 @@ jobs:
             CROSS_COMPILE=${{ matrix.cross_compile }} \
             MICROPY_STANDALONE=1 deplibs
 
-      - name: Build usermod (${{ matrix.arch }}, static)
+      - name: Build usermod (${{ matrix.arch }}${{ matrix.link_label }})
         # BUILD is a local shell var, not a job/step env: -- a job-level
         # env: BUILD would leak into the "Build mpy-cross" / "Build libffi"
         # steps above too (they run `make` in the same job), and since
@@ -185,10 +215,15 @@ jobs:
         # path).
         run: |
           BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
+          if [ "${{ matrix.standalone }}" = "1" ]; then
+            LINK_OPTS='MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static'
+          else
+            LINK_OPTS=''
+          fi
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
             CROSS_COMPILE=${{ matrix.cross_compile }} \
-            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            $LINK_OPTS \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
             MP_BCLIBC_PRECISION=double -j"$(nproc)"

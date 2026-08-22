@@ -66,6 +66,28 @@ environment — no OS, the port's own libc, real flash layout. This runs
 Cortex-M code inside a Linux process, proving the native module and its
 relocations are correct on real ARM silicon, and nothing beyond that.
 
+#### `usermod.yml` — the aarch64 row is a plain dynamic build again
+
+`build-test-unix-static` is now `build-test-unix`, and `MICROPY_STANDALONE=1
+LDFLAGS_EXTRA=-static` applies to the `armhf` and `mipsel` rows only. On those
+two it is load-bearing: the arm64 runner carries no armhf glibc and no
+`/lib/ld-linux-armhf.so.3`, and `qemu-user` runs mipsel with no sysroot, so a
+dynamically linked binary cannot start. `aarch64` has neither problem — it
+executes natively on the machine that builds it.
+
+The deployability argument that put it there originally does not hold up:
+`release.yml` calls `natmod.yml` alone, so the usermod binary is a CI artifact
+and never a release asset, and a static glibc's `dlopen` still needs the
+matching shared libraries at run time. Measured rather than inferred:
+`ffi.open("libm.so.6")` in a static build works on a machine carrying that
+glibc — which is the machine that did not need a static binary — and is exactly
+what stops working on the minimal board that did. This repo has an `ffimod/`
+route that loads `libtiny_bclibc.so` through `ffi`, so that is not hypothetical.
+
+The row now installs `libffi-dev`/`pkg-config` and links against the system
+libffi, matching `o-murphy/micropython-wasm3`'s aarch64 usermod row, which has
+always been built that way.
+
 #### `usermod.yml` — armhf moved off qemu-user onto a real AArch32 runner
 
 The `armhf` row of `build-test-unix-static` now runs on `ubuntu-24.04-arm`

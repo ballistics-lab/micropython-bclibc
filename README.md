@@ -274,7 +274,8 @@ available as a built-in. Use this approach when:
   `dynruntime.mk` ARCH; Windows — the port disables native code emit entirely, see
   below); for everything else (x64, x86, RP2040 on stock firmware, …) prefer natmod
   above — it needs no firmware rebuild
-- you need a fully static / standalone unix binary for deployment (aarch64/armhf/mipsel)
+- you need a fully static / standalone unix binary for deployment (any unix arch;
+  CI links armhf/mipsel that way because those two need it to run at all)
 - you need a genuine build+run test under an emulator (QEMU Cortex-M3, rp2040js)
 
 There is **no `usermod/Makefile`** — same as a7p's own usermod integration. You build
@@ -288,13 +289,24 @@ single precision, `usermod/micropython.cmake` too — pass `MP_BCLIBC_PRECISION=
 the port's own build command line if your target has a double-precision FPU (or is a
 general-purpose Linux/JS target, which always gets it in CI — see below).
 
-### AArch64 / ARMhf / MIPS LE (static unix binary)
+### AArch64 / ARMhf / MIPS LE (unix binary)
 
-`MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static"` is required for real deployability to a
-minimal target Linux system that can't be assumed to have a matching `ld.so`/libc — not
-just a CI nicety (see [micropython/micropython#17456](https://github.com/micropython/micropython/pull/17456)).
+`MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static"` is what to reach for when the target is a
+minimal Linux system that can't be assumed to have a matching `ld.so`/libc (see
+[micropython/micropython#17456](https://github.com/micropython/micropython/pull/17456)).
 `MICROPY_STANDALONE=1` only adds `lib/libffi` to `DEPLIBS`; `deplibs` is its own Makefile
 target and must be run as a separate step before the main build.
+
+In CI, only **armhf and mipsel** are built that way, and there it is not a preference:
+the arm64 runner has no armhf glibc and no `/lib/ld-linux-armhf.so.3`, and `qemu-user`
+runs mipsel with no sysroot, so a dynamically linked binary cannot start at all.
+**aarch64 is a plain dynamic build** against the system libffi. It used to be static on
+the same deployability argument, and that argument does not survive contact with the
+details: it runs natively on the machine that builds it, `release.yml` only publishes
+natmod assets so nothing ships that binary, and a static glibc's `dlopen` still needs the
+matching shared libraries at run time — so `ffi.open()` works on the machine you did not
+need a static binary for, and stops working on the minimal board you did. Drop the two
+options below if you want the same plain build locally.
 
 ```bash
 cd /path/to/micropython-1.28.0
