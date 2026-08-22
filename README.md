@@ -337,6 +337,34 @@ emulated, because GitHub has no mips runner; the static binary runs directly
 under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed — there's
 no dynamic linking left to resolve.
 
+### Not done: musl for the static unix builds
+
+`armhf` and `mipsel` link `-static` against glibc, and glibc warns on every
+such link:
+
+```
+Using 'dlopen' in statically linked applications requires at runtime
+  the shared libraries from the glibc version used for linking
+Using 'getaddrinfo' in statically linked applications requires at runtime
+  the shared libraries from the glibc version used for linking
+```
+
+Both are real: glibc resolves NSS and `dlopen` through shared objects it still
+expects at run time, so a "static" glibc binary is not fully self-contained on
+the minimal target it exists for. That is also half of why the `aarch64` row
+stopped linking static (see above). musl has no NSS and a stub `dlopen`, so the
+same build against musl has neither caveat.
+
+Measured, not assumed — a musl static build came back with **zero** link
+warnings against glibc's two, `ldd` reporting `not a dynamic executable`, and
+`getaddrinfo` working. The cost is two config knobs: `MICROPY_PY_BTREE=0` and
+`MICROPY_PY_FFI=0`. The second is not free here: `ffimod/` exists precisely to
+load `libtiny_bclibc.so` through `ffi`, so a musl build would be a natmod/usermod
+host only.
+
+Deliberately not implemented for now. Recorded here so the measurement is not
+lost and so the next person does not have to re-derive it.
+
 ### RP2040 (CMake / pico-sdk)
 
 ```bash
