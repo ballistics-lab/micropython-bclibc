@@ -35,6 +35,37 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
+
+A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
+`ports/unix` interpreter and loads the `armv7emsp` and `armv7emdp` natmod
+`.mpy`s into it, running the full `tests/test_bclibc.py` on each. Until now
+every ARM natmod leg was emulated: `armv7m` under `qemu-system-arm`, `armv6m`
+under rp2040py.
+
+It works because `py/persistentcode.h` gives a Thumb-2 host with a
+double-precision FPU `MPY_FEATURE_ARCH = MP_NATIVE_ARCH_ARMV7EMDP`, and
+`MPY_FEATURE_ARCH_TEST` is a *range* (`ARMV6M <= x <= that`), not an equality —
+so every ARM natmod ARCH clears the header check on an armhf host. Read back
+off the built binary rather than assumed: `sys.implementation._mpy >> 10` is 8.
+
+It covers only two of the four ARM ARCHes because the arch check says nothing
+about the **float ABI**. `armv6m` and `armv7m` get no `-mfloat-abi=hard` from
+`py/dynruntime.mk`, so their floats arrive in core registers while an armhf
+host reads them from VFP registers per AAPCS-VFP. Measured, not predicted:
+those `.mpy`s load and then return nonsense — `find_zero_angle` gave `984.252`
+rad, the range in feet, instead of `0.002502`. Silently wrong, never a crash,
+so those two ARCHes are deliberately excluded and keep their emulator legs.
+`armv7emsp` and `armv7emdp` are hard-float and line up, each against a host
+built with its own `MICROPY_FLOAT_IMPL` (`-DMICROPY_FLOAT_IMPL=` on the command
+line for the single-precision one; `mpconfigvariant_common.h` guards its double
+default with `#ifndef`).
+
+This does not replace the QEMU or rp2040py legs. Those exercise the firmware
+environment — no OS, the port's own libc, real flash layout. This runs
+Cortex-M code inside a Linux process, proving the native module and its
+relocations are correct on real ARM silicon, and nothing beyond that.
+
 #### `usermod.yml` — armhf moved off qemu-user onto a real AArch32 runner
 
 The `armhf` row of `build-test-unix-static` now runs on `ubuntu-24.04-arm`

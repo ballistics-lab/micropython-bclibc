@@ -140,6 +140,45 @@ one file needs to be copied to the device / uploaded as a release artifact.
 
 `bc.version()` returns `"1.1.3-sp"` or `"1.1.3-dp"`.
 
+### Running an ARM natmod on an ARM Linux host
+
+Two of the four ARM ARCHes can be exercised on a real 32-bit ARM Linux
+MicroPython, without an emulator and without a board — which is what CI's
+`test (armv7emsp | armv7emdp / 32-bit ARM Linux)` jobs do on `ubuntu-24.04-arm`.
+Useful locally too, if you have any ARM box to hand:
+
+```bash
+# a 32-bit ARM host interpreter; drop the -D for armv7emdp (double is the
+# unix port's own default)
+make -C /path/to/micropython-1.28.0/ports/unix VARIANT=standard \
+    BUILD=/tmp/mpy-armhf CROSS_COMPILE=arm-linux-gnueabihf- \
+    MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
+    CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT
+
+ln -sf ../natmod/build/armv7emsp_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+/tmp/mpy-armhf/micropython tests/test_bclibc.py
+```
+
+Why it works: `py/persistentcode.h` gives a Thumb-2 host with a
+double-precision FPU `MPY_FEATURE_ARCH = MP_NATIVE_ARCH_ARMV7EMDP`, and the
+compatibility test is a *range* (`ARMV6M <= x <= that`), not an equality — so
+every ARM natmod ARCH passes the header check on an armhf host.
+
+Why only two: the arch check does not cover the **float ABI**. `armv6m` and
+`armv7m` get no `-mfloat-abi=hard` from `py/dynruntime.mk`, so their floats
+cross into the runtime in core registers while an armhf host expects them in
+VFP registers. Those `.mpy`s load and then return nonsense — `find_zero_angle`
+came back `984.252` rad (the range in feet) instead of `0.002502`. Silently
+wrong, never a crash, so do not do it. `armv7emsp` and `armv7emdp` are
+hard-float and line up, each against a host built with its own
+`MICROPY_FLOAT_IMPL` — that governs `mp_float_t` on both sides of the
+dynruntime call boundary.
+
+What this does **not** replace: the QEMU Cortex-M3 and rp2040py legs. Those run
+firmware — no OS, the port's own libc, real flash layout. This runs Cortex-M
+code inside a Linux process, which proves the native module and its relocations
+are right on real ARM silicon and nothing more.
+
 ```bash
 make clean      # rm -rf natmod/build/ natmod/generated/
 ```
