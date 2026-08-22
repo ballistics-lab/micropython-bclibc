@@ -53,17 +53,35 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── Native/cross unix builds: aarch64 (native), armhf/mipsel (cross,
-  # tested under qemu-user-static) ────────────────────────────────────────────
+  # ── Native/cross unix builds: aarch64 and armhf on real hardware, mipsel
+  # under qemu-user-static ────────────────────────────────────────────────────
   # One matrix job instead of three near-identical ones -- all three build
   # ports/unix with MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static via the exact
   # same deplibs+build command shape, differing only in CROSS_COMPILE/apt
-  # packages/whether qemu-user-static is needed (empty cross_compile/qemu_bin
-  # for aarch64, since it runs natively on ubuntu-24.04-arm). armhf/mipsel
-  # binaries run directly with no explicit qemu-arm-static/qemu-mipsel-static
-  # wrapper -- qemu-user-static registers a binfmt_misc handler that
-  # intercepts them transparently, same as upstream MicroPython's own
-  # ci_unix_qemu_arm_*/ci_unix_qemu_mips_* recipe.
+  # packages/whether qemu-user-static is needed.
+  #
+  # Only mipsel is emulated now. aarch64 was always native on ubuntu-24.04-arm;
+  # armhf joined it there. That is measured, not assumed: micropython-wasm3
+  # carried a probe job that built a statically linked, freestanding AArch32
+  # binary and executed it on ubuntu-24.04-arm with no emulator and no binfmt
+  # handler -- "RESULT: AArch32 IS supported on this runner" (that repo's
+  # usermod run #18). So the arm64 runner cross-builds the 32-bit binary and
+  # then runs it on its own CPU. mipsel keeps qemu-user; GitHub has no mips
+  # runner and never will.
+  #
+  # The move is also why armhf builds with arm-linux-gnueabihf- rather than the
+  # arm-linux-gnueabi- upstream's own ci_unix_qemu_arm_* uses. Under qemu the
+  # ABI choice was nearly free -- the emulator implements whatever ARMv5 asks
+  # for. On real ARMv8 hardware it is not: gnueabi is soft-float and baselines
+  # at ARMv5TE, whose SWP/SWPB atomics ARMv8 removed outright, surviving only
+  # through the kernel's opt-in ARMV8_DEPRECATED emulation. gnueabihf is what
+  # the probe binary was built with, so it is the toolchain actually proven on
+  # that runner -- and it is what this row has always been called. mipsel is
+  # untouched: still emulated, so upstream's own choice still applies there.
+  #
+  # The mipsel binary runs with no explicit qemu-mipsel-static wrapper --
+  # qemu-user-static registers a binfmt_misc handler that intercepts it
+  # transparently, same as upstream's own recipe.
   build-test-unix-static:
     name: build + test (${{ matrix.arch }}, static)
     runs-on: ${{ matrix.runs_on }}
@@ -76,10 +94,9 @@ jobs:
             cross_compile: ""
             apt: autoconf libtool libtool-bin libltdl-dev pkg-config
           - arch: armhf
-            runs_on: ubuntu-latest
-            cross_compile: arm-linux-gnueabi-
-            apt: gcc-arm-linux-gnueabi g++-arm-linux-gnueabi libltdl-dev autoconf libtool libtool-bin pkg-config
-            qemu_bin: qemu-arm-static
+            runs_on: ubuntu-24.04-arm
+            cross_compile: arm-linux-gnueabihf-
+            apt: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libltdl-dev autoconf libtool libtool-bin pkg-config
           - arch: mipsel
             runs_on: ubuntu-latest
             cross_compile: mipsel-linux-gnu-
@@ -114,8 +131,11 @@ jobs:
       - name: Install qemu-user-static
         # No /usr/gnemul sysroot symlink needed -- the binary is fully
         # static, so qemu-user-static's binfmt_misc handler runs it
-        # directly with no dynamic libraries to resolve at all. Not needed
-        # for aarch64 (native), hence the matrix.qemu_bin guard.
+        # directly with no dynamic libraries to resolve at all. mipsel is
+        # the only row that still needs this at all: aarch64 and armhf both
+        # run on the arm64 runner's own CPU, hence the matrix.qemu_bin
+        # guard. Installing an emulator on those rows would be dead weight
+        # that could also mask a genuine failure to execute.
         if: matrix.qemu_bin != ''
         run: |
           sudo apt-get update -q
@@ -174,7 +194,12 @@ jobs:
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython tests/test_bclibc.py"
+        # `file` first so the log records what actually ran -- on armhf that
+        # is a 32-bit ARM binary executing on an arm64 host with no emulator
+        # in the picture, which is the whole point of this row's runner.
+        run: |
+          file "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython"
+          "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:

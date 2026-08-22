@@ -274,10 +274,17 @@ make -C ports/unix VARIANT=standard \
 build-standard/micropython /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
-Cross-compiling (armhf/mipsel): add `CROSS_COMPILE=arm-linux-gnueabi-` or
-`CROSS_COMPILE=mipsel-linux-gnu-` to both commands above. The resulting static binary
-runs directly under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed —
-there's no dynamic linking left to resolve.
+Cross-compiling (armhf/mipsel): add `CROSS_COMPILE=arm-linux-gnueabihf-` or
+`CROSS_COMPILE=mipsel-linux-gnu-` to both commands above.
+
+In CI those two are no longer treated the same way. armhf is cross-built on
+`ubuntu-24.04-arm` and then **run on that runner's own CPU** — a GitHub arm64
+runner executes 32-bit ARM directly, measured on the runner rather than assumed.
+That is also why it uses `gnueabihf` and not upstream's soft-float `gnueabi`:
+armel baselines at ARMv5TE, whose SWP atomics ARMv8 removed. mipsel is still
+emulated, because GitHub has no mips runner; the static binary runs directly
+under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed — there's
+no dynamic linking left to resolve.
 
 ### RP2040 (CMake / pico-sdk)
 

@@ -35,6 +35,25 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `usermod.yml` — armhf moved off qemu-user onto a real AArch32 runner
+
+The `armhf` row of `build-test-unix-static` now runs on `ubuntu-24.04-arm`
+instead of `ubuntu-latest`: the arm64 runner cross-builds the 32-bit binary
+and then executes it on its own CPU, with no emulator and no binfmt handler
+involved. That is measured, not assumed — `o-murphy/micropython-wasm3` carried
+a probe job that built a statically linked, freestanding AArch32 binary and
+ran it there ("RESULT: AArch32 IS supported on this runner", that repo's
+usermod run #18). `mipsel` keeps `qemu-user-static`; GitHub has no mips runner.
+
+The move is also why armhf switched from `arm-linux-gnueabi-` to
+`arm-linux-gnueabihf-`. Under qemu the ABI choice was nearly free — the
+emulator implements whatever ARMv5 asks for. On real ARMv8 hardware it is not:
+`gnueabi` is soft-float and baselines at ARMv5TE, whose SWP/SWPB atomics ARMv8
+removed outright, surviving only through the kernel's opt-in
+`ARMV8_DEPRECATED` emulation. `gnueabihf` is the toolchain the probe binary was
+built with, and it is what this row has always been called. `mipsel` is
+untouched.
+
 #### `natmod.yml` / `usermod.yml` — added a `push` trigger
 
 Both workflows now run on `push` as well as `pull_request`, with the same path
