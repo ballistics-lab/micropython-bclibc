@@ -421,6 +421,28 @@ python3 /path/to/micropython-bclibc/usermod/ci/run_qemu.py \
     /path/to/micropython-bclibc/tests/
 ```
 
+**What this job actually guards.** `ports/qemu/Makefile:74` links `-nostdlib`
+with `libgcc` alone: a usermod there has **no libc and no libm at all**. That
+holds true for `tiny_bclibc` — no `malloc`, no `math`, no `printf` anywhere in
+`src/` or `bclibc/tiny_bclibc/` — and this job exists to keep it true rather
+than to assume it. A dependency on either would stop linking here, which is the
+signal wanted. `o-murphy/micropython-wasm3` cannot run this job for exactly that
+reason: wasm3 allocates through the port's `calloc()`, and supplying its own
+shims would link and then corrupt, because those shims allocate on the GC heap
+while a usermod's globals sit in firmware `.bss` that `gc_collect()` does not
+scan. Fixing that needs `MP_REGISTER_ROOT_POINTER`, whose hard part is that
+MicroPython's GC only traces block-aligned pointers.
+
+**`ports/esp8266` is worse than uncovered — do not reach for it.** It would
+build and then be silently wrong. `ports/esp8266/posix_helpers.c:35` implements
+`malloc` as `gc_alloc`, and, as above, a usermod's globals live in firmware
+`.bss`, which `gc_collect()` never scans — so anything allocated at import time
+becomes unreachable garbage the collector is free to reuse. Not a build error,
+not a crash at first: wrong answers later. `MP_REGISTER_ROOT_POINTER` is the
+prerequisite there too. The same applies to `stm32`, `samd`, `nrf`, `alif`,
+`zephyr` and `cc3200`, which have no C heap at all. Deliberately not attempted;
+recorded so nobody has to rediscover it from a corrupted trajectory.
+
 ### WebAssembly
 
 JS/browser numbers are double-precision natively, so double is the sensible choice here.
