@@ -3,23 +3,39 @@ name: usermod
 # natmod already covers x64/x86 (host/dev) and rp2040 (armv6m, stock
 # firmware) -- see natmod.yml -- so this workflow only builds what natmod
 # categorically can't reach at all (aarch64/armhf/mipsel: no such
-# dynruntime.mk ARCH; wasm: no WASM ARCH), plus two genuine functional
-# execution tests natmod's own build-only coverage doesn't provide
-# (qemu-armv7m, rp2040-test-only).
+# dynruntime.mk ARCH; wasm: no WASM ARCH; windows: the port disables native
+# emit, so a .mpy has nothing to load into whatever ARCH it was built for),
+# plus two genuine functional execution tests natmod's own build-only
+# coverage doesn't provide (qemu-armv7m, rp2040-test-only).
 #
 # No wrapper Makefile for usermod (a7p doesn't have one for its own usermod
 # either -- see usermod/micropython.mk's own header comment) -- every build
 # is the direct `make -C $MPY_DIR/ports/... ...` sequence, inlined here,
 # same as a7p's own usermod job in that project's micropython.yml. Static
-# linking (MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static) for aarch64/armhf/
-# mipsel is a deliberate real-deployability requirement, not a CI nicety --
-# see micropython/micropython#17456.
+# linking (MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static) is applied to armhf and
+# mipsel only, and there it is load-bearing rather than aspirational: the arm64
+# runner has no armhf glibc and no /lib/ld-linux-armhf.so.3, and qemu-user runs
+# mipsel with no sysroot. aarch64 used to link static too, on a deployability
+# argument (micropython/micropython#17456) that did not survive scrutiny -- see
+# build-test-unix's own comment.
 #
 # No Docker anywhere in this workflow: every toolchain here is a plain apt
 # package (or, for wasm, a plain emsdk checkout) installable directly on
 # ubuntu-latest.
 
 on:
+  # Same path filter as the pull_request trigger below, on any branch: this is
+  # what makes a plain `git push` to a work branch run the matrix, without
+  # needing a PR open or a workflow_dispatch (which needs actions: write, not
+  # every actor pushing here has it). A branch that is also the head of an open
+  # PR gets both runs -- the concurrency group keys on github.ref, which differs
+  # between refs/heads/<branch> and refs/pull/<n>/merge, so they do not cancel
+  # each other. That duplication is the deliberate cost of the trigger.
+  push:
+    paths:
+      - "bclibc"
+      - "usermod/**"
+      - ".github/workflows/usermod.yml"
   pull_request:
     paths:
       - "bclibc"
@@ -40,36 +56,102 @@ env:
   MPY_TAG: ${{ github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── Native/cross unix builds: aarch64 (native), armhf/mipsel (cross,
-  # tested under qemu-user-static) ────────────────────────────────────────────
+  # ── Native/cross unix builds: aarch64 and armhf on real hardware, mipsel
+  # under qemu-user-static ────────────────────────────────────────────────────
   # One matrix job instead of three near-identical ones -- all three build
-  # ports/unix with MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static via the exact
-  # same deplibs+build command shape, differing only in CROSS_COMPILE/apt
-  # packages/whether qemu-user-static is needed (empty cross_compile/qemu_bin
-  # for aarch64, since it runs natively on ubuntu-24.04-arm). armhf/mipsel
-  # binaries run directly with no explicit qemu-arm-static/qemu-mipsel-static
-  # wrapper -- qemu-user-static registers a binfmt_misc handler that
-  # intercepts them transparently, same as upstream MicroPython's own
-  # ci_unix_qemu_arm_*/ci_unix_qemu_mips_* recipe.
-  build-test-unix-static:
-    name: build + test (${{ matrix.arch }}, static)
+  # ports/unix through the same command shape, differing in CROSS_COMPILE, apt
+  # packages, whether qemu-user-static is needed, and whether the link is
+  # static (see below).
+  #
+  # Only mipsel is emulated now. aarch64 was always native on ubuntu-24.04-arm;
+  # armhf joined it there. That is measured, not assumed: micropython-wasm3
+  # carried a probe job that built a statically linked, freestanding AArch32
+  # binary and executed it on ubuntu-24.04-arm with no emulator and no binfmt
+  # handler -- "RESULT: AArch32 IS supported on this runner" (that repo's
+  # usermod run #18). So the arm64 runner cross-builds the 32-bit binary and
+  # then runs it on its own CPU. mipsel keeps qemu-user; GitHub has no mips
+  # runner and never will.
+  #
+  # The move is also why armhf builds with arm-linux-gnueabihf- rather than the
+  # arm-linux-gnueabi- upstream's own ci_unix_qemu_arm_* uses. Under qemu the
+  # ABI choice was nearly free -- the emulator implements whatever ARMv5 asks
+  # for. On real ARMv8 hardware it is not: gnueabi is soft-float and baselines
+  # at ARMv5TE, whose SWP/SWPB atomics ARMv8 removed outright, surviving only
+  # through the kernel's opt-in ARMV8_DEPRECATED emulation. gnueabihf is what
+  # the probe binary was built with, so it is the toolchain actually proven on
+  # that runner -- and it is what this row has always been called. mipsel is
+  # untouched: still emulated, so upstream's own choice still applies there.
+  #
+  # The mipsel binary runs with no explicit qemu-mipsel-static wrapper --
+  # qemu-user-static registers a binfmt_misc handler that intercepts it
+  # transparently, same as upstream's own recipe.
+  # One more thing this job no longer does uniformly: link static. aarch64
+  # used to, described as a deployability requirement, and that did not
+  # survive a second look. For armhf and mipsel a static link is load-bearing
+  # -- the arm64 runner carries no armhf glibc and no
+  # /lib/ld-linux-armhf.so.3, and qemu-user runs mipsel with no sysroot -- but
+  # aarch64 executes natively on the machine that builds it and needs nothing
+  # special, while release.yml only ever calls natmod.yml, so that binary is a
+  # CI artifact and never a release asset. Nobody on a minimal board receives
+  # it. The cost was an autotools apt set, a libffi-from-source deplibs pass
+  # and two glibc static-link warnings per build, one of which (dlopen) makes
+  # the whole thing partly self-defeating: a static glibc's dlopen still wants
+  # the matching shared libraries at run time, so it works on the machine you
+  # did not need a static binary for and stops working on the one you did --
+  # measured, not inferred. o-murphy/micropython-wasm3's aarch64 row has
+  # always been a plain native build; this now matches it.
+  build-test-unix:
+    name: build + test (${{ matrix.arch }}${{ matrix.link_label }})
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # x64/x86 duplicate ARCHes natmod.yml already builds *and* runs,
+          # which is why this workflow's header calls itself the
+          # natmod-can't-reach-it half. They are here anyway, deliberately:
+          # the two build modes fail in genuinely different ways -- a usermod
+          # links against the port's own libc and its globals live in
+          # firmware .bss, a natmod links against dynruntime and carries its
+          # own -- so "x64 natmod passes" says nothing about the usermod
+          # path on the same machine. Cheap rows, and the only ones here
+          # where a failure is unambiguously this repo's code rather than a
+          # toolchain or an emulator.
+          - arch: x64
+            runs_on: ubuntu-latest
+            cross_compile: ""
+            link_label: ""
+            apt: libffi-dev pkg-config
+          - arch: x86
+            runs_on: ubuntu-latest
+            cross_compile: ""
+            link_label: ", 32-bit"
+            # Not a cross-compiler: MICROPY_FORCE_32BIT=1 makes the unix
+            # Makefile add -m32 to the host gcc, which needs gcc-multilib and
+            # the i386 libffi. Same recipe natmod.yml's own x86 test leg uses,
+            # including the dpkg --add-architecture step below.
+            force_32bit: "1"
+            apt: gcc-multilib libffi-dev:i386 pkg-config
           - arch: aarch64
             runs_on: ubuntu-24.04-arm
             cross_compile: ""
-            apt: autoconf libtool libtool-bin libltdl-dev pkg-config
+            link_label: ""
+            # System libffi rather than one built from source: this row links
+            # against it dynamically now. Not assumed present on the image --
+            # micropython-wasm3's own aarch64 usermod row installs exactly
+            # these two and is green with them.
+            apt: libffi-dev pkg-config
           - arch: armhf
-            runs_on: ubuntu-latest
-            cross_compile: arm-linux-gnueabi-
-            apt: gcc-arm-linux-gnueabi g++-arm-linux-gnueabi libltdl-dev autoconf libtool libtool-bin pkg-config
-            qemu_bin: qemu-arm-static
+            runs_on: ubuntu-24.04-arm
+            cross_compile: arm-linux-gnueabihf-
+            link_label: ", static"
+            standalone: "1"
+            apt: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libltdl-dev autoconf libtool libtool-bin pkg-config
           - arch: mipsel
             runs_on: ubuntu-latest
             cross_compile: mipsel-linux-gnu-
+            link_label: ", static"
+            standalone: "1"
             apt: gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev autoconf libtool libtool-bin pkg-config
             qemu_bin: qemu-mipsel-static
     steps:
@@ -78,16 +160,18 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Install build deps
         # autoconf/libtool/libtool-bin/libltdl-dev are for
-        # MICROPY_STANDALONE=1's own autotools build of lib/libffi (its own
-        # ./autogen.sh rule handles the rest -- no manual libtoolize/
-        # autoreconf needed). No libffi-dev: MICROPY_STANDALONE=1 means we
-        # build our own static libffi.a instead of linking the system's.
+        # MICROPY_STANDALONE=1's own autotools build of lib/libffi on the
+        # armhf/mipsel rows (its own ./autogen.sh rule handles the rest -- no
+        # manual libtoolize/autoreconf needed); those rows carry no libffi-dev,
+        # because STANDALONE means building a static libffi.a for the *target*
+        # instead of linking the host system's. aarch64 is the other way round
+        # -- plain dynamic link, so its apt list is just libffi-dev/pkg-config.
         #
         # apt-get update first -- the runner image's baked-in package index
         # can already be stale by the time a job runs, pointing at a
@@ -95,14 +179,20 @@ jobs:
         # install). Confirmed by repeated real CI failures on natmod.yml's
         # x86 leg, not a one-off mirror blip.
         run: |
+          if [ "${{ matrix.force_32bit }}" = "1" ]; then
+            sudo dpkg --add-architecture i386
+          fi
           sudo apt-get update -q
           sudo apt-get install -y ${{ matrix.apt }}
 
       - name: Install qemu-user-static
         # No /usr/gnemul sysroot symlink needed -- the binary is fully
         # static, so qemu-user-static's binfmt_misc handler runs it
-        # directly with no dynamic libraries to resolve at all. Not needed
-        # for aarch64 (native), hence the matrix.qemu_bin guard.
+        # directly with no dynamic libraries to resolve at all. mipsel is
+        # the only row that still needs this at all: aarch64 and armhf both
+        # run on the arm64 runner's own CPU, hence the matrix.qemu_bin
+        # guard. Installing an emulator on those rows would be dead weight
+        # that could also mask a genuine failure to execute.
         if: matrix.qemu_bin != ''
         run: |
           sudo apt-get update -q
@@ -117,6 +207,7 @@ jobs:
         run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Build libffi (deplibs)
+        if: matrix.standalone == '1'
         # MICROPY_STANDALONE=1 only makes libffi a DEPLIBS entry, not an
         # actual prerequisite of the default build (`deplibs:
         # $(DEPLIBS)` is its own separate Makefile target) -- must run as
@@ -139,7 +230,7 @@ jobs:
             CROSS_COMPILE=${{ matrix.cross_compile }} \
             MICROPY_STANDALONE=1 deplibs
 
-      - name: Build usermod (${{ matrix.arch }}, static)
+      - name: Build usermod (${{ matrix.arch }}${{ matrix.link_label }})
         # BUILD is a local shell var, not a job/step env: -- a job-level
         # env: BUILD would leak into the "Build mpy-cross" / "Build libffi"
         # steps above too (they run `make` in the same job), and since
@@ -152,16 +243,29 @@ jobs:
         # path).
         run: |
           BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
+          if [ "${{ matrix.standalone }}" = "1" ]; then
+            LINK_OPTS='MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static'
+          else
+            LINK_OPTS=''
+          fi
+          if [ "${{ matrix.force_32bit }}" = "1" ]; then
+            LINK_OPTS="$LINK_OPTS MICROPY_FORCE_32BIT=1"
+          fi
           make -C "$MPY_DIR/ports/unix" VARIANT=standard \
             BUILD="$BUILD" \
             CROSS_COMPILE=${{ matrix.cross_compile }} \
-            MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
+            $LINK_OPTS \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
             FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
             MP_BCLIBC_PRECISION=double -j"$(nproc)"
 
       - name: Run tests
-        run: "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython tests/test_bclibc.py"
+        # `file` first so the log records what actually ran -- on armhf that
+        # is a 32-bit ARM binary executing on an arm64 host with no emulator
+        # in the picture, which is the whole point of this row's runner.
+        run: |
+          file "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython"
+          "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
@@ -183,7 +287,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -224,7 +328,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/clone-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           submodules: lib/micropython-lib
@@ -300,7 +404,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/clone-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           # lib/mbedtls: ports/rp2/CMakeLists.txt unconditionally lists it
@@ -343,9 +447,9 @@ jobs:
       # docs/PORTING.md#raw-repl-uploads-and-cross-thread-usbcdctx_fifo-access-a-real-previously-undiscovered-bug
       # in the rp2040py repo for the full story. `version` pins the installed rp2040py PyPI
       # package itself, separately from this ref.
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.2.5
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.3.1
         with:
-          version: "0.2.5"
+          version: "0.3.1"
 
       - name: Test firmware via rp2040py emulator
         # tests/test_bclibc.py isn't frozen into the firmware -- it's pushed
@@ -379,4 +483,282 @@ jobs:
         with:
           name: tiny-bclibc-usermod-rp2040
           path: usermod/build/rp2040/firmware.uf2
+          if-no-files-found: error
+
+  # ── Windows: x86 / x64 / arm64, build + test, all native ────────────────────
+  # natmod categorically cannot reach this port: ports/windows/mpconfigport.h
+  # sets MICROPY_EMIT_X64 (0), and py/persistentcode.c gates .mpy native-code
+  # loading on MICROPY_EMIT_MACHINE_CODE -- so a natmod .mpy has nothing to
+  # load into here, whatever ARCH it was built for. usermod is the only way
+  # tiny_bclibc runs on Windows at all, which is what makes this job a
+  # coverage addition rather than a duplicate of natmod's x64/x86 legs.
+  #
+  # All three arches build *and* run on the machine that built them: x86 and
+  # x64 on windows-latest (a real x64 box -- WOW64 runs the 32-bit exe
+  # natively, no emulation), arm64 on windows-11-arm. MSYS2 supplies the
+  # toolchain in every case, the same way upstream MicroPython's own
+  # build-mingw job does (see micropython/.github/workflows/ports_windows.yml).
+  #
+  # The recipe is transplanted wholesale from o-murphy/micropython-wasm3 and
+  # o-murphy/a7p, which run this exact combination green -- including the four
+  # CLANGARM64 overrides in the mpy-cross step below, none of which were
+  # guessed here.
+  build-test-windows:
+    name: build + test (windows ${{ matrix.arch_label }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch_label: x86
+            # MSYS2's plain MINGW32 environment ships an unprefixed gcc that
+            # targets i686-w64-mingw32 directly, so no CROSS_COMPILE override
+            # is needed -- same as upstream's own build-mingw job.
+            runs_on: windows-latest
+            msystem: MINGW32
+            msys_install: mingw-w64-i686-gcc
+            cflags_extra: ""
+          - arch_label: x64
+            # Same as x86 but MINGW64 (x86_64-w64-mingw32 gcc, unprefixed).
+            runs_on: windows-latest
+            msystem: MINGW64
+            msys_install: mingw-w64-x86_64-gcc
+            cflags_extra: ""
+          - arch_label: arm64
+            # -Wno-error: ports/windows/Makefile compiles -Werror with a
+            # warning set chosen for gcc, and MicroPython's *own* sources do
+            # not survive it under clang -- py/binary.c promotes a _Float16 to
+            # float, and shared/runtime/gchelper_generic.c declares
+            # deliberately uninitialized `register const long x19 asm("x19")`
+            # and friends to capture callee-saved registers for GC root
+            # scanning. Neither is this repo's code and neither is a bug.
+            # Warnings still print; they just stop failing the build. The
+            # x86/x64 rows keep -Werror, and this repo's own sources were
+            # separately confirmed clean under the port's exact warning set
+            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror, double
+            # precision) -- so nothing of ours goes unchecked here.
+            runs_on: windows-11-arm
+            msystem: CLANGARM64
+            msys_install: mingw-w64-clang-aarch64-gcc-compat mingw-w64-clang-aarch64-clang
+            cflags_extra: "-Wno-error"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "true"
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          # python3: py/mkenv.mk hardcodes PYTHON = python3 (used at build
+          # time to generate mpversion.h/qstrdefs/frozen_content) -- not
+          # pulled in by make/git/the compiler package, so without it the
+          # build dies with "python3: No such file or directory" the moment
+          # it needs to generate anything.
+          # curl/tar/xz: the MicroPython tarball fetch below. The shared
+          # micropython-native-ci fetch-micropython action can't be reused
+          # here -- it is a composite action, so its steps declare their own
+          # `shell: bash` (git-bash on this runner, which has no wget) and a
+          # caller cannot override that to `msys2 {0}`.
+          install: make git python3 curl tar xz ${{ matrix.msys_install }}
+
+      - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        shell: msys2 {0}
+        # Same tarball as every other job in this workflow (via the shared
+        # micropython-native-ci fetch-micropython action), just fetched
+        # inline for the reason in the install: comment above. MPY_DIR is
+        # exported as MSYS2's POSIX-style path ("/d/a/..."), not $GITHUB_WORKSPACE's
+        # native "D:\a\..." -- an unquoted backslash is MSYS2 bash's own
+        # escape character and gets *consumed* on a later `make` command
+        # line ("D:\a\x" -> "D:ax"), which is a real, previously observed
+        # CI failure on this exact port, not a hypothetical.
+        run: |
+          VER="${MPY_TAG#v}"
+          curl -fsSL -o mpy.tar.xz \
+            "https://github.com/micropython/micropython/releases/download/${MPY_TAG}/micropython-${VER}.tar.xz"
+          tar xf mpy.tar.xz && rm mpy.tar.xz
+          echo "MPY_DIR=$(pwd)/micropython-${VER}" >> "$GITHUB_ENV"
+
+      - name: Mark checkout safe for MSYS2 git
+        shell: msys2 {0}
+        # usermod/micropython.mk derives the version.h it generates from
+        # `git describe` in the repo root. actions/checkout registers the
+        # workspace as a safe.directory for the *runner's* git, not for the
+        # separate git inside MSYS2, which then refuses with "dubious
+        # ownership". The .mk guards that call with `|| echo v0.0.0`, so
+        # this is not fatal either way -- it just keeps the artifact's
+        # version string real instead of 0.0.0.
+        run: git config --global --add safe.directory "$(pwd)"
+
+      - name: Build mpy-cross
+        shell: msys2 {0}
+        # Built explicitly first, for the same reason as every other job in
+        # this workflow: py/mkenv.mk's auto-build rule for mpy-cross resets
+        # USER_C_MODULES= for that recursive make but not FROZEN_MANIFEST=,
+        # which then leaks through MAKEFLAGS.
+        #
+        # The four overrides are all CLANGARM64-specific, applied to every
+        # row only because they are harmless no-ops on MINGW32/64:
+        #
+        #   LDFLAGS_ARCH -- mpy-cross/Makefile hardcodes
+        #     "-Wl,-Map=$@.map,--cref -Wl,--gc-sections" for every non-Darwin
+        #     host. Fine for GNU ld; CLANGARM64 links via clang+lld, and lld
+        #     rejects --cref outright ("unknown argument"). The map file's
+        #     cross-reference table is diagnostic-only.
+        #   COMPILER_TARGET -- mpy-cross/Makefile decides whether to compile
+        #     in ports/windows/fmode.c (which defines set_fmode_binary(),
+        #     called unconditionally under #ifdef _WIN32 in main.c) by
+        #     grepping `$(CC) -dumpmachine` for "mingw". The CLANGARM64
+        #     gcc-compat wrapper is clang underneath and reports a triple
+        #     that doesn't contain it, so fmode.c silently drops out and the
+        #     link fails on "undefined symbol: set_fmode_binary".
+        #   STRIP="" -- py/mkenv.mk sets STRIP = $(CROSS_COMPILE)strip
+        #     unconditionally and py/mkrules.mk runs it whenever the variable
+        #     is non-empty; CLANGARM64's gcc-compat ships no
+        #     aarch64-w64-mingw32-strip. Emptying it skips the step outright
+        #     (GNU Make's ifdef treats an empty value as undefined).
+        #   SIZE="true" -- same missing binary, but that recipe line has no
+        #     ifdef guard, so an empty value would break the shell syntax
+        #     rather than skip it. `true` is a real no-op that swallows its
+        #     arguments and exits 0.
+        run: |
+          make -C "$MPY_DIR/mpy-cross" \
+            LDFLAGS_ARCH="-Wl,--gc-sections" \
+            COMPILER_TARGET="mingw-forced" \
+            STRIP="" SIZE="true" -j"$(nproc)"
+
+      - name: Build usermod (windows ${{ matrix.arch_label }})
+        shell: msys2 {0}
+        # No `make -C ports/windows submodules` step: MPY_DIR is the official
+        # release tarball, which ships every submodule's source already
+        # vendored in, and the port declares no GIT_SUBMODULES of its own
+        # anyway.
+        #
+        # FROZEN_MANIFEST is this repo's own manifest alone, *not* combined
+        # with the port's default variants/manifest.py -- exactly what the
+        # unix jobs above do. The port default is a single `require("ssl")`,
+        # which is a frozen convenience, not something tiny_bclibc or
+        # tests/test_bclibc.py touches.
+        #
+        # $(pwd), not $GITHUB_WORKSPACE, for both paths -- see the tarball
+        # step's comment for the backslash-eating failure that motivates it.
+        # STRIP/SIZE: same missing-binary reason as the mpy-cross step;
+        # ports/windows reaches the identical generic py/mkrules.mk link
+        # recipe. COMPILER_TARGET is forced here for a *different* reason
+        # than in that step: py/mkrules.mk appends the .exe suffix to PROG
+        # only when `$(CC) -dumpmachine` contains "mingw", so without it the
+        # CLANGARM64 build would emit a differently-named binary than the
+        # two gcc rows and the steps below would have to guess. It has no
+        # other effect at all -- the whole tree uses COMPILER_TARGET in
+        # exactly two places, this one and mpy-cross's fmode.c check.
+        run: |
+          BUILD="$(pwd)/usermod/build/windows-${{ matrix.arch_label }}"
+          make -C "$MPY_DIR/ports/windows" \
+            BUILD="$BUILD" \
+            COMPILER_TARGET="mingw-forced" \
+            STRIP="" SIZE="true" \
+            CFLAGS_EXTRA="${{ matrix.cflags_extra }}" \
+            USER_C_MODULES="$(pwd)" \
+            FROZEN_MANIFEST="$(pwd)/usermod/manifest.py" \
+            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+
+      - name: Run tests
+        shell: msys2 {0}
+        # Runs natively on the machine that built it, no emulation. The exe
+        # is a real Windows binary, so tests/test_bclibc.py's own
+        # sys.exit(_failures) surfaces as this step's exit status directly --
+        # unlike the rp2040 job, which has to grep its output because the
+        # raw REPL swallows SystemExit.
+        run: |
+          ./usermod/build/windows-${{ matrix.arch_label }}/micropython.exe tests/test_bclibc.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-windows-${{ matrix.arch_label }}
+          path: usermod/build/windows-${{ matrix.arch_label }}/micropython.exe
+          if-no-files-found: error
+
+  # ── ESP32: usermod firmware, build-only ─────────────────────────────────────
+  # Build-only, and that is not a shortcut -- there is no esp32 emulator to
+  # hand a firmware image to the way rp2040py takes an RP2040 .uf2 or
+  # qemu-system-arm takes a Cortex-M3 .elf. What this job proves is that
+  # tiny_bclibc compiles and links into a real esp32 firmware under the
+  # ESP-IDF toolchain, which is a genuinely different compiler, libc and
+  # config from everything else in this workflow. It does not prove anything
+  # runs.
+  #
+  # Not a duplicate of natmod.yml's xtensawin leg despite sharing an ISA: that
+  # one builds a .mpy against dynruntime and only borrows the compiler out of
+  # esp-idf, deliberately skipping IDF's own submodules. A usermod is compiled
+  # into the firmware, so this job needs the full IDF -- components,
+  # submodules and all -- which is why it clones with --recursive where
+  # natmod.yml explicitly does not.
+  #
+  # IDF v5.5.1 because that is what ports/esp32/README.md names as the current
+  # recommended version for this MicroPython release (5.3, 5.4, 5.4.1 and
+  # 5.4.2 are also supported). BOARD=ESP32_GENERIC: the mainstream target, and
+  # the xtensawin one, matching what natmod already covers as an ARCH.
+  #
+  # Written CI-first rather than verified locally, which is unusual for this
+  # repo and worth recording: dl.espressif.com and components-file.espressif.com
+  # were both refused by this development environment's egress policy, so
+  # neither the toolchain nor the IDF managed components (espressif/mdns
+  # unconditionally, espressif/lan867x for target esp32) could be fetched here
+  # at all. It went green first time regardless, which settled the open
+  # question -- the managed-component fetch and the full port build both work
+  # on a runner. Both hosts have since been allowed, so further work here can
+  # be reproduced locally before pushing.
+  build-esp32:
+    name: build (esp32 / ESP32_GENERIC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "true"
+          fetch-depth: 0
+
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+
+      - name: Install esp-idf
+        # --recursive, unlike natmod.yml's xtensawin leg: that one only wants
+        # the toolchain install.sh downloads, this one builds against IDF's
+        # own components. `install.sh esp32` limits the toolchain download to
+        # the one target rather than every chip IDF supports.
+        env:
+          IDF_VER: v5.5.1
+        run: |
+          git clone --depth 1 --recursive --branch "$IDF_VER" \
+            https://github.com/espressif/esp-idf.git
+          ./esp-idf/install.sh esp32
+
+      - name: Build mpy-cross
+        # Before export.sh is sourced anywhere: mpy-cross is a host tool and
+        # has no business being built inside IDF's own python/toolchain
+        # environment. Built explicitly for the usual reason -- see the unix
+        # job's own comment on py/mkenv.mk's auto-build rule.
+        run: make -C "$MPY_DIR/mpy-cross" -j"$(nproc)"
+
+      - name: Build ESP32 firmware
+        # USER_C_MODULES points at usermod/micropython.cmake itself, not at
+        # the repo root: CMake's USER_C_MODULES takes a file, not a directory
+        # to glob -- same as the rp2040 job above.
+        #
+        # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
+        # single-precision default is the right one and passing it explicitly
+        # would only invite it to drift from micropython.cmake's own default.
+        run: |
+          source esp-idf/export.sh
+          make -C "$MPY_DIR/ports/esp32" \
+            BOARD=ESP32_GENERIC \
+            USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
+            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-esp32
+          path: |
+            micropython-*/ports/esp32/build-ESP32_GENERIC/micropython.bin
+            micropython-*/ports/esp32/build-ESP32_GENERIC/firmware.bin
           if-no-files-found: error

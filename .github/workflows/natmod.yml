@@ -1,6 +1,18 @@
 name: natmod
 
 on:
+  # Same path filter as the pull_request trigger below, on any branch: this is
+  # what makes a plain `git push` to a work branch run the matrix, without
+  # needing a PR open or a workflow_dispatch (which needs actions: write, not
+  # every actor pushing here has it). A branch that is also the head of an open
+  # PR gets both runs -- the concurrency group keys on github.ref, which differs
+  # between refs/heads/<branch> and refs/pull/<n>/merge, so they do not cancel
+  # each other. That duplication is the deliberate cost of the trigger.
+  push:
+    paths:
+      - "bclibc"
+      - "natmod/**"
+      - ".github/workflows/natmod.yml"
   pull_request:
     paths:
       - "bclibc"
@@ -46,104 +58,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x64
-          - arch: x86
-            apt: gcc-multilib
-          - arch: armv6m
-            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
-          - arch: armv7m
-            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
-          - arch: armv7emsp
-            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
-          - arch: armv7emdp
-            apt: gcc-arm-none-eabi libnewlib-arm-none-eabi
-          - arch: rv32imc
-            apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
-          - arch: rv64imc
-            apt: gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
-          # xtensa/xtensawin need a toolchain tarball / esp-idf, not a plain
-          # apt package -- handled by their own steps below, not the generic
-          # "Install cross-compiler" step every other entry uses.
-          - arch: xtensa
-            toolchain: xtensa-lx106
-          - arch: xtensawin
-            toolchain: esp-idf
+        # Toolchain dispatch per ARCH (apt package / xtensa-lx106 tarball /
+        # esp-idf) now lives inside the build-natmod-arch action below, so
+        # this is just the flat list of dynruntime.mk ARCHes to build.
+        arch: [x64, x86, armv6m, armv7m, armv7emsp, armv7emdp, rv32imc, rv64imc, xtensa, xtensawin]
 
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Install cross-compiler
-        if: matrix.apt != ''
-        # apt-get update first -- the runner image's baked-in package index
-        # can already be stale by the time a job runs, pointing at a
-        # glibc/gcc version the mirror has since superseded (404 Not Found
-        # on install). Confirmed by a real CI failure on the x86 leg
-        # (libc6-dev-i386/libc6-x32/libc6-dev-x32 2.39-0ubuntu8.7, 404).
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y ${{ matrix.apt }}
-
-      - name: Install xtensa (esp8266) toolchain
-        if: matrix.toolchain == 'xtensa-lx106'
-        # Same recipe as a7p's own natmod job (and MicroPython's own
-        # ci_esp8266_setup) -- there's no apt package for this target.
-        run: |
-          wget -q https://micropython.org/resources/xtensa-lx106-elf-standalone.tar.gz
-          tar xzf xtensa-lx106-elf-standalone.tar.gz
-          echo "$PWD/xtensa-lx106-elf/bin" >> "$GITHUB_PATH"
-
-      - name: Install esp-idf (xtensawin toolchain)
-        if: matrix.toolchain == 'esp-idf'
-        # Unlike a7p's own natmod job (and MicroPython's own
-        # ci_esp32_idf_setup, tools/ci.sh), deliberately NOT running
-        # `git submodule update --init --recursive` here. Those recipes
-        # need it because they build the actual esp32 port against
-        # esp-idf's own components (bt/mbedtls/lwip/openthread/...) --
-        # this repo only ever uses esp-idf to obtain the
-        # xtensa-esp32s3-elf- toolchain that install.sh downloads
-        # separately from GitHub releases; nothing here touches IDF_PATH
-        # or any esp-idf header/component. The submodule step alone was
-        # ~3.5 of this step's ~6 minutes for zero benefit (confirmed via
-        # a real CI run's timestamps) -- esp-idf's own tools/tools.json,
-        # which install.sh reads, is a plain tracked file, not inside a
-        # submodule.
-        env:
-          IDF_VER: v5.4
-        run: |
-          git clone --depth 1 --branch $IDF_VER https://github.com/espressif/esp-idf.git
-          ./esp-idf/install.sh
-          source esp-idf/export.sh
-          echo "$PATH" | tr ':' '\n' | grep -i esp-idf >> "$GITHUB_PATH" || true
-
-      - name: Install Python tools
-        run: pip install pyelftools ar
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build ${{ matrix.arch }}
-        working-directory: natmod
-        # esp-idf's export.sh puts its own python venv ahead of system
-        # PATH, which resolves to a *different* python3/pip than the one
-        # "Install Python tools" installed pyelftools/ar into -- mpy_ld.py
-        # then fails with "RuntimeError: Please run 'pip install ar' to
-        # link .a files" even though that pip install already ran
-        # (confirmed by a real CI failure specific to xtensawin, the only
-        # esp-idf-toolchain leg; plain xtensa/tarball-toolchain legs never
-        # source export.sh, so they don't hit this).
-        run: |
-          if [ "${{ matrix.toolchain }}" = "esp-idf" ]; then
-            source ../esp-idf/export.sh
-            pip install pyelftools ar
-          fi
-          make ARCH=${{ matrix.arch }} MPY_DIR="$MPY_DIR" dist
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod-arch@v0.1.0
+        with:
+          arch: ${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -184,7 +115,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -249,6 +180,135 @@ jobs:
             "$MPY_DIR/ports/qemu/build-MPS2_AN385/firmware.elf" \
             tests/
 
+  # ── ARM natmods executed on real ARM silicon (32-bit ARM Linux) ───────────
+  # The `test` job above runs armv7m under qemu-system-arm and the job below
+  # runs armv6m under the rp2040py emulator. Both are emulators. This one is
+  # not: ubuntu-24.04-arm executes AArch32 on its own CPU (measured -- see
+  # usermod.yml's build-test-unix-static header), so a 32-bit armhf build of
+  # ports/unix is a real ARM host that can load a Cortex-M natmod .mpy.
+  #
+  # That this works at all is not obvious, and it is not universal. Two things
+  # have to line up, and py/dynruntime.mk decides both per ARCH:
+  #
+  #   1. The .mpy arch check. py/persistentcode.h gives a Thumb-2 host with a
+  #      double-precision FPU MPY_FEATURE_ARCH = MP_NATIVE_ARCH_ARMV7EMDP, and
+  #      MPY_FEATURE_ARCH_TEST is a *range* -- ARMV6M <= x <= that -- not an
+  #      equality. Ubuntu's arm-linux-gnueabihf-gcc defaults to Thumb-2 with
+  #      __ARM_FP=12, so every ARM natmod ARCH passes this check. Confirmed by
+  #      reading it back off the built binary: sys.implementation._mpy >> 10
+  #      is 8, i.e. ARMV7EMDP.
+  #
+  #   2. The float ABI, which the arch check does *not* cover. armv6m and
+  #      armv7m are built soft-float (dynruntime.mk gives them no
+  #      -mfloat-abi=hard), so floats cross into the runtime in core
+  #      registers, while an armhf host expects them in VFP registers per
+  #      AAPCS-VFP. The .mpy loads and then returns nonsense -- measured, not
+  #      predicted: find_zero_angle came back 984.252 rad, which is the range
+  #      in feet, instead of 0.002502. Silently wrong, never a crash. So those
+  #      two ARCHes are deliberately absent from this matrix and keep their
+  #      QEMU/rp2040py legs, which run them on the target they are actually
+  #      built for.
+  #
+  # armv7emsp and armv7emdp are both -mfloat-abi=hard, so they do line up --
+  # each against a host built with its own MICROPY_FLOAT_IMPL, since that
+  # governs the size of mp_float_t on both sides of the dynruntime call
+  # boundary. Both legs were run locally before this job existed: the full
+  # suite passes, with find_zero_angle back at 0.002502 rad.
+  #
+  # Scope, stated plainly: this runs Cortex-M code inside a Linux process. It
+  # proves the native module and its relocations are correct on real ARM
+  # silicon; it does not replace the QEMU and rp2040py legs, which exercise
+  # the firmware environment (no OS, the port's own libc, real flash layout).
+  test-arm-linux:
+    name: test (${{ matrix.arch }} / 32-bit ARM Linux)
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: armv7emsp
+            build_dir: armv7emsp_sp
+            # dynruntime.mk gives armv7emsp MICROPY_FLOAT_IMPL=float; the unix
+            # port defaults to double. mpconfigvariant_common.h guards it with
+            # #ifndef, so a -D on the command line wins. Verified on the
+            # resulting binary rather than assumed: `print(1/3)` gives
+            # 0.33333334, not 0.3333333333333333.
+            host_float: "-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT"
+          - arch: armv7emdp
+            build_dir: armv7emdp_dp
+            # armv7emdp is MICROPY_FLOAT_IMPL=double, which is already the
+            # unix port's own default -- nothing to override.
+            host_float: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+        with:
+          mpy_tag: ${{ env.MPY_TAG }}
+
+      - name: Install the armhf cross toolchain
+        # apt-get update first -- see the build job's "Install cross-compiler"
+        # step for why.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+      - name: Build mpy-cross
+        # Native arm64 host tool. Built explicitly so py/mkenv.mk's auto-build
+        # rule never fires mid-port-build, same as every other job here.
+        run: make -C "$MPY_DIR/mpy-cross" -j"$(nproc)"
+
+      - name: Build a 32-bit ARM micropython host
+        # MICROPY_PY_FFI=0/MICROPY_PY_BTREE=0: both want target libraries the
+        # cross toolchain does not ship (libffi headers for armhf in
+        # particular), and neither is reachable from tests/test_bclibc.py --
+        # this host exists only to load a natmod .mpy and run that one suite.
+        # usermod.yml's own armhf row is where a full-featured static armhf
+        # build is actually exercised.
+        #
+        # LDFLAGS_EXTRA=-static is load-bearing, not a nicety. The runner is
+        # arm64: its CPU executes AArch32, but its filesystem has no armhf
+        # glibc and no /lib/ld-linux-armhf.so.3, so a dynamically linked
+        # armhf binary dies with "cannot execute: required file not found"
+        # (exit 127) -- a real failure of the first version of this job. A
+        # static link has no interpreter to find. Same reason usermod.yml's
+        # armhf row links static.
+        #
+        # BUILD stays outside natmod/build/, which the artifact download below
+        # unpacks into.
+        run: |
+          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
+            BUILD="$GITHUB_WORKSPACE/mpy-host-${{ matrix.arch }}" \
+            CROSS_COMPILE=arm-linux-gnueabihf- \
+            MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
+            CFLAGS_EXTRA="${{ matrix.host_float }}" \
+            LDFLAGS_EXTRA="-static" -j"$(nproc)"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tiny-bclibc-${{ matrix.arch }}
+          path: natmod/build/
+
+      - name: Symlink module for testing
+        run: ln -sf ../natmod/build/${{ matrix.build_dir }}/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+
+      - name: Run tests
+        # `file` and the two probes first, so the log carries the evidence
+        # rather than this job's comment having to be taken on faith: a
+        # 32-bit ARM binary, the arch it advertises to the .mpy loader, and
+        # which float width it was built with.
+        run: |
+          HOST="$GITHUB_WORKSPACE/mpy-host-${{ matrix.arch }}/micropython"
+          file "$HOST"
+          "$HOST" -c "import sys; print('MPY_FEATURE_ARCH', sys.implementation._mpy >> 10)"
+          "$HOST" -c "print('float width probe', 1/3)"
+          "$HOST" tests/test_bclibc.py
+
   # ── armv6m (RP2040): runtime test via the rp2040py emulator ────────────────
   # Not possible via QEMU (the MICROBIT board firmware doesn't support loading
   # native .mpy for Cortex-M0, and no other QEMU ARM board emulates armv6m
@@ -288,9 +348,14 @@ jobs:
       # writing the image, because littlefs-python's C objects get finalized out of order during
       # PyPy's interpreter shutdown - not reproducible under CPython (see rp2040py's docs/PORTING.md
       # for the full writeup).
-      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.2.5
+      #
+      # v0.2.5 is the hard floor for *this* job: `mklittlefs`'s file argument only accepted
+      # .py/.js before it, so handing it tiny_bclibc.mpy below died with "File must have one
+      # of the following extensions: .py, .js" (exit 2) - a real failure seen on this branch
+      # while it was still pinned to v0.2.4.
+      - uses: o-murphy/rp2040py/.github/actions/setup-rp2040py@v0.3.1
         with:
-          version: "0.2.5"
+          version: "0.3.1"
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |

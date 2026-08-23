@@ -7,6 +7,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### `usermod.yml` — Windows x86 / x64 / arm64, built and tested natively
+
+A new `build-test-windows` matrix job builds `ports/windows` with
+`USER_C_MODULES` under MSYS2 (MINGW32 for x86, MINGW64 for x64, CLANGARM64 for
+arm64) and runs `tests/test_bclibc.py` on the machine that built it — x86 and x64
+on `windows-latest` (WOW64 runs the 32-bit exe with no emulation layer), arm64 on
+`windows-11-arm`. This is coverage `natmod.yml` cannot provide even in principle:
+`ports/windows/mpconfigport.h` sets `MICROPY_EMIT_X64 (0)` and
+`py/persistentcode.c` gates `.mpy` native-code loading on
+`MICROPY_EMIT_MACHINE_CODE`, so a natmod `.mpy` has nothing to load into on this
+port whatever ARCH it was built for.
+
+The recipe (and in particular the four CLANGARM64 overrides — `LDFLAGS_ARCH`
+because lld rejects `--cref`, `COMPILER_TARGET` because the gcc-compat wrapper's
+`-dumpmachine` doesn't contain "mingw", `STRIP=""`/`SIZE="true"` because that
+toolchain ships neither binary) is transplanted from `o-murphy/micropython-wasm3`
+and `o-murphy/a7p`, which run this exact combination green. The arm64 row also
+passes `CFLAGS_EXTRA=-Wno-error`, because MicroPython's *own* `py/binary.c` and
+`shared/runtime/gchelper_generic.c` do not survive the port's gcc-tuned `-Werror`
+warning set under clang. Nothing of this repo's is exempted by that: the x86/x64
+rows keep `-Werror`, and `src/tiny_bclibc_mp.c` plus the `bclibc` sources were
+separately confirmed to compile clean under the port's exact set
+(`-Wall -Wpointer-arith -Wdouble-promotion -Werror`, double precision).
+
+### Changed
+
+#### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
+
+A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
+`ports/unix` interpreter and loads the `armv7emsp` and `armv7emdp` natmod
+`.mpy`s into it, running the full `tests/test_bclibc.py` on each. Until now
+every ARM natmod leg was emulated: `armv7m` under `qemu-system-arm`, `armv6m`
+under rp2040py.
+
+It works because `py/persistentcode.h` gives a Thumb-2 host with a
+double-precision FPU `MPY_FEATURE_ARCH = MP_NATIVE_ARCH_ARMV7EMDP`, and
+`MPY_FEATURE_ARCH_TEST` is a *range* (`ARMV6M <= x <= that`), not an equality —
+so every ARM natmod ARCH clears the header check on an armhf host. Read back
+off the built binary rather than assumed: `sys.implementation._mpy >> 10` is 8.
+
+It covers only two of the four ARM ARCHes because the arch check says nothing
+about the **float ABI**. `armv6m` and `armv7m` get no `-mfloat-abi=hard` from
+`py/dynruntime.mk`, so their floats arrive in core registers while an armhf
+host reads them from VFP registers per AAPCS-VFP. Measured, not predicted:
+those `.mpy`s load and then return nonsense — `find_zero_angle` gave `984.252`
+rad, the range in feet, instead of `0.002502`. Silently wrong, never a crash,
+so those two ARCHes are deliberately excluded and keep their emulator legs.
+`armv7emsp` and `armv7emdp` are hard-float and line up, each against a host
+built with its own `MICROPY_FLOAT_IMPL` (`-DMICROPY_FLOAT_IMPL=` on the command
+line for the single-precision one; `mpconfigvariant_common.h` guards its double
+default with `#ifndef`).
+
+This does not replace the QEMU or rp2040py legs. Those exercise the firmware
+environment — no OS, the port's own libc, real flash layout. This runs
+Cortex-M code inside a Linux process, proving the native module and its
+relocations are correct on real ARM silicon, and nothing beyond that.
+
+#### `usermod.yml` — x64/x86 rows, and an ESP32 build
+
+`build-test-unix` gained `x64` and `x86` rows. Both duplicate ARCHes
+`natmod.yml` already builds and runs, which this workflow's header explicitly
+calls out as not its job — they are here anyway because the two build modes
+fail in different ways. A usermod links against the port's own libc and its
+globals live in firmware `.bss`; a natmod links against dynruntime and carries
+its own. "x64 natmod passes" says nothing about the usermod path on the same
+machine, and these are the only rows here where a failure is unambiguously this
+repo's code rather than a toolchain or an emulator. `x86` uses
+`MICROPY_FORCE_32BIT=1` with `gcc-multilib` and `libffi-dev:i386`, the same
+recipe `natmod.yml`'s own x86 leg uses.
+
+A new `build-esp32` job builds `ports/esp32` (`BOARD=ESP32_GENERIC`) with
+`USER_C_MODULES` under ESP-IDF v5.5.1 — the version `ports/esp32/README.md`
+names as recommended for this MicroPython release. **Build-only**, and not as a
+shortcut: there is no esp32 emulator to hand a firmware image to the way
+rp2040py takes a `.uf2`. It proves `tiny_bclibc` compiles and links into a real
+esp32 firmware under a compiler, libc and config unlike anything else here; it
+proves nothing runs.
+
+It is not a duplicate of `natmod.yml`'s `xtensawin` leg despite the shared ISA.
+That one builds a `.mpy` against dynruntime and only borrows the compiler out of
+esp-idf, deliberately skipping IDF's submodules. A usermod is compiled into the
+firmware, so this job clones esp-idf `--recursive`.
+
+Written CI-first rather than verified locally, which is unusual here and worth
+recording: `dl.espressif.com` and `components-file.espressif.com` are both
+refused by the development environment's egress policy, so neither the toolchain
+nor the IDF managed components (`espressif/mdns` always, `espressif/lan867x` for
+target esp32) can be fetched there. What is known to work on the runner is
+esp-idf's own `install.sh` — `natmod.yml`'s xtensawin leg has been doing exactly
+that, green. The open question this job settles is whether the
+managed-component fetch and the full port build follow.
+
+#### `usermod.yml` — the aarch64 row is a plain dynamic build again
+
+`build-test-unix-static` is now `build-test-unix`, and `MICROPY_STANDALONE=1
+LDFLAGS_EXTRA=-static` applies to the `armhf` and `mipsel` rows only. On those
+two it is load-bearing: the arm64 runner carries no armhf glibc and no
+`/lib/ld-linux-armhf.so.3`, and `qemu-user` runs mipsel with no sysroot, so a
+dynamically linked binary cannot start. `aarch64` has neither problem — it
+executes natively on the machine that builds it.
+
+The deployability argument that put it there originally does not hold up:
+`release.yml` calls `natmod.yml` alone, so the usermod binary is a CI artifact
+and never a release asset, and a static glibc's `dlopen` still needs the
+matching shared libraries at run time. Measured rather than inferred:
+`ffi.open("libm.so.6")` in a static build works on a machine carrying that
+glibc — which is the machine that did not need a static binary — and is exactly
+what stops working on the minimal board that did. This repo has an `ffimod/`
+route that loads `libtiny_bclibc.so` through `ffi`, so that is not hypothetical.
+
+The row now installs `libffi-dev`/`pkg-config` and links against the system
+libffi, matching `o-murphy/micropython-wasm3`'s aarch64 usermod row, which has
+always been built that way.
+
+#### `usermod.yml` — armhf moved off qemu-user onto a real AArch32 runner
+
+The `armhf` row of `build-test-unix-static` now runs on `ubuntu-24.04-arm`
+instead of `ubuntu-latest`: the arm64 runner cross-builds the 32-bit binary
+and then executes it on its own CPU, with no emulator and no binfmt handler
+involved. That is measured, not assumed — `o-murphy/micropython-wasm3` carried
+a probe job that built a statically linked, freestanding AArch32 binary and
+ran it there ("RESULT: AArch32 IS supported on this runner", that repo's
+usermod run #18). `mipsel` keeps `qemu-user-static`; GitHub has no mips runner.
+
+The move is also why armhf switched from `arm-linux-gnueabi-` to
+`arm-linux-gnueabihf-`. Under qemu the ABI choice was nearly free — the
+emulator implements whatever ARMv5 asks for. On real ARMv8 hardware it is not:
+`gnueabi` is soft-float and baselines at ARMv5TE, whose SWP/SWPB atomics ARMv8
+removed outright, surviving only through the kernel's opt-in
+`ARMV8_DEPRECATED` emulation. `gnueabihf` is the toolchain the probe binary was
+built with, and it is what this row has always been called. `mipsel` is
+untouched.
+
+#### `natmod.yml` / `usermod.yml` — added a `push` trigger
+
+Both workflows now run on `push` as well as `pull_request`, with the same path
+filter and no branch restriction, so a plain `git push` to a work branch runs
+the matrix without needing an open PR or a `workflow_dispatch` (the latter
+requires `actions: write`, which not every actor pushing here has). A branch
+that is also the head of an open PR gets both runs: the concurrency group keys
+on `github.ref`, which differs between `refs/heads/<branch>` and
+`refs/pull/<n>/merge`, so the two do not cancel each other. `release.yml` is
+unchanged — it already triggers on `push` of `v*` tags.
+
+#### `natmod.yml` / `usermod.yml` — rp2040py 0.2.4 → 0.3.1
+
+`natmod.yml`'s `mklittlefs` step was failing outright on this branch: rp2040py's
+file argument only accepted `.py`/`.js` before 0.2.5, so handing it
+`natmod/build/armv6m_sp/tiny_bclibc.mpy` died with *"File must have one of the
+following extensions: .py, .js"* (exit 2). 0.2.5 added `.mpy`; 0.3.1 is the
+current release and the action's own inputs (`version`, `python_version`) are
+unchanged across the range, as are the `mklittlefs -o` and `micropython --image`
+command lines both workflows use.
+
+### Removed
+
+#### `usermod/patches/micropython/ports/webassembly/` — dead patches, never applied
+
+Three patches (`0001-main.c-fix-external-call-depth-unused`,
+`0002-library.js-fix-interrupt-char-abi`, `0003-api.js-fix-runpython-async`) were
+added alongside the first `usermod` wasm target, back when it still built the
+default `standard` variant. Nothing ever applied them: there is no `git apply` /
+`patch -p` step in `usermod.yml`, `natmod.yml` or `release.yml`, and the wasm job
+switched to `VARIANT=pyscript` — which doesn't use `-s ASYNCIFY` and so hits none
+of the three bugs. Two of them are moot upstream anyway: `main.c`'s
+`external_call_depth` is now guarded by `#if MICROPY_GC_SPLIT_HEAP_AUTO`, and
+`library.js`'s `mp_hal_get_interrupt_char` ccall already passes `[], []` on master.
+Only the `api.js` `runPython` async fix is still open upstream, and it only matters
+for `VARIANT=standard`, which this project does not build — bclibc is pure
+computation, no `await`/REPL/stack-switching, so ASYNCIFY buys it nothing but a
+bigger, slower `.wasm`. The rationale for `pyscript` and the upstream tracking link
+([micropython/micropython#19380](https://github.com/micropython/micropython/issues/19380))
+stay documented in `README.md` and in the `build-test-wasm` job comment.
+
 ## [1.2.1] - 2026-07-28
 
 ### Fixed

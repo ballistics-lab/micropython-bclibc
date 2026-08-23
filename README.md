@@ -140,6 +140,45 @@ one file needs to be copied to the device / uploaded as a release artifact.
 
 `bc.version()` returns `"1.1.3-sp"` or `"1.1.3-dp"`.
 
+### Running an ARM natmod on an ARM Linux host
+
+Two of the four ARM ARCHes can be exercised on a real 32-bit ARM Linux
+MicroPython, without an emulator and without a board — which is what CI's
+`test (armv7emsp | armv7emdp / 32-bit ARM Linux)` jobs do on `ubuntu-24.04-arm`.
+Useful locally too, if you have any ARM box to hand:
+
+```bash
+# a 32-bit ARM host interpreter; drop the -D for armv7emdp (double is the
+# unix port's own default)
+make -C /path/to/micropython-1.28.0/ports/unix VARIANT=standard \
+    BUILD=/tmp/mpy-armhf CROSS_COMPILE=arm-linux-gnueabihf- \
+    MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
+    CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT
+
+ln -sf ../natmod/build/armv7emsp_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+/tmp/mpy-armhf/micropython tests/test_bclibc.py
+```
+
+Why it works: `py/persistentcode.h` gives a Thumb-2 host with a
+double-precision FPU `MPY_FEATURE_ARCH = MP_NATIVE_ARCH_ARMV7EMDP`, and the
+compatibility test is a *range* (`ARMV6M <= x <= that`), not an equality — so
+every ARM natmod ARCH passes the header check on an armhf host.
+
+Why only two: the arch check does not cover the **float ABI**. `armv6m` and
+`armv7m` get no `-mfloat-abi=hard` from `py/dynruntime.mk`, so their floats
+cross into the runtime in core registers while an armhf host expects them in
+VFP registers. Those `.mpy`s load and then return nonsense — `find_zero_angle`
+came back `984.252` rad (the range in feet) instead of `0.002502`. Silently
+wrong, never a crash, so do not do it. `armv7emsp` and `armv7emdp` are
+hard-float and line up, each against a host built with its own
+`MICROPY_FLOAT_IMPL` — that governs `mp_float_t` on both sides of the
+dynruntime call boundary.
+
+What this does **not** replace: the QEMU Cortex-M3 and rp2040py legs. Those run
+firmware — no OS, the port's own libc, real flash layout. This runs Cortex-M
+code inside a Linux process, which proves the native module and its relocations
+are right on real ARM silicon and nothing more.
+
 ```bash
 make clean      # rm -rf natmod/build/ natmod/generated/
 ```
@@ -232,9 +271,11 @@ Expected output ends with `=== done ===` and all lines read `PASS`.
 available as a built-in. Use this approach when:
 
 - natmod can't reach your target at all (aarch64, armhf, mipsel, wasm — no such
-  `dynruntime.mk` ARCH); for everything else (x64, x86, RP2040 on stock firmware, …)
-  prefer natmod above — it needs no firmware rebuild
-- you need a fully static / standalone unix binary for deployment (aarch64/armhf/mipsel)
+  `dynruntime.mk` ARCH; Windows — the port disables native code emit entirely, see
+  below); for everything else (x64, x86, RP2040 on stock firmware, …) prefer natmod
+  above — it needs no firmware rebuild
+- you need a fully static / standalone unix binary for deployment (any unix arch;
+  CI links armhf/mipsel that way because those two need it to run at all)
 - you need a genuine build+run test under an emulator (QEMU Cortex-M3, rp2040js)
 
 There is **no `usermod/Makefile`** — same as a7p's own usermod integration. You build
@@ -248,13 +289,24 @@ single precision, `usermod/micropython.cmake` too — pass `MP_BCLIBC_PRECISION=
 the port's own build command line if your target has a double-precision FPU (or is a
 general-purpose Linux/JS target, which always gets it in CI — see below).
 
-### AArch64 / ARMhf / MIPS LE (static unix binary)
+### AArch64 / ARMhf / MIPS LE (unix binary)
 
-`MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static"` is required for real deployability to a
-minimal target Linux system that can't be assumed to have a matching `ld.so`/libc — not
-just a CI nicety (see [micropython/micropython#17456](https://github.com/micropython/micropython/pull/17456)).
+`MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static"` is what to reach for when the target is a
+minimal Linux system that can't be assumed to have a matching `ld.so`/libc (see
+[micropython/micropython#17456](https://github.com/micropython/micropython/pull/17456)).
 `MICROPY_STANDALONE=1` only adds `lib/libffi` to `DEPLIBS`; `deplibs` is its own Makefile
 target and must be run as a separate step before the main build.
+
+In CI, only **armhf and mipsel** are built that way, and there it is not a preference:
+the arm64 runner has no armhf glibc and no `/lib/ld-linux-armhf.so.3`, and `qemu-user`
+runs mipsel with no sysroot, so a dynamically linked binary cannot start at all.
+**aarch64 is a plain dynamic build** against the system libffi. It used to be static on
+the same deployability argument, and that argument does not survive contact with the
+details: it runs natively on the machine that builds it, `release.yml` only publishes
+natmod assets so nothing ships that binary, and a static glibc's `dlopen` still needs the
+matching shared libraries at run time — so `ffi.open()` works on the machine you did not
+need a static binary for, and stops working on the minimal board you did. Drop the two
+options below if you want the same plain build locally.
 
 ```bash
 cd /path/to/micropython-1.28.0
@@ -273,10 +325,45 @@ make -C ports/unix VARIANT=standard \
 build-standard/micropython /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
-Cross-compiling (armhf/mipsel): add `CROSS_COMPILE=arm-linux-gnueabi-` or
-`CROSS_COMPILE=mipsel-linux-gnu-` to both commands above. The resulting static binary
-runs directly under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed —
-there's no dynamic linking left to resolve.
+Cross-compiling (armhf/mipsel): add `CROSS_COMPILE=arm-linux-gnueabihf-` or
+`CROSS_COMPILE=mipsel-linux-gnu-` to both commands above.
+
+In CI those two are no longer treated the same way. armhf is cross-built on
+`ubuntu-24.04-arm` and then **run on that runner's own CPU** — a GitHub arm64
+runner executes 32-bit ARM directly, measured on the runner rather than assumed.
+That is also why it uses `gnueabihf` and not upstream's soft-float `gnueabi`:
+armel baselines at ARMv5TE, whose SWP atomics ARMv8 removed. mipsel is still
+emulated, because GitHub has no mips runner; the static binary runs directly
+under `qemu-user-static` with no `/usr/gnemul` sysroot symlink needed — there's
+no dynamic linking left to resolve.
+
+### Not done: musl for the static unix builds
+
+`armhf` and `mipsel` link `-static` against glibc, and glibc warns on every
+such link:
+
+```
+Using 'dlopen' in statically linked applications requires at runtime
+  the shared libraries from the glibc version used for linking
+Using 'getaddrinfo' in statically linked applications requires at runtime
+  the shared libraries from the glibc version used for linking
+```
+
+Both are real: glibc resolves NSS and `dlopen` through shared objects it still
+expects at run time, so a "static" glibc binary is not fully self-contained on
+the minimal target it exists for. That is also half of why the `aarch64` row
+stopped linking static (see above). musl has no NSS and a stub `dlopen`, so the
+same build against musl has neither caveat.
+
+Measured, not assumed — a musl static build came back with **zero** link
+warnings against glibc's two, `ldd` reporting `not a dynamic executable`, and
+`getaddrinfo` working. The cost is two config knobs: `MICROPY_PY_BTREE=0` and
+`MICROPY_PY_FFI=0`. The second is not free here: `ffimod/` exists precisely to
+load `libtiny_bclibc.so` through `ffi`, so a musl build would be a natmod/usermod
+host only.
+
+Deliberately not implemented for now. Recorded here so the measurement is not
+lost and so the next person does not have to re-derive it.
 
 ### RP2040 (CMake / pico-sdk)
 
@@ -318,6 +405,45 @@ rp2040py micropython \
     tests/test_bclibc.py
 ```
 
+### ESP32 (ESP-IDF / CMake, build-only)
+
+The one usermod target with no execution step, and not for want of trying:
+there is no esp32 emulator to hand a firmware image to the way rp2040py takes
+an RP2040 `.uf2` or `qemu-system-arm` takes a Cortex-M3 `.elf`. What CI's
+`build (esp32 / ESP32_GENERIC)` job proves is that `tiny_bclibc` compiles and
+links into a real esp32 firmware under the ESP-IDF toolchain — a different
+compiler, libc and config from everything else here — and nothing more.
+
+Not a duplicate of natmod's `xtensawin` ARCH despite the shared ISA: that one
+builds a `.mpy` against `dynruntime` and only borrows the compiler out of
+ESP-IDF, deliberately skipping IDF's own submodules. A usermod is compiled
+into the firmware, so it needs the full IDF.
+
+ESP-IDF v5.5.1 is what `ports/esp32/README.md` names as recommended for
+MicroPython v1.28.0 (5.3, 5.4, 5.4.1 and 5.4.2 are also supported). No
+`MP_BCLIBC_PRECISION`: esp32 has no double-precision FPU, so the
+single-precision default is the right one.
+
+```bash
+git clone --depth 1 --recursive --branch v5.5.1 \
+    https://github.com/espressif/esp-idf.git
+./esp-idf/install.sh esp32
+source esp-idf/export.sh
+
+make -C /path/to/micropython-1.28.0/mpy-cross
+make -C /path/to/micropython-1.28.0/ports/esp32 BOARD=ESP32_GENERIC \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+```
+
+If a build fails here, note that `idf.py` redirects the compiler's own stderr
+into `build-*/log/idf_py_stderr_output_<pid>` and prints only a one-line
+summary — and that file holds idf.py's bookkeeping, not the diagnostic. The
+reliable way to see it is to re-run `ninja -C build-ESP32_GENERIC -v` in the
+same build directory: everything else is built already, so it recompiles just
+the failing translation unit and prints both the command and the compiler's
+output.
+
 ### QEMU Cortex-M3 (armv7m, build + run test)
 
 No FPU on Cortex-M3, so single precision (the port's own default — no override needed):
@@ -333,6 +459,28 @@ python3 /path/to/micropython-bclibc/usermod/ci/run_qemu.py \
     /path/to/micropython-1.28.0/ports/qemu/build-MPS2_AN385/firmware.elf \
     /path/to/micropython-bclibc/tests/
 ```
+
+**What this job actually guards.** `ports/qemu/Makefile:74` links `-nostdlib`
+with `libgcc` alone: a usermod there has **no libc and no libm at all**. That
+holds true for `tiny_bclibc` — no `malloc`, no `math`, no `printf` anywhere in
+`src/` or `bclibc/tiny_bclibc/` — and this job exists to keep it true rather
+than to assume it. A dependency on either would stop linking here, which is the
+signal wanted. `o-murphy/micropython-wasm3` cannot run this job for exactly that
+reason: wasm3 allocates through the port's `calloc()`, and supplying its own
+shims would link and then corrupt, because those shims allocate on the GC heap
+while a usermod's globals sit in firmware `.bss` that `gc_collect()` does not
+scan. Fixing that needs `MP_REGISTER_ROOT_POINTER`, whose hard part is that
+MicroPython's GC only traces block-aligned pointers.
+
+**`ports/esp8266` is worse than uncovered — do not reach for it.** It would
+build and then be silently wrong. `ports/esp8266/posix_helpers.c:35` implements
+`malloc` as `gc_alloc`, and, as above, a usermod's globals live in firmware
+`.bss`, which `gc_collect()` never scans — so anything allocated at import time
+becomes unreachable garbage the collector is free to reuse. Not a build error,
+not a crash at first: wrong answers later. `MP_REGISTER_ROOT_POINTER` is the
+prerequisite there too. The same applies to `stm32`, `samd`, `nrf`, `alif`,
+`zephyr` and `cc3200`, which have no C heap at all. Deliberately not attempted;
+recorded so nobody has to rediscover it from a corrupted trajectory.
 
 ### WebAssembly
 
@@ -354,6 +502,40 @@ make -C /path/to/micropython-1.28.0/ports/webassembly VARIANT=pyscript \
 node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
 
+### Windows (x86 / x64 / arm64)
+
+natmod is not an option on this port at all, whatever ARCH the `.mpy` was built for:
+`ports/windows/mpconfigport.h` sets `MICROPY_EMIT_X64 (0)`, and `py/persistentcode.c`
+gates `.mpy` native-code loading on `MICROPY_EMIT_MACHINE_CODE` — so there is nothing
+for a native module to load into. usermod is how `tiny_bclibc` runs on Windows.
+
+Built with MSYS2, the same way upstream MicroPython's own `build-mingw` CI job does:
+MINGW32 for x86, MINGW64 for x64, CLANGARM64 for arm64. Desktop targets, so double
+precision. CI builds and runs all three natively — x86/x64 on an x64 runner (WOW64
+runs the 32-bit exe with no emulation layer), arm64 on `windows-11-arm`.
+
+```bash
+# In an MSYS2 shell (MINGW64 here), with: make git python3 mingw-w64-x86_64-gcc
+make -C /path/to/micropython-1.28.0/mpy-cross
+make -C /path/to/micropython-1.28.0/ports/windows \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
+    MP_BCLIBC_PRECISION=double
+
+build-standard/micropython.exe /path/to/micropython-bclibc/tests/test_bclibc.py
+```
+
+Under CLANGARM64 four extra overrides are needed, all for MicroPython's own build
+system rather than for anything in this repo — `LDFLAGS_ARCH` (lld rejects `--cref`),
+`COMPILER_TARGET` (the gcc-compat wrapper's `-dumpmachine` doesn't say "mingw", which
+both drops `fmode.c` from mpy-cross and drops the `.exe` suffix), `STRIP=""` /
+`SIZE="true"` (that toolchain ships neither binary), plus `CFLAGS_EXTRA=-Wno-error`
+because `py/binary.c` and `shared/runtime/gchelper_generic.c` don't survive the port's
+gcc-tuned `-Werror` set under clang. See `.github/workflows/usermod.yml` for the full
+reasoning on each. This repo's own sources are clean under that warning set — they are
+compiled with `-Wall -Wpointer-arith -Wdouble-promotion -Werror` on the x86/x64 rows,
+which keep it.
+
 ### natmod vs usermod comparison
 
 |                          | natmod                          | usermod                                  |
@@ -364,6 +546,7 @@ node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclib
 | Memory at import         | Filesystem read + bytecode load | Instant (already in flash)               |
 | RP2040 support           | armv6m `.mpy`                   | cmake `USER_C_MODULES`                   |
 | Unix port support        | Yes                             | Yes (also produces a micropython binary) |
+| Windows port support     | No (port disables native emit)  | Yes (x86 / x64 / arm64, MSYS2)           |
 
 ---
 
