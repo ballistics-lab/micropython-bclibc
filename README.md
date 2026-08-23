@@ -405,6 +405,45 @@ rp2040py micropython \
     tests/test_bclibc.py
 ```
 
+### ESP32 (ESP-IDF / CMake, build-only)
+
+The one usermod target with no execution step, and not for want of trying:
+there is no esp32 emulator to hand a firmware image to the way rp2040py takes
+an RP2040 `.uf2` or `qemu-system-arm` takes a Cortex-M3 `.elf`. What CI's
+`build (esp32 / ESP32_GENERIC)` job proves is that `tiny_bclibc` compiles and
+links into a real esp32 firmware under the ESP-IDF toolchain — a different
+compiler, libc and config from everything else here — and nothing more.
+
+Not a duplicate of natmod's `xtensawin` ARCH despite the shared ISA: that one
+builds a `.mpy` against `dynruntime` and only borrows the compiler out of
+ESP-IDF, deliberately skipping IDF's own submodules. A usermod is compiled
+into the firmware, so it needs the full IDF.
+
+ESP-IDF v5.5.1 is what `ports/esp32/README.md` names as recommended for
+MicroPython v1.28.0 (5.3, 5.4, 5.4.1 and 5.4.2 are also supported). No
+`MP_BCLIBC_PRECISION`: esp32 has no double-precision FPU, so the
+single-precision default is the right one.
+
+```bash
+git clone --depth 1 --recursive --branch v5.5.1 \
+    https://github.com/espressif/esp-idf.git
+./esp-idf/install.sh esp32
+source esp-idf/export.sh
+
+make -C /path/to/micropython-1.28.0/mpy-cross
+make -C /path/to/micropython-1.28.0/ports/esp32 BOARD=ESP32_GENERIC \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+```
+
+If a build fails here, note that `idf.py` redirects the compiler's own stderr
+into `build-*/log/idf_py_stderr_output_<pid>` and prints only a one-line
+summary — and that file holds idf.py's bookkeeping, not the diagnostic. The
+reliable way to see it is to re-run `ninja -C build-ESP32_GENERIC -v` in the
+same build directory: everything else is built already, so it recompiles just
+the failing translation unit and prints both the command and the compiler's
+output.
+
 ### QEMU Cortex-M3 (armv7m, build + run test)
 
 No FPU on Cortex-M3, so single precision (the port's own default — no override needed):
