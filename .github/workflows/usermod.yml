@@ -160,7 +160,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -287,7 +287,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -328,7 +328,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/clone-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@main
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           submodules: lib/micropython-lib
@@ -404,7 +404,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/clone-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@main
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           # lib/mbedtls: ports/rp2/CMakeLists.txt unconditionally lists it
@@ -555,19 +555,19 @@ jobs:
           # pulled in by make/git/the compiler package, so without it the
           # build dies with "python3: No such file or directory" the moment
           # it needs to generate anything.
-          # curl/tar/xz: the MicroPython tarball fetch below. The repo's own
-          # .github/actions/fetch-micropython can't be reused here -- it is a
-          # composite action, so its steps declare their own `shell: bash`
-          # (git-bash on this runner, which has no wget) and a caller cannot
-          # override that to `msys2 {0}`.
+          # curl/tar/xz: the MicroPython tarball fetch below. The shared
+          # micropython-native-ci fetch-micropython action can't be reused
+          # here -- it is a composite action, so its steps declare their own
+          # `shell: bash` (git-bash on this runner, which has no wget) and a
+          # caller cannot override that to `msys2 {0}`.
           install: make git python3 curl tar xz ${{ matrix.msys_install }}
 
       - name: Fetch MicroPython ${{ env.MPY_TAG }}
         shell: msys2 {0}
-        # Same tarball as every other job in this workflow (via
-        # .github/actions/fetch-micropython), just fetched inline for the
-        # reason in the install: comment above. MPY_DIR is exported as
-        # MSYS2's POSIX-style path ("/d/a/..."), not $GITHUB_WORKSPACE's
+        # Same tarball as every other job in this workflow (via the shared
+        # micropython-native-ci fetch-micropython action), just fetched
+        # inline for the reason in the install: comment above. MPY_DIR is
+        # exported as MSYS2's POSIX-style path ("/d/a/..."), not $GITHUB_WORKSPACE's
         # native "D:\a\..." -- an unquoted backslash is MSYS2 bash's own
         # escape character and gets *consumed* on a later `make` command
         # line ("D:\a\x" -> "D:ax"), which is a real, previously observed
@@ -717,7 +717,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ./.github/actions/fetch-micropython
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
