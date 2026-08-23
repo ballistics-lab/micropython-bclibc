@@ -160,7 +160,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -287,7 +287,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -328,7 +328,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@main
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           submodules: lib/micropython-lib
@@ -404,7 +404,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@main
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
           # lib/mbedtls: ports/rp2/CMakeLists.txt unconditionally lists it
@@ -717,7 +717,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@main
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
