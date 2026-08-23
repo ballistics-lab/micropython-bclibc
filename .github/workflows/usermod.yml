@@ -101,7 +101,7 @@ jobs:
   # measured, not inferred. o-murphy/micropython-wasm3's aarch64 row has
   # always been a plain native build; this now matches it.
   build-test-unix:
-    name: build + test (${{ matrix.arch }}${{ matrix.link_label }})
+    name: build + test (${{ matrix.arch }})
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -117,43 +117,24 @@ jobs:
           # path on the same machine. Cheap rows, and the only ones here
           # where a failure is unambiguously this repo's code rather than a
           # toolchain or an emulator.
+          #
+          # Per-arch toolchain/link-flag dispatch (apt packages, CROSS_COMPILE,
+          # MICROPY_STANDALONE/-static for armhf+mipsel, MICROPY_FORCE_32BIT for
+          # x86) now lives inside the shared build-usermod-unix-arch action, so
+          # this matrix is just the flat list of arches plus the runner each
+          # needs -- aarch64/armhf on ubuntu-24.04-arm (native AArch32/64, see
+          # that action's own header for the probe this is based on), the rest
+          # on ubuntu-latest.
           - arch: x64
             runs_on: ubuntu-latest
-            cross_compile: ""
-            link_label: ""
-            apt: libffi-dev pkg-config
           - arch: x86
             runs_on: ubuntu-latest
-            cross_compile: ""
-            link_label: ", 32-bit"
-            # Not a cross-compiler: MICROPY_FORCE_32BIT=1 makes the unix
-            # Makefile add -m32 to the host gcc, which needs gcc-multilib and
-            # the i386 libffi. Same recipe natmod.yml's own x86 test leg uses,
-            # including the dpkg --add-architecture step below.
-            force_32bit: "1"
-            apt: gcc-multilib libffi-dev:i386 pkg-config
           - arch: aarch64
             runs_on: ubuntu-24.04-arm
-            cross_compile: ""
-            link_label: ""
-            # System libffi rather than one built from source: this row links
-            # against it dynamically now. Not assumed present on the image --
-            # micropython-wasm3's own aarch64 usermod row installs exactly
-            # these two and is green with them.
-            apt: libffi-dev pkg-config
           - arch: armhf
             runs_on: ubuntu-24.04-arm
-            cross_compile: arm-linux-gnueabihf-
-            link_label: ", static"
-            standalone: "1"
-            apt: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libltdl-dev autoconf libtool libtool-bin pkg-config
           - arch: mipsel
             runs_on: ubuntu-latest
-            cross_compile: mipsel-linux-gnu-
-            link_label: ", static"
-            standalone: "1"
-            apt: gcc-mipsel-linux-gnu g++-mipsel-linux-gnu libc6-mipsel-cross libltdl-dev autoconf libtool libtool-bin pkg-config
-            qemu_bin: qemu-mipsel-static
     steps:
       - uses: actions/checkout@v7
         with:
@@ -164,113 +145,24 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Install build deps
-        # autoconf/libtool/libtool-bin/libltdl-dev are for
-        # MICROPY_STANDALONE=1's own autotools build of lib/libffi on the
-        # armhf/mipsel rows (its own ./autogen.sh rule handles the rest -- no
-        # manual libtoolize/autoreconf needed); those rows carry no libffi-dev,
-        # because STANDALONE means building a static libffi.a for the *target*
-        # instead of linking the host system's. aarch64 is the other way round
-        # -- plain dynamic link, so its apt list is just libffi-dev/pkg-config.
-        #
-        # apt-get update first -- the runner image's baked-in package index
-        # can already be stale by the time a job runs, pointing at a
-        # package version the mirror has since superseded (404 Not Found on
-        # install). Confirmed by repeated real CI failures on natmod.yml's
-        # x86 leg, not a one-off mirror blip.
-        run: |
-          if [ "${{ matrix.force_32bit }}" = "1" ]; then
-            sudo dpkg --add-architecture i386
-          fi
-          sudo apt-get update -q
-          sudo apt-get install -y ${{ matrix.apt }}
-
-      - name: Install qemu-user-static
-        # No /usr/gnemul sysroot symlink needed -- the binary is fully
-        # static, so qemu-user-static's binfmt_misc handler runs it
-        # directly with no dynamic libraries to resolve at all. mipsel is
-        # the only row that still needs this at all: aarch64 and armhf both
-        # run on the arm64 runner's own CPU, hence the matrix.qemu_bin
-        # guard. Installing an emulator on those rows would be dead weight
-        # that could also mask a genuine failure to execute.
-        if: matrix.qemu_bin != ''
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y qemu-user-static
-          ${{ matrix.qemu_bin }} --version
-
-      - name: Build mpy-cross
-        # Built explicitly first, before FROZEN_MANIFEST ever appears on a
-        # command line -- avoids py/mkenv.mk's auto-build rule for
-        # mpy-cross, which resets USER_C_MODULES= for that recursive make
-        # but not FROZEN_MANIFEST= (leaks through MAKEFLAGS otherwise).
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build libffi (deplibs)
-        if: matrix.standalone == '1'
-        # MICROPY_STANDALONE=1 only makes libffi a DEPLIBS entry, not an
-        # actual prerequisite of the default build (`deplibs:
-        # $(DEPLIBS)` is its own separate Makefile target) -- must run as
-        # its own step before the main build. No `submodules` step needed
-        # first: MPY_DIR here is the official release tarball, which ships
-        # lib/libffi's full source already vendored in (unlike a plain git
-        # clone, where it's an empty submodule placeholder) -- running
-        # `git submodule` against it would just fail ("not a git
-        # repository").
-        # BUILD must match the main build step's BUILD -- deplibs writes
-        # libffi.a under $(BUILD)/lib/libffi/out/lib/, and the main build
-        # looks for it there too; a mismatch is a real "ld: cannot find
-        # .../libffi.a" failure (confirmed by CI). CROSS_COMPILE= (empty
-        # for aarch64) is a no-op command-line assignment, identical to
-        # omitting it -- same as the main build step below.
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=${{ matrix.cross_compile }} \
-            MICROPY_STANDALONE=1 deplibs
-
-      - name: Build usermod (${{ matrix.arch }}${{ matrix.link_label }})
-        # BUILD is a local shell var, not a job/step env: -- a job-level
-        # env: BUILD would leak into the "Build mpy-cross" / "Build libffi"
-        # steps above too (they run `make` in the same job), and since
-        # py/mkenv.mk sets BUILD ?= build, an inherited env var wins over
-        # that default, making mpy-cross (or libffi's own build) end up
-        # rooted under usermod/build/${{ matrix.arch }} instead of its own
-        # default location -- confirmed by a real CI failure ("mpy-cross
-        # not found at .../mpy-cross/build/mpy-cross, please build it
-        # first" even though the earlier step built it, just at the wrong
-        # path).
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}"
-          if [ "${{ matrix.standalone }}" = "1" ]; then
-            LINK_OPTS='MICROPY_STANDALONE=1 LDFLAGS_EXTRA=-static'
-          else
-            LINK_OPTS=''
-          fi
-          if [ "${{ matrix.force_32bit }}" = "1" ]; then
-            LINK_OPTS="$LINK_OPTS MICROPY_FORCE_32BIT=1"
-          fi
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$BUILD" \
-            CROSS_COMPILE=${{ matrix.cross_compile }} \
-            $LINK_OPTS \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
-            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-unix-arch@claude/usermod-shared-action-kwulzv
+        id: build
+        with:
+          arch: ${{ matrix.arch }}
+          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         # `file` first so the log records what actually ran -- on armhf that
         # is a 32-bit ARM binary executing on an arm64 host with no emulator
         # in the picture, which is the whole point of this row's runner.
         run: |
-          file "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython"
-          "$GITHUB_WORKSPACE/usermod/build/${{ matrix.arch }}/micropython" tests/test_bclibc.py
+          file "${{ steps.build.outputs.build_dir }}/micropython"
+          "${{ steps.build.outputs.build_dir }}/micropython" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-${{ matrix.arch }}
-          path: usermod/build/${{ matrix.arch }}/micropython
+          path: ${{ steps.build.outputs.build_dir }}/micropython
           if-no-files-found: error
 
   # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
