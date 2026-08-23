@@ -482,45 +482,7 @@ jobs:
         # version string real instead of 0.0.0.
         run: git config --global --add safe.directory "$(pwd)"
 
-      - name: Build mpy-cross
-        shell: msys2 {0}
-        # Built explicitly first, for the same reason as every other job in
-        # this workflow: py/mkenv.mk's auto-build rule for mpy-cross resets
-        # USER_C_MODULES= for that recursive make but not FROZEN_MANIFEST=,
-        # which then leaks through MAKEFLAGS.
-        #
-        # The four overrides are all CLANGARM64-specific, applied to every
-        # row only because they are harmless no-ops on MINGW32/64:
-        #
-        #   LDFLAGS_ARCH -- mpy-cross/Makefile hardcodes
-        #     "-Wl,-Map=$@.map,--cref -Wl,--gc-sections" for every non-Darwin
-        #     host. Fine for GNU ld; CLANGARM64 links via clang+lld, and lld
-        #     rejects --cref outright ("unknown argument"). The map file's
-        #     cross-reference table is diagnostic-only.
-        #   COMPILER_TARGET -- mpy-cross/Makefile decides whether to compile
-        #     in ports/windows/fmode.c (which defines set_fmode_binary(),
-        #     called unconditionally under #ifdef _WIN32 in main.c) by
-        #     grepping `$(CC) -dumpmachine` for "mingw". The CLANGARM64
-        #     gcc-compat wrapper is clang underneath and reports a triple
-        #     that doesn't contain it, so fmode.c silently drops out and the
-        #     link fails on "undefined symbol: set_fmode_binary".
-        #   STRIP="" -- py/mkenv.mk sets STRIP = $(CROSS_COMPILE)strip
-        #     unconditionally and py/mkrules.mk runs it whenever the variable
-        #     is non-empty; CLANGARM64's gcc-compat ships no
-        #     aarch64-w64-mingw32-strip. Emptying it skips the step outright
-        #     (GNU Make's ifdef treats an empty value as undefined).
-        #   SIZE="true" -- same missing binary, but that recipe line has no
-        #     ifdef guard, so an empty value would break the shell syntax
-        #     rather than skip it. `true` is a real no-op that swallows its
-        #     arguments and exits 0.
-        run: |
-          make -C "$MPY_DIR/mpy-cross" \
-            LDFLAGS_ARCH="-Wl,--gc-sections" \
-            COMPILER_TARGET="mingw-forced" \
-            STRIP="" SIZE="true" -j"$(nproc)"
-
       - name: Build usermod (windows ${{ matrix.arch_label }})
-        shell: msys2 {0}
         # No `make -C ports/windows submodules` step: MPY_DIR is the official
         # release tarball, which ships every submodule's source already
         # vendored in, and the port declares no GIT_SUBMODULES of its own
@@ -532,27 +494,16 @@ jobs:
         # which is a frozen convenience, not something tiny_bclibc or
         # tests/test_bclibc.py touches.
         #
-        # $(pwd), not $GITHUB_WORKSPACE, for both paths -- see the tarball
-        # step's comment for the backslash-eating failure that motivates it.
-        # STRIP/SIZE: same missing-binary reason as the mpy-cross step;
-        # ports/windows reaches the identical generic py/mkrules.mk link
-        # recipe. COMPILER_TARGET is forced here for a *different* reason
-        # than in that step: py/mkrules.mk appends the .exe suffix to PROG
-        # only when `$(CC) -dumpmachine` contains "mingw", so without it the
-        # CLANGARM64 build would emit a differently-named binary than the
-        # two gcc rows and the steps below would have to guess. It has no
-        # other effect at all -- the whole tree uses COMPILER_TARGET in
-        # exactly two places, this one and mpy-cross's fmode.c check.
-        run: |
-          BUILD="$(pwd)/usermod/build/windows-${{ matrix.arch_label }}"
-          make -C "$MPY_DIR/ports/windows" \
-            BUILD="$BUILD" \
-            COMPILER_TARGET="mingw-forced" \
-            STRIP="" SIZE="true" \
-            CFLAGS_EXTRA="${{ matrix.cflags_extra }}" \
-            USER_C_MODULES="$(pwd)" \
-            FROZEN_MANIFEST="$(pwd)/usermod/manifest.py" \
-            MP_BCLIBC_PRECISION=double -j"$(nproc)"
+        # mpy-cross + main build (the four CLANGARM64 overrides included)
+        # now come from the shared action, same recipe as before -- it
+        # still requires MPY_DIR (set above) and msys2/setup-msys2 (also
+        # above) to already be in place, since a composite action's own
+        # `shell: bash` steps can't set either of those up for themselves.
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-windows-arch@claude/usermod-shared-action-kwulzv
+        with:
+          build_dir: $(pwd)/usermod/build/windows-${{ matrix.arch_label }}
+          cflags_extra: ${{ matrix.cflags_extra }}
+          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         shell: msys2 {0}
