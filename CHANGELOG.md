@@ -35,6 +35,20 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `usermod.yml` — unix and Windows builds now delegate to shared actions
+
+`build-test-unix` and `build-test-windows` no longer carry their own
+apt/cross-compile/deplibs/MSYS2 recipe inline — both now call
+`build-usermod-unix-arch` and `build-usermod-windows-arch` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+the same repo `natmod.yml`'s own per-arch dispatch already used. The unix
+action already existed there but had never actually been wired up from any
+consuming repo; the Windows one is new, extracted from this exact recipe
+(including the four CLANGARM64 overrides). No behavior change: matrix
+arches, runners, `MP_BCLIBC_PRECISION=double`, and every build path stay
+exactly what they were — this is CI plumbing catching up to an action that
+already existed, not a new capability.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
