@@ -700,14 +700,14 @@ jobs:
   # the xtensawin one, matching what natmod already covers as an ARCH.
   #
   # Written CI-first rather than verified locally, which is unusual for this
-  # repo and worth stating: dl.espressif.com and components-file.espressif.com
-  # are both refused by this development environment's egress policy, so the
-  # toolchain and the IDF managed components (espressif/mdns unconditionally,
-  # espressif/lan867x for target esp32) cannot be fetched here at all. What is
-  # known to work on the runner is esp-idf's own install.sh -- natmod.yml's
-  # xtensawin leg has been doing exactly that, green, for a while. The
-  # unknown this job settles is whether the managed-component fetch and the
-  # full port build follow.
+  # repo and worth recording: dl.espressif.com and components-file.espressif.com
+  # were both refused by this development environment's egress policy, so
+  # neither the toolchain nor the IDF managed components (espressif/mdns
+  # unconditionally, espressif/lan867x for target esp32) could be fetched here
+  # at all. It went green first time regardless, which settled the open
+  # question -- the managed-component fetch and the full port build both work
+  # on a runner. Both hosts have since been allowed, so further work here can
+  # be reproduced locally before pushing.
   build-esp32:
     name: build (esp32 / ESP32_GENERIC)
     runs-on: ubuntu-latest
