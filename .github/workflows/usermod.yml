@@ -149,7 +149,6 @@ jobs:
         id: build
         with:
           arch: ${{ matrix.arch }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         # `file` first so the log records what actually ran -- on armhf that
@@ -168,8 +167,7 @@ jobs:
   # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
   # A genuine functional execution test (real firmware.elf, run under QEMU),
   # not just a build-check -- what natmod's own armv7m ARCH coverage doesn't
-  # provide, so it stays regardless of natmod-first. No FPU on Cortex-M3,
-  # hence single precision.
+  # provide, so it stays regardless of natmod-first.
   build-test-qemu-armv7m:
     name: build + test (armv7m / QEMU Cortex-M3)
     runs-on: ubuntu-latest
@@ -201,7 +199,6 @@ jobs:
         uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-armv7m@v0.2.0
         with:
           build_dir: build-MPS2_AN385
-          extra_make_args: MP_BCLIBC_PRECISION=single
 
       - name: Run tests via QEMU
         run: |
@@ -210,8 +207,9 @@ jobs:
             tests/
 
   # ── WebAssembly ───────────────────────────────────────────────────────────────
-  # JS/browser numbers are double-precision natively -- no size/speed
-  # benefit to single precision here, so double only.
+  # JS/browser numbers are double-precision natively, but tiny_bclibc no
+  # longer builds a double-precision variant at all (see natmod/Makefile's
+  # own "Precision" header) -- single here too, same as every other target.
   build-test-wasm:
     name: build + test (wasm)
     runs-on: ubuntu-latest
@@ -273,7 +271,6 @@ jobs:
         uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-webassembly@v0.2.0
         with:
           frozen_manifest: ${{ env.WASM_FROZEN_MANIFEST }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         run: node "${{ steps.build.outputs.build_dir }}/micropython.mjs" tests/test_bclibc.py
@@ -427,8 +424,8 @@ jobs:
             # Warnings still print; they just stop failing the build. The
             # x86/x64 rows keep -Werror, and this repo's own sources were
             # separately confirmed clean under the port's exact warning set
-            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror, double
-            # precision) -- so nothing of ours goes unchecked here.
+            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror) -- so
+            # nothing of ours goes unchecked here.
             runs_on: windows-11-arm
             msystem: CLANGARM64
             msys_install: mingw-w64-clang-aarch64-gcc-compat mingw-w64-clang-aarch64-clang
@@ -503,7 +500,6 @@ jobs:
         with:
           build_dir: $(pwd)/usermod/build/windows-${{ matrix.arch_label }}
           cflags_extra: ${{ matrix.cflags_extra }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         shell: msys2 {0}
@@ -565,9 +561,8 @@ jobs:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Build usermod (esp32, ESP32_GENERIC)
-        # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
-        # single-precision default is the right one and passing it explicitly
-        # would only invite it to drift from micropython.cmake's own default.
+        # No precision flag to pass any more -- micropython.cmake no longer
+        # has an MP_BCLIBC_PRECISION knob at all, single precision unconditionally.
         # No build_dir input any more -- the action always uses the port's
         # own build-$(BOARD) default (see its own header for why an
         # explicit BUILD= override broke esp32's internal mpy-cross

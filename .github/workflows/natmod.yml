@@ -49,9 +49,9 @@ env:
   MPY_TAG: ${{ inputs.mpy_tag || github.event.inputs.mpy_tag || 'v1.28.0' }}
 
 jobs:
-  # ── Build every arch, one precision each (derived from ARCH's own FPU in
-  # natmod/Makefile -- no more separate sp/dp matrix legs; see that file's
-  # header for why) ───────────────────────────────────────────────────────────
+  # ── Build every arch, always single-precision now (no more per-ARCH
+  # double-precision variant, no more sp/dp matrix legs or build_dir suffix;
+  # see natmod/Makefile's own "Precision" header for why) ───────────────────
   build:
     name: build (${{ matrix.arch }})
     runs-on: ubuntu-latest
@@ -59,8 +59,10 @@ jobs:
       fail-fast: false
       matrix:
         # Toolchain dispatch per ARCH (apt package / xtensa-lx106 tarball /
-        # esp-idf) now lives inside the build-natmod action below, so
-        # this is just the flat list of dynruntime.mk ARCHes to build.
+        # xtensa-esp-elf) now lives inside cibuildmp itself -- host first,
+        # then a pinned download (cibuildmp's own docs/BACKLOG.md D3/M2) --
+        # so this is still just the flat list of dynruntime.mk ARCHes to
+        # build.
         arch: [x64, x86, armv6m, armv7m, armv7emsp, armv7emdp, rv32imc, rv64imc, xtensa, xtensawin]
 
     steps:
@@ -68,13 +70,26 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
-        with:
-          mpy_tag: ${{ env.MPY_TAG }}
+      # x86 is the one arch cibuildmp cannot self-provision (its own
+      # docs/BACKLOG.md M2): it is the host gcc's own -m32 mode, not a
+      # cross-compile, so no downloadable tarball can supply the missing
+      # 32-bit glibc headers/libs the way it does for every other arch here.
+      # Same package the old build-natmod action installed for this ARCH.
+      - if: matrix.arch == 'x86'
+        run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod@v0.2.0
-        with:
-          arch: ${{ matrix.arch }}
+      # TODO: pin to a released tag once one exists past M3/D13-D15 (the
+      # commit this is pinned to is the first one that can build a module
+      # at all -- v0.3.0a1 predates M3 entirely). Not @main: this repo's
+      # own Versioning section says never float a consumer's pin.
+      - uses: ballistics-lab/cibuildmp@c114986359a071bc9c3865fc103c895f74959cde
+        env:
+          # CIBMP_ARCHS, not a matrix-baked identifier: cibuildmp resolves
+          # the current .mpy ABI from the checked-out MicroPython itself,
+          # so this stays correct even if MPY_TAG moves to a tag with a
+          # different ABI, with nothing here to keep in sync by hand.
+          CIBMP_MICROPYTHON: ${{ env.MPY_TAG }}
+          CIBMP_ARCHS: ${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -99,15 +114,15 @@ jobs:
       matrix:
         include:
           - arch: x64
-            build_dir: x64_dp
+            build_dir: x64
             kind: unix
             label: x64 / micropython
           - arch: x86
-            build_dir: x86_dp
+            build_dir: x86
             kind: unix32
             label: x86 / micropython 32-bit
           - arch: armv7m
-            build_dir: armv7m_sp
+            build_dir: armv7m
             kind: qemu
             label: armv7m / QEMU Cortex-M3
     steps:
@@ -229,7 +244,7 @@ jobs:
       matrix:
         include:
           - arch: armv7emsp
-            build_dir: armv7emsp_sp
+            build_dir: armv7emsp
             # dynruntime.mk gives armv7emsp MICROPY_FLOAT_IMPL=float; the unix
             # port defaults to double. mpconfigvariant_common.h guards it with
             # #ifndef, so a -D on the command line wins. Verified on the
@@ -237,7 +252,7 @@ jobs:
             # 0.33333334, not 0.3333333333333333.
             host_float: "-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT"
           - arch: armv7emdp
-            build_dir: armv7emdp_dp
+            build_dir: armv7emdp
             # armv7emdp is MICROPY_FLOAT_IMPL=double, which is already the
             # unix port's own default -- nothing to override.
             host_float: ""
@@ -362,7 +377,7 @@ jobs:
           echo "# placeholder, interrupted before it can run" > _mklittlefs_placeholder.py
           rp2040py mklittlefs -o littlefs.img \
             _mklittlefs_placeholder.py \
-            natmod/build/armv6m_sp/tiny_bclibc.mpy
+            natmod/build/armv6m/tiny_bclibc.mpy
 
       - name: Run tests via rp2040py emulator
         # See usermod.yml's rp2040 job for why "FAILED" is grepped from the

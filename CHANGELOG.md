@@ -35,6 +35,38 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `natmod/Makefile`, `usermod/micropython.mk`, `usermod/micropython.cmake` — always single precision, no more `MP_BCLIBC_PRECISION` knob
+
+`tiny_bclibc` no longer builds a double-precision variant at all, on any target.
+`natmod/Makefile` unconditionally defines `TINY_BCLIBC_SINGLE_PRECISION` and
+`TINY_BCLIBC_FAST_ZERO_FIND` for every `ARCH` — including `armv7emdp`, which still
+exists as its own `ARCH` (a real Cortex-M7 double-precision-FPU target with its own
+`MP_NATIVE_ARCH_*` identifier) but no longer gets a wider-precision library build for
+it. The `_sp`/`_dp` split in `natmod/`'s `MOD`/`BUILD` naming is gone with it: every
+arch now builds into a plain `natmod/build/<arch>/`, e.g. `build/x64/` instead of
+`build/x64_dp/`. `usermod/micropython.mk` and `usermod/micropython.cmake` drop the
+`MP_BCLIBC_PRECISION=double` override path the same way — both are single-precision
+unconditionally now, with nothing left to pass on the port's own build command line.
+See the "Float32 vs Float64 precision comparison" section of `README.md` for the
+measurements (max ~0.1 cm drop deviation at 3000 m) that justified dropping double
+precision as a supported build entirely rather than keeping it as an opt-in.
+
+`natmod.yml`'s `test`/`test-arm-linux` matrices and the `armv6m` `mklittlefs` job
+updated their `build_dir` values to match (`x64_dp` → `x64`, `armv7emsp_sp` →
+`armv7emsp`, etc.) — the `host_float`/`MICROPY_FLOAT_IMPL` overrides in
+`test-arm-linux` are unrelated and unchanged: that axis is `dynruntime.mk`'s own
+per-`ARCH` choice of `mp_float_t` width (the *interpreter's* float, not
+`tiny_bclibc`'s own math precision) and still differs between `armv7emsp` and
+`armv7emdp` regardless of this change. `usermod.yml` drops every
+`extra_make_args: MP_BCLIBC_PRECISION=...` input (`build-test-unix`,
+`build-test-qemu-armv7m`, `build-test-wasm`, `build-test-windows`) — the knob those
+inputs targeted no longer exists.
+
+`ffimod/` is deliberately untouched: it compiles `bclibc/tiny_bclibc` directly (no
+`TINY_BCLIBC_SINGLE_PRECISION` define either way) and keeps its own separate,
+runtime-selectable `MP_BCLIBC_PRECISION` mechanism for host-side FFI use, independent
+of the natmod/usermod build-time knob removed here.
+
 #### `natmod.yml`/`usermod.yml` — every native-ci action re-pinned to `v0.2.0`
 
 Every `ballistics-lab/micropython-native-ci` action reference (both

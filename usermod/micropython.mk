@@ -45,11 +45,8 @@ CFLAGS_USERMOD += \
     -DTINY_BCLIBC_NO_THREAD_LOCAL \
     -DTINY_BCLIBC_NO_ERR_BUF
 
-# Precision: single by default; override with MP_BCLIBC_PRECISION=double
-ifeq ($(MP_BCLIBC_PRECISION),double)
-# double precision — no extra defines
-else
+# Precision: always single -- no more MP_BCLIBC_PRECISION knob, no double
+# variant (see natmod/Makefile's own "Precision" header for why).
 CFLAGS_USERMOD += \
     -DTINY_BCLIBC_SINGLE_PRECISION \
     -DTINY_BCLIBC_FAST_ZERO_FIND
-endif
