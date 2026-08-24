@@ -59,7 +59,7 @@ jobs:
       fail-fast: false
       matrix:
         # Toolchain dispatch per ARCH (apt package / xtensa-lx106 tarball /
-        # esp-idf) now lives inside the build-natmod-arch action below, so
+        # esp-idf) now lives inside the build-natmod action below, so
         # this is just the flat list of dynruntime.mk ARCHes to build.
         arch: [x64, x86, armv6m, armv7m, armv7emsp, armv7emdp, rv32imc, rv64imc, xtensa, xtensawin]
 
@@ -68,11 +68,11 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod-arch@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod@v0.2.0
         with:
           arch: ${{ matrix.arch }}
 
@@ -115,7 +115,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -246,7 +246,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 

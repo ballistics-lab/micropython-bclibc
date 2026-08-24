@@ -35,6 +35,103 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `natmod.yml`/`usermod.yml` — every native-ci action re-pinned to `v0.2.0`
+
+Every `ballistics-lab/micropython-native-ci` action reference (both
+workflows) now points at the `v0.2.0` tag instead of a mix of the
+`v0.1.0` tag (for the actions that predate this session:
+`fetch-micropython`, `build-natmod-arch`) and the
+`claude/usermod-shared-action-kwulzv` development branch (for everything
+added this session). `build-natmod-arch` also drops the `-arch` suffix
+(`build-natmod`) now that a tag past the rename exists — the last
+consumer-visible piece of that rename left unfinished. No behavior
+change: `v0.2.0` is exactly what that branch contained, squash-merged.
+
+#### `usermod.yml` — unix and Windows builds now delegate to shared actions
+
+`build-test-unix` and `build-test-windows` no longer carry their own
+apt/cross-compile/deplibs/MSYS2 recipe inline — both now call
+`build-usermod-unix` and `build-usermod-windows` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+the same repo `natmod.yml`'s own per-arch dispatch already used. The unix
+action already existed there but had never actually been wired up from any
+consuming repo; the Windows one is new, extracted from this exact recipe
+(including the four CLANGARM64 overrides). No behavior change: matrix
+arches, runners, `MP_BCLIBC_PRECISION=double`, and every build path stay
+exactly what they were — this is CI plumbing catching up to an action that
+already existed, not a new capability.
+
+#### `usermod.yml` — wasm build now delegates to a shared action too
+
+`build-test-wasm` no longer carries its own inline emsdk-install/build
+recipe — it now calls `build-usermod-webassembly` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+same as the unix/Windows jobs already did. The job also switched its
+checkout from `clone-micropython` (`submodules: lib/micropython-lib`) to
+`fetch-micropython`: `o-murphy/micropython-wasm3`'s own webassembly job
+proved, green, on the exact combined-manifest change below, that the
+release tarball already vendors what the `pyscript` variant's default
+manifest needs — the submodule clone was carried over from this job's
+original Docker-based recipe and was never actually load-bearing. The
+"Write combined FROZEN_MANIFEST" step (see Fixed, below) stays
+caller-side, same as every other consumer of this action.
+
+#### `usermod.yml` — rp2040 checkout simplified to fetch-micropython
+
+`build-test-rp2040` no longer checks out MicroPython via `clone-micropython`
+with an explicit submodule list plus `pico_sdk_submodules: "true"` — plain
+`fetch-micropython` now suffices. The earlier "Cannot find source file:
+.../lib/mbedtls/library/aes.c" failure that justified the original
+submodule list was against an *incomplete* `clone-micropython` `submodules:`
+value, not evidence a git clone was ever required — the release tarball
+already vendors every `lib/` this port's `CMakeLists.txt` needs.
+`pico_sdk_submodules` was never load-bearing either:
+`ports/rp2/CMakeLists.txt` explicitly redirects
+`PICO_TINYUSB_PATH`/`PICO_LWIP_PATH`/`PICO_BTSTACK_PATH`/
+`PICO_CYW43_DRIVER_PATH` at `${MICROPY_DIR}/lib/<name>` (MicroPython's own
+top-level submodules) rather than pico-sdk's own nested vendored copies, so
+pico-sdk's internal submodule tree is never actually touched by this build.
+`o-murphy/micropython-wasm3`'s own rp2 row proved this, green, on the same
+`BOARD=RPI_PICO` with plain `fetch-micropython` and no submodule handling
+at all.
+
+#### `usermod.yml` — rp2040 build now delegates to a shared action too
+
+`build-test-rp2040` no longer carries its own inline toolchain-install/
+mpy-cross/port-build recipe — it now calls `build-usermod-rp2040` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+same as the unix/Windows/wasm jobs above. No behavior change: `board`,
+`user_c_modules` and `frozen_manifest` all already matched the action's
+own defaults exactly, so this job's call needs no input overrides at all.
+
+#### `usermod.yml` — qemu-armv7m build now delegates to a shared action too
+
+`build-test-qemu-armv7m` no longer carries its own inline arm-none-eabi
+toolchain-install/mpy-cross/port-build recipe — it now calls
+`build-usermod-armv7m` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci)
+(named after the target architecture, not the QEMU test mechanism — see
+that action's own header), same as the unix/Windows/wasm/rp2040 jobs
+above. `qemu-system-arm` and `pyserial` stay caller-side: neither is a
+build dependency (QEMU only runs the resulting firmware), same split the
+rp2040 action already uses for the rp2040py emulator. `build_dir:
+build-MPS2_AN385` keeps the resulting path exactly where the Run tests
+step already expects it — no `BUILD=` override in the plain `make`
+invocation this replaces either.
+
+#### `usermod.yml` — esp32 build now delegates to a shared action too
+
+`build-esp32` no longer carries its own inline ESP-IDF install/mpy-cross/
+port-build recipe — it now calls `build-usermod-esp32` from the same
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci)
+repo. `source esp-idf/export.sh` and the port build stay in the action's
+same step (export.sh's env doesn't survive a composite action step
+boundary). `build_dir: build-ESP32_GENERIC` keeps the resulting path
+exactly where Upload artifact already expects it. This job also gains a
+"Dump IDF build logs on failure" diagnostic for free — folded into the
+action universally after `o-murphy/micropython-wasm3` hit a real failure
+where idf.py's own console output swallowed the actual compiler error.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
@@ -182,6 +279,27 @@ computation, no `await`/REPL/stack-switching, so ASYNCIFY buys it nothing but a
 bigger, slower `.wasm`. The rationale for `pyscript` and the upstream tracking link
 ([micropython/micropython#19380](https://github.com/micropython/micropython/issues/19380))
 stay documented in `README.md` and in the `build-test-wasm` job comment.
+
+### Fixed
+
+#### `usermod.yml` — the uploaded wasm build was missing `asyncio` and 24 stdlib modules
+
+`build-test-wasm` passed `FROZEN_MANIFEST=usermod/manifest.py` alone.
+`usermod/manifest.py`'s own `try`/`except` around
+`include("$(PORT_DIR)/boards/manifest.py")` only ever probes that one path,
+which doesn't exist for `ports/webassembly` (it has `variants/`, not
+`boards/`) — so the `except` silently swallowed it, and the port's real
+default, `variants/pyscript/manifest.py`, never got included. That default
+provides `asyncio` (backed by a custom JS-runtime scheduler) plus a
+`require()` list of 24 stdlib/utility modules (`base64`, `collections`,
+`gzip`, `os`, `pathlib`, `unittest`, `zlib`, and others). `tests/test_bclibc.py`
+never imports any of them, so the gap never showed up as a test failure —
+but the `.mjs`/`.wasm` this job uploads is a real build artifact, not just a
+test fixture, and anyone importing `asyncio`/`os`/etc. against it hit a
+plain `ImportError`. The job now writes a combined manifest
+(`variants/pyscript/manifest.py` + this project's own `usermod/manifest.py`)
+and passes that instead, the same pattern `o-murphy/a7p`'s own webassembly
+job already uses for this exact port.
 
 ## [1.2.1] - 2026-07-28
 
