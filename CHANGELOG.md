@@ -83,6 +83,15 @@ pico-sdk's internal submodule tree is never actually touched by this build.
 `BOARD=RPI_PICO` with plain `fetch-micropython` and no submodule handling
 at all.
 
+#### `usermod.yml` — rp2040 build now delegates to a shared action too
+
+`build-test-rp2040` no longer carries its own inline toolchain-install/
+mpy-cross/port-build recipe — it now calls `build-usermod-rp2040` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+same as the unix/Windows/wasm jobs above. No behavior change: `board`,
+`user_c_modules` and `frozen_manifest` all already matched the action's
+own defaults exactly, so this job's call needs no input overrides at all.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
