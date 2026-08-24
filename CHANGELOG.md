@@ -35,6 +35,18 @@ separately confirmed to compile clean under the port's exact set
 
 ### Changed
 
+#### `natmod.yml`/`usermod.yml` — every native-ci action re-pinned to `v0.2.0`
+
+Every `ballistics-lab/micropython-native-ci` action reference (both
+workflows) now points at the `v0.2.0` tag instead of a mix of the
+`v0.1.0` tag (for the actions that predate this session:
+`fetch-micropython`, `build-natmod-arch`) and the
+`claude/usermod-shared-action-kwulzv` development branch (for everything
+added this session). `build-natmod-arch` also drops the `-arch` suffix
+(`build-natmod`) now that a tag past the rename exists — the last
+consumer-visible piece of that rename left unfinished. No behavior
+change: `v0.2.0` is exactly what that branch contained, squash-merged.
+
 #### `usermod.yml` — unix and Windows builds now delegate to shared actions
 
 `build-test-unix` and `build-test-windows` no longer carry their own
