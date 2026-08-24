@@ -49,6 +49,21 @@ arches, runners, `MP_BCLIBC_PRECISION=double`, and every build path stay
 exactly what they were — this is CI plumbing catching up to an action that
 already existed, not a new capability.
 
+#### `usermod.yml` — wasm build now delegates to a shared action too
+
+`build-test-wasm` no longer carries its own inline emsdk-install/build
+recipe — it now calls `build-usermod-webassembly-arch` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+same as the unix/Windows jobs already did. The job also switched its
+checkout from `clone-micropython` (`submodules: lib/micropython-lib`) to
+`fetch-micropython`: `o-murphy/micropython-wasm3`'s own webassembly job
+proved, green, on the exact combined-manifest change below, that the
+release tarball already vendors what the `pyscript` variant's default
+manifest needs — the submodule clone was carried over from this job's
+original Docker-based recipe and was never actually load-bearing. The
+"Write combined FROZEN_MANIFEST" step (see Fixed, below) stays
+caller-side, same as every other consumer of this action.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf

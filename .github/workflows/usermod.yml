@@ -220,20 +220,17 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+        # Not clone-micropython, despite the combined manifest below now
+        # `require()`-ing lib/micropython-lib packages via
+        # variants/pyscript/manifest.py: wasm3's own webassembly job proved
+        # (green, on this exact combined-manifest change) that the release
+        # tarball already vendors what pyscript's default needs, same as
+        # every other job in this workflow. clone-micropython +
+        # submodules: lib/micropython-lib was carried over from this job's
+        # original Docker-based recipe and was never actually load-bearing.
         with:
           mpy_tag: ${{ env.MPY_TAG }}
-          submodules: lib/micropython-lib
-
-      - name: Install emsdk
-        # Same recipe as natmod.yml/a7p's own webassembly job -- "latest"
-        # is what upstream itself pins to for this port.
-        run: |
-          git clone --depth 1 https://github.com/emscripten-core/emsdk.git
-          (cd emsdk && ./emsdk install latest && ./emsdk activate latest)
-
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
 
       - name: Write combined FROZEN_MANIFEST
         # usermod/manifest.py's own try/except only ever probes
@@ -257,15 +254,12 @@ jobs:
           cat "$RUNNER_TEMP/wasm_manifest.py"
           echo "WASM_FROZEN_MANIFEST=$RUNNER_TEMP/wasm_manifest.py" >> "$GITHUB_ENV"
 
-      - name: Build + test (wasm)
-        # BUILD is a local shell var, not a job env: -- see the aarch64
-        # job's identical reasoning (leaks into the "Build mpy-cross" step
-        # above otherwise, via py/mkenv.mk's BUILD ?= build).
-        #
-        # VARIANT=pyscript, not the default `standard` variant: the
-        # `standard` variant (-s ASYNCIFY) is broken against modern emsdk
-        # in multiple ways -- confirmed by a real CI failure here
-        # (-Werror on -Wunused-but-set-global in main.c's
+      - name: Build usermod (webassembly)
+        id: build
+        # VARIANT=pyscript (the action's own default), not the port's
+        # default `standard` variant: `standard` (-s ASYNCIFY) is broken
+        # against modern emsdk in multiple ways -- confirmed by a real CI
+        # failure here (-Werror on -Wunused-but-set-global in main.c's
         # external_call_depth) and tracked upstream at
         # micropython/micropython#19380 (filed against this exact
         # combination: v1.28.0 + emsdk latest). A CFLAGS/CC override to
@@ -275,15 +269,13 @@ jobs:
         # pyscript variant" (it doesn't use ASYNCIFY at all) -- same
         # variant a7p's own webassembly job already uses, which is why
         # a7p never hit the ASYNCIFY failure in the first place.
-        run: |
-          BUILD="$GITHUB_WORKSPACE/usermod/build/wasm"
-          source emsdk/emsdk_env.sh
-          make -C "$MPY_DIR/ports/webassembly" VARIANT=pyscript \
-            BUILD="$BUILD" \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$WASM_FROZEN_MANIFEST" \
-            MP_BCLIBC_PRECISION=double
-          node "$BUILD/micropython.mjs" tests/test_bclibc.py
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-webassembly-arch@claude/usermod-shared-action-kwulzv
+        with:
+          frozen_manifest: ${{ env.WASM_FROZEN_MANIFEST }}
+          extra_make_args: MP_BCLIBC_PRECISION=double
+
+      - name: Run tests
+        run: node "${{ steps.build.outputs.build_dir }}/micropython.mjs" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
