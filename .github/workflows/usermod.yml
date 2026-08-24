@@ -120,7 +120,7 @@ jobs:
           #
           # Per-arch toolchain/link-flag dispatch (apt packages, CROSS_COMPILE,
           # MICROPY_STANDALONE/-static for armhf+mipsel, MICROPY_FORCE_32BIT for
-          # x86) now lives inside the shared build-usermod-unix-arch action, so
+          # x86) now lives inside the shared build-usermod-unix action, so
           # this matrix is just the flat list of arches plus the runner each
           # needs -- aarch64/armhf on ubuntu-24.04-arm (native AArch32/64, see
           # that action's own header for the probe this is based on), the rest
@@ -145,7 +145,7 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-unix-arch@claude/usermod-shared-action-kwulzv
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-unix@claude/usermod-shared-action-kwulzv
         id: build
         with:
           arch: ${{ matrix.arch }}
@@ -269,7 +269,7 @@ jobs:
         # pyscript variant" (it doesn't use ASYNCIFY at all) -- same
         # variant a7p's own webassembly job already uses, which is why
         # a7p never hit the ASYNCIFY failure in the first place.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-webassembly-arch@claude/usermod-shared-action-kwulzv
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-webassembly@claude/usermod-shared-action-kwulzv
         with:
           frozen_manifest: ${{ env.WASM_FROZEN_MANIFEST }}
           extra_make_args: MP_BCLIBC_PRECISION=double
@@ -518,7 +518,7 @@ jobs:
         # still requires MPY_DIR (set above) and msys2/setup-msys2 (also
         # above) to already be in place, since a composite action's own
         # `shell: bash` steps can't set either of those up for themselves.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-windows-arch@claude/usermod-shared-action-kwulzv
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-windows@claude/usermod-shared-action-kwulzv
         with:
           build_dir: $(pwd)/usermod/build/windows-${{ matrix.arch_label }}
           cflags_extra: ${{ matrix.cflags_extra }}

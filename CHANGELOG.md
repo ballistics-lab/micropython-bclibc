@@ -39,7 +39,7 @@ separately confirmed to compile clean under the port's exact set
 
 `build-test-unix` and `build-test-windows` no longer carry their own
 apt/cross-compile/deplibs/MSYS2 recipe inline — both now call
-`build-usermod-unix-arch` and `build-usermod-windows-arch` from
+`build-usermod-unix` and `build-usermod-windows` from
 [`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
 the same repo `natmod.yml`'s own per-arch dispatch already used. The unix
 action already existed there but had never actually been wired up from any
@@ -52,7 +52,7 @@ already existed, not a new capability.
 #### `usermod.yml` — wasm build now delegates to a shared action too
 
 `build-test-wasm` no longer carries its own inline emsdk-install/build
-recipe — it now calls `build-usermod-webassembly-arch` from
+recipe — it now calls `build-usermod-webassembly` from
 [`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
 same as the unix/Windows jobs already did. The job also switched its
 checkout from `clone-micropython` (`submodules: lib/micropython-lib`) to
