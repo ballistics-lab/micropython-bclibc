@@ -72,7 +72,11 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-natmod-arch@v0.1.0
+        # Still -arch here, unlike usermod.yml's actions: this is pinned to
+        # the v0.1.0 tag, a fixed point that predates the -arch suffix drop
+        # on the claude/usermod-shared-action-kwulzv branch -- that rename
+        # only exists past this tag. Update once a new tag is cut.
         with:
           arch: ${{ matrix.arch }}
 
