@@ -64,6 +64,25 @@ original Docker-based recipe and was never actually load-bearing. The
 "Write combined FROZEN_MANIFEST" step (see Fixed, below) stays
 caller-side, same as every other consumer of this action.
 
+#### `usermod.yml` — rp2040 checkout simplified to fetch-micropython
+
+`build-test-rp2040` no longer checks out MicroPython via `clone-micropython`
+with an explicit submodule list plus `pico_sdk_submodules: "true"` — plain
+`fetch-micropython` now suffices. The earlier "Cannot find source file:
+.../lib/mbedtls/library/aes.c" failure that justified the original
+submodule list was against an *incomplete* `clone-micropython` `submodules:`
+value, not evidence a git clone was ever required — the release tarball
+already vendors every `lib/` this port's `CMakeLists.txt` needs.
+`pico_sdk_submodules` was never load-bearing either:
+`ports/rp2/CMakeLists.txt` explicitly redirects
+`PICO_TINYUSB_PATH`/`PICO_LWIP_PATH`/`PICO_BTSTACK_PATH`/
+`PICO_CYW43_DRIVER_PATH` at `${MICROPY_DIR}/lib/<name>` (MicroPython's own
+top-level submodules) rather than pico-sdk's own nested vendored copies, so
+pico-sdk's internal submodule tree is never actually touched by this build.
+`o-murphy/micropython-wasm3`'s own rp2 row proved this, green, on the same
+`BOARD=RPI_PICO` with plain `fetch-micropython` and no submodule handling
+at all.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf

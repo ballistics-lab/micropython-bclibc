@@ -306,15 +306,24 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/clone-micropython@v0.1.0
+      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.1.0
+        # Not clone-micropython + pico_sdk_submodules: the earlier "Cannot
+        # find source file: .../lib/mbedtls/library/aes.c" failure that
+        # justified this job's original submodule list was against an
+        # *incomplete* clone-micropython submodules: value (missing
+        # lib/mbedtls), not evidence that a git clone was ever required --
+        # the release tarball already vendors every lib/ this port's
+        # CMakeLists.txt needs. pico_sdk_submodules ("true") was never
+        # load-bearing either: ports/rp2/CMakeLists.txt explicitly redirects
+        # PICO_TINYUSB_PATH/PICO_LWIP_PATH/PICO_BTSTACK_PATH/
+        # PICO_CYW43_DRIVER_PATH at ${MICROPY_DIR}/lib/<name> (MicroPython's
+        # own top-level submodules) rather than pico-sdk's own nested vendored
+        # copies, so pico-sdk's internal submodule tree is never actually
+        # touched by this build. o-murphy/micropython-wasm3's own rp2 row
+        # proved this, green, on the same BOARD=RPI_PICO with plain
+        # fetch-micropython and no submodule handling at all.
         with:
           mpy_tag: ${{ env.MPY_TAG }}
-          # lib/mbedtls: ports/rp2/CMakeLists.txt unconditionally lists it
-          # in GIT_SUBMODULES (needed even without wifi/BT) -- omitting it
-          # here fails CMake configure with "Cannot find source file:
-          # .../lib/mbedtls/library/aes.c" (a real CI failure).
-          submodules: lib/pico-sdk lib/micropython-lib lib/tinyusb lib/mbedtls
-          pico_sdk_submodules: "true"
 
       - name: Install toolchain
         # apt-get update first -- see build-test-unix-static's "Install
