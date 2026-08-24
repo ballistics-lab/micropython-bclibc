@@ -197,6 +197,27 @@ bigger, slower `.wasm`. The rationale for `pyscript` and the upstream tracking l
 ([micropython/micropython#19380](https://github.com/micropython/micropython/issues/19380))
 stay documented in `README.md` and in the `build-test-wasm` job comment.
 
+### Fixed
+
+#### `usermod.yml` — the uploaded wasm build was missing `asyncio` and 24 stdlib modules
+
+`build-test-wasm` passed `FROZEN_MANIFEST=usermod/manifest.py` alone.
+`usermod/manifest.py`'s own `try`/`except` around
+`include("$(PORT_DIR)/boards/manifest.py")` only ever probes that one path,
+which doesn't exist for `ports/webassembly` (it has `variants/`, not
+`boards/`) — so the `except` silently swallowed it, and the port's real
+default, `variants/pyscript/manifest.py`, never got included. That default
+provides `asyncio` (backed by a custom JS-runtime scheduler) plus a
+`require()` list of 24 stdlib/utility modules (`base64`, `collections`,
+`gzip`, `os`, `pathlib`, `unittest`, `zlib`, and others). `tests/test_bclibc.py`
+never imports any of them, so the gap never showed up as a test failure —
+but the `.mjs`/`.wasm` this job uploads is a real build artifact, not just a
+test fixture, and anyone importing `asyncio`/`os`/etc. against it hit a
+plain `ImportError`. The job now writes a combined manifest
+(`variants/pyscript/manifest.py` + this project's own `usermod/manifest.py`)
+and passes that instead, the same pattern `o-murphy/a7p`'s own webassembly
+job already uses for this exact port.
+
 ## [1.2.1] - 2026-07-28
 
 ### Fixed

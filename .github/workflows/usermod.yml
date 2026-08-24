@@ -235,6 +235,28 @@ jobs:
       - name: Build mpy-cross
         run: make -C "$MPY_DIR/mpy-cross"
 
+      - name: Write combined FROZEN_MANIFEST
+        # usermod/manifest.py's own try/except only ever probes
+        # $(PORT_DIR)/boards/manifest.py -- a no-op here, since
+        # ports/webassembly has no boards/, only variants/. That silently
+        # drops pyscript's real default (variants/pyscript/manifest.py):
+        # asyncio (JS-scheduler backed) plus a require() list of 24
+        # stdlib/utility modules (base64, collections, gzip, os, pathlib,
+        # unittest, zlib, ...). tests/test_bclibc.py never imports any of
+        # them, which is why this went unnoticed in CI -- but the
+        # .mjs/.wasm this job uploads is a real build artifact, not just a
+        # test fixture, and anyone importing asyncio/os/etc. against it
+        # would hit a plain ImportError. Combine explicitly instead, same
+        # pattern a7p's own webassembly job already uses for this exact
+        # port.
+        run: |
+          cat > "$RUNNER_TEMP/wasm_manifest.py" <<EOF
+          include("\$(PORT_DIR)/variants/pyscript/manifest.py")
+          include("$GITHUB_WORKSPACE/usermod/manifest.py")
+          EOF
+          cat "$RUNNER_TEMP/wasm_manifest.py"
+          echo "WASM_FROZEN_MANIFEST=$RUNNER_TEMP/wasm_manifest.py" >> "$GITHUB_ENV"
+
       - name: Build + test (wasm)
         # BUILD is a local shell var, not a job env: -- see the aarch64
         # job's identical reasoning (leaks into the "Build mpy-cross" step
@@ -252,18 +274,14 @@ jobs:
         # upstream's own maintainer recommendation there is "use the
         # pyscript variant" (it doesn't use ASYNCIFY at all) -- same
         # variant a7p's own webassembly job already uses, which is why
-        # a7p never hit this. Our own FROZEN_MANIFEST overrides pyscript's
-        # default manifest.py (a large micropython-lib require() list we
-        # don't need) -- that's fine, VARIANT only changes the build
-        # config (JSFLAGS, no ASYNCIFY), the manifest default is separate
-        # and command-line FROZEN_MANIFEST= wins over it either way.
+        # a7p never hit the ASYNCIFY failure in the first place.
         run: |
           BUILD="$GITHUB_WORKSPACE/usermod/build/wasm"
           source emsdk/emsdk_env.sh
           make -C "$MPY_DIR/ports/webassembly" VARIANT=pyscript \
             BUILD="$BUILD" \
             USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
+            FROZEN_MANIFEST="$WASM_FROZEN_MANIFEST" \
             MP_BCLIBC_PRECISION=double
           node "$BUILD/micropython.mjs" tests/test_bclibc.py
 
