@@ -96,14 +96,29 @@ own defaults exactly, so this job's call needs no input overrides at all.
 
 `build-test-qemu-armv7m` no longer carries its own inline arm-none-eabi
 toolchain-install/mpy-cross/port-build recipe — it now calls
-`build-usermod-qemu-armv7m` from
-[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
-same as the unix/Windows/wasm/rp2040 jobs above. `qemu-system-arm` and
-`pyserial` stay caller-side: neither is a build dependency (QEMU only
-runs the resulting firmware), same split the rp2040 action already uses
-for the rp2040py emulator. `build_dir: build-MPS2_AN385` keeps the
-resulting path exactly where the Run tests step already expects it — no
-`BUILD=` override in the plain `make` invocation this replaces either.
+`build-usermod-armv7m` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci)
+(named after the target architecture, not the QEMU test mechanism — see
+that action's own header), same as the unix/Windows/wasm/rp2040 jobs
+above. `qemu-system-arm` and `pyserial` stay caller-side: neither is a
+build dependency (QEMU only runs the resulting firmware), same split the
+rp2040 action already uses for the rp2040py emulator. `build_dir:
+build-MPS2_AN385` keeps the resulting path exactly where the Run tests
+step already expects it — no `BUILD=` override in the plain `make`
+invocation this replaces either.
+
+#### `usermod.yml` — esp32 build now delegates to a shared action too
+
+`build-esp32` no longer carries its own inline ESP-IDF install/mpy-cross/
+port-build recipe — it now calls `build-usermod-esp32` from the same
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci)
+repo. `source esp-idf/export.sh` and the port build stay in the action's
+same step (export.sh's env doesn't survive a composite action step
+boundary). `build_dir: build-ESP32_GENERIC` keeps the resulting path
+exactly where Upload artifact already expects it. This job also gains a
+"Dump IDF build logs on failure" diagnostic for free — folded into the
+action universally after `o-murphy/micropython-wasm3` hit a real failure
+where idf.py's own console output swallowed the actual compiler error.
 
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 

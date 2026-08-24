@@ -564,39 +564,16 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Install esp-idf
-        # --recursive, unlike natmod.yml's xtensawin leg: that one only wants
-        # the toolchain install.sh downloads, this one builds against IDF's
-        # own components. `install.sh esp32` limits the toolchain download to
-        # the one target rather than every chip IDF supports.
-        env:
-          IDF_VER: v5.5.1
-        run: |
-          git clone --depth 1 --recursive --branch "$IDF_VER" \
-            https://github.com/espressif/esp-idf.git
-          ./esp-idf/install.sh esp32
-
-      - name: Build mpy-cross
-        # Before export.sh is sourced anywhere: mpy-cross is a host tool and
-        # has no business being built inside IDF's own python/toolchain
-        # environment. Built explicitly for the usual reason -- see the unix
-        # job's own comment on py/mkenv.mk's auto-build rule.
-        run: make -C "$MPY_DIR/mpy-cross" -j"$(nproc)"
-
-      - name: Build ESP32 firmware
-        # USER_C_MODULES points at usermod/micropython.cmake itself, not at
-        # the repo root: CMake's USER_C_MODULES takes a file, not a directory
-        # to glob -- same as the rp2040 job above.
-        #
+      - name: Build usermod (esp32, ESP32_GENERIC)
         # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
         # single-precision default is the right one and passing it explicitly
         # would only invite it to drift from micropython.cmake's own default.
-        run: |
-          source esp-idf/export.sh
-          make -C "$MPY_DIR/ports/esp32" \
-            BOARD=ESP32_GENERIC \
-            USER_C_MODULES="$GITHUB_WORKSPACE/usermod/micropython.cmake" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py"
+        # build_dir: build-ESP32_GENERIC, matching the port's own default the
+        # plain `make` invocation this replaces already landed at (no BUILD=
+        # override there either) -- keeps Upload artifact below unchanged.
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-esp32@claude/usermod-shared-action-kwulzv
+        with:
+          build_dir: build-ESP32_GENERIC
 
       - uses: actions/upload-artifact@v7
         with:
