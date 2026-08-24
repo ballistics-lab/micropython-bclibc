@@ -141,15 +141,20 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      # ballistics-lab/cibuildmp, not ballistics-lab/micropython-native-ci:
+      # the composite actions this workflow uses (fetch-micropython,
+      # build-usermod-*) now live in cibuildmp's own repo, same paths and
+      # names as before -- cibuildmp the CLI/tool still only drives natmod
+      # (usermod is unimplemented there, see its own docs/BACKLOG.md), but
+      # the action *repo* hosts both.
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-unix@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-unix@v0.3.0
         id: build
         with:
           arch: ${{ matrix.arch }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         # `file` first so the log records what actually ran -- on armhf that
@@ -168,8 +173,7 @@ jobs:
   # ── ARMv7m: bare-metal QEMU Cortex-M3, build + test ─────────────────────────
   # A genuine functional execution test (real firmware.elf, run under QEMU),
   # not just a build-check -- what natmod's own armv7m ARCH coverage doesn't
-  # provide, so it stays regardless of natmod-first. No FPU on Cortex-M3,
-  # hence single precision.
+  # provide, so it stays regardless of natmod-first.
   build-test-qemu-armv7m:
     name: build + test (armv7m / QEMU Cortex-M3)
     runs-on: ubuntu-latest
@@ -179,7 +183,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -198,10 +202,9 @@ jobs:
         # build_dir: build-MPS2_AN385, matching the port's own default the
         # plain `make` invocation this replaces already landed at (no BUILD=
         # override there either) -- keeps Run tests below unchanged.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-armv7m@v0.2.0
+        uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-armv7m@v0.3.0
         with:
           build_dir: build-MPS2_AN385
-          extra_make_args: MP_BCLIBC_PRECISION=single
 
       - name: Run tests via QEMU
         run: |
@@ -210,8 +213,9 @@ jobs:
             tests/
 
   # ── WebAssembly ───────────────────────────────────────────────────────────────
-  # JS/browser numbers are double-precision natively -- no size/speed
-  # benefit to single precision here, so double only.
+  # JS/browser numbers are double-precision natively, but tiny_bclibc no
+  # longer builds a double-precision variant at all (see natmod/Makefile's
+  # own "Precision" header) -- single here too, same as every other target.
   build-test-wasm:
     name: build + test (wasm)
     runs-on: ubuntu-latest
@@ -221,7 +225,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
         # Not clone-micropython, despite the combined manifest below now
         # `require()`-ing lib/micropython-lib packages via
         # variants/pyscript/manifest.py: wasm3's own webassembly job proved
@@ -270,10 +274,9 @@ jobs:
         # pyscript variant" (it doesn't use ASYNCIFY at all) -- same
         # variant a7p's own webassembly job already uses, which is why
         # a7p never hit the ASYNCIFY failure in the first place.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-webassembly@v0.2.0
+        uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-webassembly@v0.3.0
         with:
           frozen_manifest: ${{ env.WASM_FROZEN_MANIFEST }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         run: node "${{ steps.build.outputs.build_dir }}/micropython.mjs" tests/test_bclibc.py
@@ -307,7 +310,7 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
         # Not clone-micropython + pico_sdk_submodules: the earlier "Cannot
         # find source file: .../lib/mbedtls/library/aes.c" failure that
         # justified this job's original submodule list was against an
@@ -330,7 +333,7 @@ jobs:
         # No inputs to override: board (RPI_PICO), user_c_modules
         # (usermod/micropython.cmake) and frozen_manifest (usermod/manifest.py)
         # all already match the action's own defaults exactly.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-rp2040@v0.2.0
+        uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-rp2040@v0.3.0
 
       # v0.1.0b3's action.yml had a real bug (passed the *rp2040py package* version to
       # `uv tool install --python`, not an actual interpreter spec) - fixed in v0.1.0b4.
@@ -427,8 +430,8 @@ jobs:
             # Warnings still print; they just stop failing the build. The
             # x86/x64 rows keep -Werror, and this repo's own sources were
             # separately confirmed clean under the port's exact warning set
-            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror, double
-            # precision) -- so nothing of ours goes unchecked here.
+            # (-Wall -Wpointer-arith -Wdouble-promotion -Werror) -- so
+            # nothing of ours goes unchecked here.
             runs_on: windows-11-arm
             msystem: CLANGARM64
             msys_install: mingw-w64-clang-aarch64-gcc-compat mingw-w64-clang-aarch64-clang
@@ -448,7 +451,7 @@ jobs:
           # build dies with "python3: No such file or directory" the moment
           # it needs to generate anything.
           # curl/tar/xz: the MicroPython tarball fetch below. The shared
-          # micropython-native-ci fetch-micropython action can't be reused
+          # cibuildmp fetch-micropython action can't be reused
           # here -- it is a composite action, so its steps declare their own
           # `shell: bash` (git-bash on this runner, which has no wget) and a
           # caller cannot override that to `msys2 {0}`.
@@ -457,7 +460,7 @@ jobs:
       - name: Fetch MicroPython ${{ env.MPY_TAG }}
         shell: msys2 {0}
         # Same tarball as every other job in this workflow (via the shared
-        # micropython-native-ci fetch-micropython action), just fetched
+        # cibuildmp fetch-micropython action), just fetched
         # inline for the reason in the install: comment above. MPY_DIR is
         # exported as MSYS2's POSIX-style path ("/d/a/..."), not $GITHUB_WORKSPACE's
         # native "D:\a\..." -- an unquoted backslash is MSYS2 bash's own
@@ -499,11 +502,10 @@ jobs:
         # still requires MPY_DIR (set above) and msys2/setup-msys2 (also
         # above) to already be in place, since a composite action's own
         # `shell: bash` steps can't set either of those up for themselves.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-windows@v0.2.0
+        uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-windows@v0.3.0
         with:
           build_dir: $(pwd)/usermod/build/windows-${{ matrix.arch_label }}
           cflags_extra: ${{ matrix.cflags_extra }}
-          extra_make_args: MP_BCLIBC_PRECISION=double
 
       - name: Run tests
         shell: msys2 {0}
@@ -560,19 +562,18 @@ jobs:
           submodules: "true"
           fetch-depth: 0
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
       - name: Build usermod (esp32, ESP32_GENERIC)
-        # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
-        # single-precision default is the right one and passing it explicitly
-        # would only invite it to drift from micropython.cmake's own default.
+        # No precision flag to pass any more -- micropython.cmake no longer
+        # has an MP_BCLIBC_PRECISION knob at all, single precision unconditionally.
         # No build_dir input any more -- the action always uses the port's
         # own build-$(BOARD) default (see its own header for why an
         # explicit BUILD= override broke esp32's internal mpy-cross
         # sub-build), which is exactly what Upload artifact below expects.
-        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-esp32@v0.2.0
+        uses: ballistics-lab/cibuildmp/.github/actions/build-usermod-esp32@v0.3.0
 
       - uses: actions/upload-artifact@v7
         with:

@@ -1,7 +1,7 @@
 # ── Arch selection ─────────────────────────────────────────────────────────────
 #
-#   make                       → x64 (double, default)
-#   make ARCH=x86              → x86 32-bit (double, default)
+#   make                       → x64
+#   make ARCH=x86              → x86 32-bit
 #   make ARCH=armv6m           → RP2040 / Cortex-M0+
 #   make ARCH=armv7m           → Cortex-M3
 #   make ARCH=armv7emsp        → Cortex-M4F / M7 single-precision FPU
@@ -21,36 +21,28 @@ ARCH    ?= x64
 MPY_DIR ?= micropython
 
 # ── Precision ─────────────────────────────────────────────────────────────────
-# Derived from ARCH's actual FPU, not a separate knob you need to remember:
-# there's no point building (let alone shipping) a "double" variant for a
-# target with no double-precision FPU, or a "single" variant for one that
-# has one. Override with MP_BCLIBC_PRECISION= only if you specifically need
-# the other precision for your own build (e.g. testing) -- CI never does.
-#
-#   armv7emdp        → double (Cortex-M7, double-precision FPU -- the "dp" in
-#                       the ARCH name)
-#   x64/x86          → double (host/dev target, no MCU FPU constraint)
-#   everything else   → single (armv6m/armv7m/armv7emsp/xtensa/xtensawin/
-#                       rv32imc/rv64imc: either no FPU at all, or single-
-#                       precision only)
-ifeq ($(ARCH),armv7emdp)
-MP_BCLIBC_PRECISION ?= double
-else ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
-MP_BCLIBC_PRECISION ?= double
-else
-MP_BCLIBC_PRECISION ?= single
-endif
+# Always single -- no more per-ARCH double-precision variant, no more
+# MP_BCLIBC_PRECISION knob, no more _dp/_sp split in MOD/BUILD. armv7emdp
+# still exists as its own ARCH (distinct MP_NATIVE_ARCH_* identifier, real
+# Cortex-M7 double-precision FPU hardware), but the library itself no
+# longer builds a second, wider-precision variant for it or for x64/x86.
+CFLAGS_EXTRA += -DTINY_BCLIBC_SINGLE_PRECISION -DTINY_BCLIBC_FAST_ZERO_FIND
 
-ifeq ($(MP_BCLIBC_PRECISION),single)
-_PREC_SUFFIX := _sp
-else
-_PREC_SUFFIX := _dp
-endif
-
-MOD         = tiny_bclibc_$(ARCH)$(_PREC_SUFFIX)
+MOD         = tiny_bclibc_$(ARCH)
 BCLIBC_ROOT = ../bclibc
 SRC_DIR     = ../src
-BUILD       = build/$(ARCH)$(_PREC_SUFFIX)
+BUILD       = build/$(ARCH)
+# dist: below renames the merged native output to $(BUILD)/tiny_bclibc.mpy
+# -- the exact path dynruntime.mk's own $(BUILD)/%.mpy: %.py rule also
+# owns, for the compiled *facade* (../src/tiny_bclibc.py). A second build
+# in this same $(BUILD) directory (e.g. cibuildmp run twice locally) finds
+# that leftover, already-native file, treats it as the up-to-date facade
+# compile, and mpy-tool.py then refuses to merge two files that both
+# contain native code. A recipe-line `rm -f` in dist: is too late -- by
+# the time dist:'s own recipe runs, `all` has already decided the stale
+# file was fine. This has to happen before make resolves any rule, hence
+# $(shell) at parse time, not a prerequisite.
+$(shell rm -f $(BUILD)/tiny_bclibc.mpy 2>/dev/null)
 VERSION_H   = generated/bclibc_mp/version.h
 VERSION_IN  = ../version.h.in
 
@@ -95,41 +87,15 @@ _FDLIBM_FLAGS := -I$(MPY_DIR)/lib    \
                  -D__uint32_t=uint32_t \
                  -D__uint8_t=uint8_t
 
-# libm_dbl (double-precision, musl-derived) — used on x64/x86 double.
-# math_shadow/math.h intercepts <math.h> to prevent glibc/__sin conflict.
-# floor.c is needed by __rem_pio2_large.c.
-#
-_LIBM_DBL_DIR   := $(MPY_DIR)/lib/libm_dbl
-_LIBM_DBL_SRCS  := $(_LIBM_DBL_DIR)/sin.c              \
-                   $(_LIBM_DBL_DIR)/cos.c              \
-                   $(_LIBM_DBL_DIR)/sqrt.c             \
-                   $(_LIBM_DBL_DIR)/atan2.c            \
-                   $(_LIBM_DBL_DIR)/atan.c             \
-                   $(_LIBM_DBL_DIR)/exp.c              \
-                   $(_LIBM_DBL_DIR)/pow.c              \
-                   $(_LIBM_DBL_DIR)/log.c              \
-                   $(_LIBM_DBL_DIR)/__sin.c            \
-                   $(_LIBM_DBL_DIR)/__cos.c            \
-                   $(_LIBM_DBL_DIR)/__rem_pio2.c       \
-                   $(_LIBM_DBL_DIR)/__rem_pio2_large.c \
-                   $(_LIBM_DBL_DIR)/__expo2.c          \
-                   $(_LIBM_DBL_DIR)/scalbn.c           \
-                   $(_LIBM_DBL_DIR)/frexp.c            \
-                   $(_LIBM_DBL_DIR)/floor.c
-_LIBM_DBL_FLAGS := -I$(MPY_DIR)/lib/libm_dbl \
-                   -I $(SRC_DIR)/math_shadow
-
 # ── Math library selection ────────────────────────────────────────────────────
+# No more libm_dbl (double-precision, musl-derived) branch here -- single
+# precision only now (see the "Precision" section above), so x64/x86 uses
+# the same fdlibm-from-source route every other arch already did.
 ifeq ($(ARCH),$(filter $(ARCH),x64 x86))
 # Host (Linux): glibc libm.a uses IFUNC internals that can't be linked in a natmod.
 # GCC -O2 merges sin()+cos() → sincos() (GNU ext) → math_shim.c provides it.
-ifeq ($(MP_BCLIBC_PRECISION),single)
 SRC          += $(_FDLIBM_SRCS) math_shim.c
 CFLAGS_EXTRA += $(_FDLIBM_FLAGS)
-else
-SRC          += $(_LIBM_DBL_SRCS) math_shim.c
-CFLAGS_EXTRA += $(_LIBM_DBL_FLAGS)
-endif
 ifeq ($(ARCH),x86)
 CFLAGS_EXTRA += -msse2 -mfpmath=sse
 endif
@@ -174,10 +140,6 @@ CFLAGS_EXTRA += \
     -DTINY_BCLIBC_NO_THREAD_LOCAL \
     -DTINY_BCLIBC_NO_ERR_BUF \
     -DBCLIBC_BUILD_NATMOD
-
-ifeq ($(MP_BCLIBC_PRECISION),single)
-CFLAGS_EXTRA += -DTINY_BCLIBC_SINGLE_PRECISION -DTINY_BCLIBC_FAST_ZERO_FIND
-endif
 
 # Guard the include so 'make clean' works without MPY_DIR.
 # dynruntime.mk has no -MMD so header changes are not auto-tracked; see below.
@@ -232,7 +194,7 @@ submodules:
 
 dist: all
 	$(Q)mv $(MOD).mpy $(BUILD)/tiny_bclibc.mpy
-	$(Q)rm -f $(BUILD)/$(MOD).mpy $(SRC_O) $(CONFIG_H)
+	$(Q)rm -f $(BUILD)/$(MOD).mpy $(BUILD)/$(MOD).native.mpy $(SRC_O) $(CONFIG_H)
 	$(ECHO) "  →  $(BUILD)/tiny_bclibc.mpy"
 
 clean:

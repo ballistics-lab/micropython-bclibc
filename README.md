@@ -118,27 +118,28 @@ sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi \
 ## Build
 
 All commands are run from `natmod/`. There's a single `make ARCH=<value> dist`
-entry point — no per-board alias targets to keep in sync — and no `sp`/`dp` flag to pick:
-precision is derived automatically from what FPU that `ARCH` actually has.
+entry point — no per-board alias targets to keep in sync. Always single precision now —
+no `sp`/`dp` split and no precision flag to pick, on any `ARCH` (see `natmod/Makefile`'s
+own "Precision" header for why).
 
 ```bash
-make ARCH=x64        dist   # x64, double        (host FPU)      → natmod/build/x64_dp/
-make ARCH=x86        dist   # x86, double        (host FPU)      → natmod/build/x86_dp/
-make ARCH=armv6m     dist   # Cortex-M0+, single (no FPU)        → natmod/build/armv6m_sp/  — Raspberry Pi Pico
-make ARCH=armv7m     dist   # Cortex-M3, single  (no FPU)        → natmod/build/armv7m_sp/  — generic Cortex-M3
-make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp_sp/ — RP2350, STM32F4
-make ARCH=armv7emdp  dist   # Cortex-M7, double-FPU              → natmod/build/armv7emdp_dp/ — STM32H7
-make ARCH=xtensawin  dist   # ESP32/ESP32-S3, single             → natmod/build/xtensawin_sp/
-make ARCH=xtensa     dist   # ESP8266, single                    → natmod/build/xtensa_sp/
-make ARCH=rv32imc    dist   # ESP32-C3/C6 (RISC-V 32), single     → natmod/build/rv32imc_sp/
-make ARCH=rv64imc    dist   # RISC-V 64, single                  → natmod/build/rv64imc_sp/
+make ARCH=x64        dist   # x64                                → natmod/build/x64/
+make ARCH=x86        dist   # x86                                → natmod/build/x86/
+make ARCH=armv6m     dist   # Cortex-M0+                         → natmod/build/armv6m/  — Raspberry Pi Pico
+make ARCH=armv7m     dist   # Cortex-M3                          → natmod/build/armv7m/  — generic Cortex-M3
+make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp/ — RP2350, STM32F4
+make ARCH=armv7emdp  dist   # Cortex-M7, double-FPU (hardware)   → natmod/build/armv7emdp/ — STM32H7
+make ARCH=xtensawin  dist   # ESP32/ESP32-S3                     → natmod/build/xtensawin/
+make ARCH=xtensa     dist   # ESP8266                            → natmod/build/xtensa/
+make ARCH=rv32imc    dist   # ESP32-C3/C6 (RISC-V 32)            → natmod/build/rv32imc/
+make ARCH=rv64imc    dist   # RISC-V 64                          → natmod/build/rv64imc/
 ```
 
-Output per target: a single `natmod/build/<arch>_<sp|dp>/tiny_bclibc.mpy` — the native part
+Output per target: a single `natmod/build/<arch>/tiny_bclibc.mpy` — the native part
 and `src/tiny_bclibc.py` are merged into one file (see `natmod/Makefile`'s `SRC`), so only
 one file needs to be copied to the device / uploaded as a release artifact.
 
-`bc.version()` returns `"1.1.3-sp"` or `"1.1.3-dp"`.
+`bc.version()` returns `"1.1.3-sp"`.
 
 ### Running an ARM natmod on an ARM Linux host
 
@@ -155,7 +156,7 @@ make -C /path/to/micropython-1.28.0/ports/unix VARIANT=standard \
     MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
     CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT
 
-ln -sf ../natmod/build/armv7emsp_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+ln -sf ../natmod/build/armv7emsp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 /tmp/mpy-armhf/micropython tests/test_bclibc.py
 ```
 
@@ -227,16 +228,10 @@ import mip
 mip.install("https://github.com/ballistics-lab/micropython-bclibc/releases/download/vX.Y.Z/package.json")
 ```
 
-### Custom MPY_DIR or precision override
-
-If you specifically need the *other* precision than what an `ARCH` gets by default
-(e.g. a single-precision build for host testing), pass `MP_BCLIBC_PRECISION=` directly —
-CI never does this, it's a build-it-yourself option:
+### Custom MPY_DIR
 
 ```bash
 make ARCH=armv6m MPY_DIR=/path/to/micropython-1.28.0
-make ARCH=armv7emdp MP_BCLIBC_PRECISION=single   # single on a double-FPU chip → build/armv7emdp_sp/
-make ARCH=x64 MP_BCLIBC_PRECISION=single         # single on host              → build/x64_sp/
 ```
 
 ## Test (x64 / x86 host)
@@ -247,10 +242,10 @@ make -C "$MPY_DIR/ports/unix" VARIANT=standard
 MPY="$MPY_DIR/ports/unix/build-standard/micropython"
 
 # Build natmod (from natmod/)
-make ARCH=x64 dist   # → natmod/build/x64_dp/tiny_bclibc.mpy
+make ARCH=x64 dist   # → natmod/build/x64/tiny_bclibc.mpy
 
 # Symlink the .mpy into tests/ so test_bclibc.py can import it
-ln -sf ../natmod/build/x64_dp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+ln -sf ../natmod/build/x64/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
 # Run tests (natmod)
 $MPY tests/test_bclibc.py
@@ -284,10 +279,9 @@ this repo (for Make-based ports) or at `usermod/micropython.cmake` (for CMake-ba
 ports like RP2040). `usermod/micropython.mk` / `usermod/micropython.cmake` are the entire
 "how to build with bclibc" story; there's nothing else to configure.
 
-Precision is *not* a separate build variant here: `usermod/micropython.mk` defaults to
-single precision, `usermod/micropython.cmake` too — pass `MP_BCLIBC_PRECISION=double` on
-the port's own build command line if your target has a double-precision FPU (or is a
-general-purpose Linux/JS target, which always gets it in CI — see below).
+Always single precision here too — `usermod/micropython.mk` and `usermod/micropython.cmake`
+both build `tiny_bclibc` single-precision unconditionally, with no knob to override it
+(see `natmod/Makefile`'s own "Precision" header for why).
 
 ### AArch64 / ARMhf / MIPS LE (unix binary)
 
@@ -319,8 +313,7 @@ make -C ports/unix MICROPY_STANDALONE=1 deplibs
 make -C ports/unix VARIANT=standard \
     MICROPY_STANDALONE=1 LDFLAGS_EXTRA="-static" \
     USER_C_MODULES=/path/to/micropython-bclibc \
-    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
-    MP_BCLIBC_PRECISION=double
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
 build-standard/micropython /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
@@ -420,9 +413,9 @@ ESP-IDF, deliberately skipping IDF's own submodules. A usermod is compiled
 into the firmware, so it needs the full IDF.
 
 ESP-IDF v5.5.1 is what `ports/esp32/README.md` names as recommended for
-MicroPython v1.28.0 (5.3, 5.4, 5.4.1 and 5.4.2 are also supported). No
-`MP_BCLIBC_PRECISION`: esp32 has no double-precision FPU, so the
-single-precision default is the right one.
+MicroPython v1.28.0 (5.3, 5.4, 5.4.1 and 5.4.2 are also supported). No precision
+flag to pass — `usermod/micropython.cmake` has no `MP_BCLIBC_PRECISION` knob at all
+any more, single precision unconditionally.
 
 ```bash
 git clone --depth 1 --recursive --branch v5.5.1 \
@@ -446,7 +439,7 @@ output.
 
 ### QEMU Cortex-M3 (armv7m, build + run test)
 
-No FPU on Cortex-M3, so single precision (the port's own default — no override needed):
+No FPU on Cortex-M3 — not that it matters, since single precision is unconditional now:
 
 ```bash
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
@@ -484,7 +477,9 @@ recorded so nobody has to rediscover it from a corrupted trajectory.
 
 ### WebAssembly
 
-JS/browser numbers are double-precision natively, so double is the sensible choice here.
+JS/browser numbers are double-precision natively, but `tiny_bclibc` itself no longer builds
+a double-precision variant at all (see `natmod/Makefile`'s own "Precision" header) — single
+here too, same as every other target.
 
 `VARIANT=pyscript`, not the default `standard` variant: `standard` (`-s ASYNCIFY`)
 is broken against modern emsdk releases -- see
@@ -496,8 +491,7 @@ so nothing extra gets pulled in from it:
 ```bash
 make -C /path/to/micropython-1.28.0/ports/webassembly VARIANT=pyscript \
     USER_C_MODULES=/path/to/micropython-bclibc \
-    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
-    MP_BCLIBC_PRECISION=double
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
 node build-pyscript/micropython.mjs /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
@@ -510,17 +504,16 @@ gates `.mpy` native-code loading on `MICROPY_EMIT_MACHINE_CODE` — so there is 
 for a native module to load into. usermod is how `tiny_bclibc` runs on Windows.
 
 Built with MSYS2, the same way upstream MicroPython's own `build-mingw` CI job does:
-MINGW32 for x86, MINGW64 for x64, CLANGARM64 for arm64. Desktop targets, so double
-precision. CI builds and runs all three natively — x86/x64 on an x64 runner (WOW64
-runs the 32-bit exe with no emulation layer), arm64 on `windows-11-arm`.
+MINGW32 for x86, MINGW64 for x64, CLANGARM64 for arm64. Single precision, same as
+every other target. CI builds and runs all three natively — x86/x64 on an x64 runner
+(WOW64 runs the 32-bit exe with no emulation layer), arm64 on `windows-11-arm`.
 
 ```bash
 # In an MSYS2 shell (MINGW64 here), with: make git python3 mingw-w64-x86_64-gcc
 make -C /path/to/micropython-1.28.0/mpy-cross
 make -C /path/to/micropython-1.28.0/ports/windows \
     USER_C_MODULES=/path/to/micropython-bclibc \
-    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py \
-    MP_BCLIBC_PRECISION=double
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
 build-standard/micropython.exe /path/to/micropython-bclibc/tests/test_bclibc.py
 ```
@@ -599,7 +592,7 @@ make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
 
 # Build natmod
 make -C natmod ARCH=armv7m MPY_DIR="$MPY_DIR" dist
-ln -sf ../natmod/build/armv7m_sp/tiny_bclibc.mpy tests/tiny_bclibc.mpy
+ln -sf ../natmod/build/armv7m/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
 # Run tests through the QEMU pty bridge
 python3 natmod/ci/run_qemu.py \
@@ -825,16 +818,17 @@ The Python overhead of `integrate_stream` (one `mp_call` per filtered point) is 
 
 ## Architecture notes
 
-| ARCH               | Precision                | Math library                           | BSS |
-| ------------------ | ------------------------ | -------------------------------------- | --- |
-| x64 / x86          | double (default)         | musl libm_dbl (bundled in MicroPython) | 0   |
-| x64 / x86          | float (optional)         | fdlibm single (bundled in MicroPython) | 0   |
-| armv6m             | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
-| armv7m             | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
-| armv7emsp          | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
-| armv7emdp          | float (default) / double | newlib libm.a (via LINK_RUNTIME)       | 0   |
-| xtensawin / xtensa | float only               | newlib libm.a (via LINK_RUNTIME)       | 0   |
-| rv32imc / rv64imc  | float only               | fdlibm single + libgcc soft-float      | 0   |
+| ARCH                         | Precision | Math library                           | BSS |
+| ---------------------------- | --------- | --------------------------------------- | --- |
+| x64 / x86                    | float     | fdlibm single (bundled in MicroPython) | 0   |
+| armv6m / armv7m / armv7emsp  | float     | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| armv7emdp                    | float     | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| xtensawin / xtensa           | float     | newlib libm.a (via LINK_RUNTIME)       | 0   |
+| rv32imc / rv64imc            | float     | fdlibm single + libgcc soft-float      | 0   |
+
+Always float (single precision), on every `ARCH` — including `armv7emdp`, which has a real
+double-precision FPU in hardware but no longer gets a wider-precision library variant for it
+(see `natmod/Makefile`'s own "Precision" header for why).
 
 > **RISC-V note:** picolibc triggers a `mpy_ld.py` bug on current MicroPython.
 > fdlibm is used as a workaround until the fix lands upstream.
@@ -848,8 +842,8 @@ BSS must be 0 — MicroPython natmod ABI does not allow uninitialized static dat
 then Ridder's method to find the zero angle. Each GSS iteration runs a full RK4
 trajectory, which is expensive on soft-float MCUs (Cortex-M0+, RISC-V without FPU).
 
-`TINY_BCLIBC_FAST_ZERO_FIND` is automatically defined when building with `MP_BCLIBC_PRECISION=single`.
-It applies two optimisations that do **not** affect the final angle accuracy:
+`TINY_BCLIBC_FAST_ZERO_FIND` is always defined now (single precision is unconditional — see
+above). It applies two optimisations that do **not** affect the final angle accuracy:
 
 | Parameter           | Default    | Fast                                                |
 | ------------------- | ---------- | --------------------------------------------------- |
@@ -861,8 +855,8 @@ The bracket bound (`angle_at_max`) is used only to constrain Ridder's search int
 its precision does not affect the output. Ridder's method always uses the original
 `calc_step`.
 
-To build without `FAST_ZERO_FIND` even on `MP_BCLIBC_PRECISION=single`, remove
-`-DTINY_BCLIBC_FAST_ZERO_FIND` from `CFLAGS_EXTRA` in the Makefile.
+To build without `FAST_ZERO_FIND`, remove `-DTINY_BCLIBC_FAST_ZERO_FIND` from
+`CFLAGS_EXTRA` in the Makefile.
 
 See [src/sincosf_shim.md](src/sincosf_shim.md) for why `src/math_shim.c` is only compiled on x64/x86 and how to add it back for MCU targets if needed.
 
@@ -901,12 +895,18 @@ using `integrate_at()` + a range loop instead of storing the full trajectory.
 
 ## Float32 vs Float64 precision comparison
 
+> **Historical.** This comparison is what justified going single-precision-only —
+> `tiny_bclibc` no longer builds a double-precision variant at all (see
+> `natmod/Makefile`'s own "Precision" header), so the reproduction steps below,
+> which need both a `_dp` and a `_sp` natmod side by side, no longer apply to the
+> current Makefile. The measurements themselves are unaffected by that and are kept
+> here as the record for why single precision is safe everywhere this library targets.
+
 ### Test methodology
 
-The comparison runs the full trajectory integration twice — once with the float64 natmod
-(`build/x64_dp/tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=double`) and once with the float32
-natmod (`build/x64_sp/tiny_bclibc.mpy`, `MP_BCLIBC_PRECISION=single`) — and diffs the output
-row by row. `find_zero_angle` is also compared between the two builds.
+The comparison ran the full trajectory integration twice — once with a float64 natmod
+build and once with a float32 natmod build — and diffed the output row by row.
+`find_zero_angle` was also compared between the two builds.
 
 **Important:** `range_step_ft` in the `Request` is the *output sampling step* only.
 The internal RK4 integrator uses its own sub-step controlled by `step_multiplier` (default
@@ -941,17 +941,11 @@ variation). Float32 is sufficient for all supported MCU targets.
 
 ### Reproduction
 
-```bash
-# Build both precision variants (from natmod/)
-make ARCH=x64 dist                            # → natmod/build/x64_dp/  (float64, default)
-make ARCH=x64 MP_BCLIBC_PRECISION=single dist  # → natmod/build/x64_sp/  (float32, override)
-
-# Run comparison (from /, requires CPython 3.10+)
-python3 tests/precision_compare.py
-```
-
-See [`tests/precision_compare.py`](tests/precision_compare.py) (CPython runner) and
-[`tests/precision_run.py`](tests/precision_run.py) (MicroPython worker).
+Not reproducible against the current `natmod/Makefile` — it no longer has a
+double-precision variant to build for the `_dp` side of the comparison.
+[`tests/precision_compare.py`](tests/precision_compare.py) (CPython runner) and
+[`tests/precision_run.py`](tests/precision_run.py) (MicroPython worker) are kept for
+reference; both still expect a `build/x64_sp/` and `build/x64_dp/` pair on disk.
 
 > [!WARNING]
 >

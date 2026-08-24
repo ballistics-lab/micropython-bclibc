@@ -77,3 +77,4 @@ version.h
 **/wheelhouse
 **/*.egg-info
 **/.venv
+**/mpyhouse

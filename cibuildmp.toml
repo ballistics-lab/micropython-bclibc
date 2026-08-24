@@ -1,0 +1,14 @@
+# Experimental M5 draft -- not yet wired into CI. See cibuildmp's own
+# docs/BACKLOG.md M5: this repo (micropython-bclibc) is the "most
+# demanding" of the three natmod.yml -> cibuildmp adopters (real
+# LINK_RUNTIME, per-arch math library selection, MOD name already
+# arch+precision-qualified so no D9 stale-cache scoping is even needed
+# here). natmod/Makefile derives MP_BCLIBC_PRECISION from ARCH on its own,
+# so no [[overrides]] are needed for the default case.
+
+micropython = "v1.28.0"
+
+[natmod]
+archs = ["x64", "x86", "armv6m", "armv7m", "armv7emsp", "armv7emdp",
+         "rv32imc", "rv64imc", "xtensa", "xtensawin"]
+module-dir = "natmod"

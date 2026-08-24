@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Assemble natmod release assets from a set of built .mpy files.
 
-Each input .mpy (e.g. natmod/build/x64_dp/tiny_bclibc.mpy, see
+Each input .mpy (e.g. natmod/build/x64/tiny_bclibc.mpy, see
 natmod/Makefile's `dist` target) gets copied out under a unique, flat name
 derived from its own header -- GitHub release assets can't be nested in
 directories, and every arch's build otherwise produces the same
