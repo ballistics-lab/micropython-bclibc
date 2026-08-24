@@ -130,7 +130,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@c114986359a071bc9c3865fc103c895f74959cde
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -261,7 +261,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/micropython-native-ci/.github/actions/fetch-micropython@v0.2.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@c114986359a071bc9c3865fc103c895f74959cde
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
