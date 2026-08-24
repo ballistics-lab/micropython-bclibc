@@ -568,12 +568,11 @@ jobs:
         # No MP_BCLIBC_PRECISION: esp32 has no double-precision FPU, so the
         # single-precision default is the right one and passing it explicitly
         # would only invite it to drift from micropython.cmake's own default.
-        # build_dir: build-ESP32_GENERIC, matching the port's own default the
-        # plain `make` invocation this replaces already landed at (no BUILD=
-        # override there either) -- keeps Upload artifact below unchanged.
+        # No build_dir input any more -- the action always uses the port's
+        # own build-$(BOARD) default (see its own header for why an
+        # explicit BUILD= override broke esp32's internal mpy-cross
+        # sub-build), which is exactly what Upload artifact below expects.
         uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-esp32@claude/usermod-shared-action-kwulzv
-        with:
-          build_dir: build-ESP32_GENERIC
 
       - uses: actions/upload-artifact@v7
         with:
