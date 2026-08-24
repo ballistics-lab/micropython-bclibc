@@ -183,24 +183,25 @@ jobs:
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
-      - name: Install toolchain + QEMU
+      - name: Install QEMU
         # apt-get update first -- see build-test-unix-static's "Install
-        # build deps" step for why.
+        # build deps" step for why. gcc-arm-none-eabi/libnewlib-arm-none-eabi
+        # now live inside build-usermod-qemu-armv7m below -- QEMU itself
+        # (and pyserial, this job's own test-harness dependency) stays here,
+        # since neither is a build dependency.
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
+          sudo apt-get install -y --no-install-recommends qemu-system-arm
           pip install pyserial
 
-      - name: Build mpy-cross
-        run: make -C "$MPY_DIR/mpy-cross"
-
-      - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
-        run: |
-          make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 \
-            USER_C_MODULES="$GITHUB_WORKSPACE" \
-            FROZEN_MANIFEST="$GITHUB_WORKSPACE/usermod/manifest.py" \
-            MP_BCLIBC_PRECISION=single
+      - name: Build usermod (qemu, MPS2_AN385)
+        # build_dir: build-MPS2_AN385, matching the port's own default the
+        # plain `make` invocation this replaces already landed at (no BUILD=
+        # override there either) -- keeps Run tests below unchanged.
+        uses: ballistics-lab/micropython-native-ci/.github/actions/build-usermod-qemu-armv7m@claude/usermod-shared-action-kwulzv
+        with:
+          build_dir: build-MPS2_AN385
+          extra_make_args: MP_BCLIBC_PRECISION=single
 
       - name: Run tests via QEMU
         run: |

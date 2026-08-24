@@ -92,6 +92,19 @@ same as the unix/Windows/wasm jobs above. No behavior change: `board`,
 `user_c_modules` and `frozen_manifest` all already matched the action's
 own defaults exactly, so this job's call needs no input overrides at all.
 
+#### `usermod.yml` — qemu-armv7m build now delegates to a shared action too
+
+`build-test-qemu-armv7m` no longer carries its own inline arm-none-eabi
+toolchain-install/mpy-cross/port-build recipe — it now calls
+`build-usermod-qemu-armv7m` from
+[`ballistics-lab/micropython-native-ci`](https://github.com/ballistics-lab/micropython-native-ci),
+same as the unix/Windows/wasm/rp2040 jobs above. `qemu-system-arm` and
+`pyserial` stay caller-side: neither is a build dependency (QEMU only
+runs the resulting firmware), same split the rp2040 action already uses
+for the rp2040py emulator. `build_dir: build-MPS2_AN385` keeps the
+resulting path exactly where the Run tests step already expects it — no
+`BUILD=` override in the plain `make` invocation this replaces either.
+
 #### `natmod.yml` — ARM natmods now run on real ARM silicon, not only emulators
 
 A new `test-arm-linux` matrix job on `ubuntu-24.04-arm` builds a 32-bit armhf
