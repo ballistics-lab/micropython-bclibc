@@ -32,6 +32,10 @@ compile_commands.json
 generated/
 version.h
 
+# usermod.yml's own generated webassembly FROZEN_MANIFEST -- see
+# cibuildmp.toml's [override."v1.28.0-wasm32"] comment
+usermod/wasm_manifest.py
+
 # IDE files
 .vscode/
 .idea/

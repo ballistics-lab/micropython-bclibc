@@ -1,14 +1,68 @@
-# Experimental M5 draft -- not yet wired into CI. See cibuildmp's own
-# docs/BACKLOG.md M5: this repo (micropython-bclibc) is the "most
-# demanding" of the three natmod.yml -> cibuildmp adopters (real
-# LINK_RUNTIME, per-arch math library selection, MOD name already
-# arch+precision-qualified so no D9 stale-cache scoping is even needed
-# here). natmod/Makefile derives MP_BCLIBC_PRECISION from ARCH on its own,
-# so no [[overrides]] are needed for the default case.
+# M5 adoption (cibuildmp record 0038) -- the new unified `build`/`skip` glob
+# schema (records 0051/0052), replacing this file's own old [natmod] table +
+# micropython=/archs= keys. See ballistics-lab/cibuildmp's own
+# examples/template/cibuildmp.toml and o-murphy/a7p's/o-murphy/micropython-wasm3's
+# own cibuildmp.toml for the sibling configs this one mirrors.
+#
+# No pre-build-command needed: bclibc/ and ffimod/ are plain git submodules
+# (see .gitmodules), already populated by actions/checkout's own
+# `submodules: recursive` in CI.
+#
+# manifest/user-c-modules are usermod's own generic keys (natmod's schema has
+# neither, so they're harmless to it). `user-c-modules = "usermod"` matches
+# usermod/micropython.mk|.cmake sitting directly under usermod/, one level
+# under the project root -- the flat, single-module shape
+# resolve_user_c_modules() auto-detects for make ports (rewriting to this
+# file's own parent for the `<USER_C_MODULES>/*/micropython.mk` glob) as of
+# cibuildmp record fixed 2026-08-29, live-caught migrating
+# o-murphy/micropython-wasm3 first. No override needed for it here.
+#
+# natmod: every arch dynruntime.mk supports, one MicroPython tag (unchanged
+# from the old [natmod] table's own archs= list).
+#
+# usermod: unix x64/x86/aarch64/armhf/mipsel, qemu MPS2_AN385, wasm32,
+# windows all three arches, esp32 ESP32_GENERIC, rp2 RPI_PICO -- every
+# port/arch usermod.yml already builds.
+build = """
+mpy*-v1.28.0-*
+v1.28.0-manylinux_2_28_x86_64 v1.28.0-manylinux_2_28_i686 v1.28.0-manylinux_2_28_aarch64
+v1.28.0-manylinux_2_31_armv7l v1.28.0-manylinux_2_39_mipsel
+v1.28.0-qemu-MPS2_AN385
+v1.28.0-wasm32
+v1.28.0-win32 v1.28.0-win_amd64 v1.28.0-win_arm64
+v1.28.0-esp32-ESP32_GENERIC
+v1.28.0-rp2-RPI_PICO
+"""
 
-micropython = "v1.28.0"
-
-[natmod]
-archs = ["x64", "x86", "armv6m", "armv7m", "armv7emsp", "armv7emdp",
-         "rv32imc", "rv64imc", "xtensa", "xtensawin"]
 module-dir = "natmod"
+manifest = "usermod/manifest.py"
+user-c-modules = "usermod"
+
+# armhf's own row (usermod.yml's build-test-unix job) needs a static link,
+# not a CI convenience: the arm64 runner has no armhf glibc and no
+# /lib/ld-linux-armhf.so.3 outside a container. Record 0043 (cibuildmp)
+# dropped the vendored MICROPY_STANDALONE=1/deplibs path for armv7l --
+# "pkg-config --libs libffi resolves to -lffi inside manylinux_2_31_armv7l"
+# was true for the *dynamic* case, not this one, and that deplibs step is
+# gated by a hardcoded per-arch flag in cibuildmp itself, not something this
+# file can turn back on. This plain, no-deplibs route works instead --
+# confirmed live migrating o-murphy/micropython-wasm3's own identical row: a
+# real -static link against manylinux_2_31_armv7l's own libc6-dev/libffi-dev
+# succeeded with no deplibs step at all. manylinux_2_31 is glibc 2.31
+# (Ubuntu 20.04/Debian-floor), and unlike RPM-family images, Debian/Ubuntu
+# -dev packages ship the .a alongside the .so by default, which is exactly
+# what makes this work.
+[override."v1.28.0-manylinux_2_31_armv7l"]
+extra-make-args = ["LDFLAGS_EXTRA=-static"]
+
+# webassembly's own manifest problem: ports/webassembly has no boards/, only
+# variants/, so the plain top-level `manifest` above never pulls in the
+# pyscript variant's own default (variants/pyscript/manifest.py -- asyncio
+# plus a require() list of 24 stdlib/utility modules). usermod.yml's own
+# "Write combined FROZEN_MANIFEST" step generates the file this points at
+# fresh every run (include()-ing both the variant default and this project's
+# own usermod/manifest.py); relative to package-dir, same as `manifest`
+# above, and already covered by the usermod_mounts() bind mount since it
+# lands inside usermod/ like everything else `user-c-modules` mounts.
+[override."v1.28.0-wasm32"]
+manifest = "usermod/wasm_manifest.py"

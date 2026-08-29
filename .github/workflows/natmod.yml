@@ -78,14 +78,13 @@ jobs:
       - if: matrix.arch == 'x86'
         run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/cibuildmp@v0.3.0
-        env:
-          # CIBMP_ARCHS, not a matrix-baked identifier: cibuildmp resolves
-          # the current .mpy ABI from the checked-out MicroPython itself,
-          # so this stays correct even if MPY_TAG moves to a tag with a
-          # different ABI, with nothing here to keep in sync by hand.
-          CIBMP_MICROPYTHON: ${{ env.MPY_TAG }}
-          CIBMP_ARCHS: ${{ matrix.arch }}
+      - uses: ballistics-lab/cibuildmp@v0.4.0
+        with:
+          # mpy*-<tag>-<arch>: cibuildmp resolves the current .mpy ABI from
+          # the checked-out MicroPython itself, so this stays correct even
+          # if MPY_TAG moves to a tag with a different ABI, with nothing
+          # here to keep in sync by hand.
+          build: mpy*-${{ env.MPY_TAG }}-${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -126,7 +125,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@9f30109cc178d5f0b5192850f3a78ae6edfe8b48
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
@@ -257,7 +256,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@v0.3.0
+      - uses: ballistics-lab/cibuildmp/.github/actions/fetch-micropython@9f30109cc178d5f0b5192850f3a78ae6edfe8b48
         with:
           mpy_tag: ${{ env.MPY_TAG }}
 
