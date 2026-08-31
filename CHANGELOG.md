@@ -292,6 +292,32 @@ current release and the action's own inputs (`version`, `python_version`) are
 unchanged across the range, as are the `mklittlefs -o` and `micropython --image`
 command lines both workflows use.
 
+#### Off cibuildmp's legacy composite actions entirely
+
+The three remaining `.github/actions/*` uses are gone. That layer never invokes
+the `cibuildmp` CLI at all — each action installs a toolchain by hand and runs
+the port's own `make` — and is a permanent legacy fallback rather than a second
+supported integration path (cibuildmp record 0073).
+
+- `usermod.yml`'s `build-test-unix-mipsel` job now builds through the CLI like
+  every other row, with `build: v1.28.0-manylinux_2_39_mipsel` (already listed
+  in this repo's own `cibuildmp.toml`). The reason it was held back — record
+  0043 keeping the vendored `MICROPY_STANDALONE=1`/`deplibs` static-libffi path
+  for this one cell — is an argument the other way round: cibuildmp's own mipsel
+  driver applies that path itself, gated per-arch in its source. Verified on the
+  real artifact of `o-murphy/a7p`'s already-migrated equivalent job rather than
+  inferred: `ELF 32-bit LSB executable, MIPS, MIPS32 rel2 ..., statically
+  linked`. The `qemu-user-static` install the composite action performed for
+  this arch is now an explicit step — it has to be the apt package registering a
+  host-wide `binfmt_misc` handler, since the test step execs the binary as an
+  ordinary host process. The job reads and uploads cibuildmp's collected
+  `mpyhouse/<identifier>/` copy instead of the port's internal build tree.
+- `natmod.yml`'s two `fetch-micropython` uses (the `test` matrix and the
+  32-bit-ARM-host job) are now the five-line release-tarball fetch that action
+  performed. Neither job runs a cibuildmp step at all — both consume the build
+  job's artifact — so there is no cibuildmp-resolved checkout to point at, and
+  the tarball (not a clone) is still what lets those jobs skip `make submodules`.
+
 ### Removed
 
 #### `usermod/patches/micropython/ports/webassembly/` — dead patches, never applied
