@@ -411,13 +411,21 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
+      # `identifier` here only to name the downloaded file: the build job
+      # uploads cibuildmp's own collected directory now, whose binary is
+      # identifier-qualified (`micropython-v1.28.0-win_amd64.exe`) rather
+      # than the port's bare `micropython.exe`. Same values as the build
+      # matrix above, deliberately spelled out rather than derived.
       matrix:
         include:
           - arch_label: x86
+            identifier: v1.28.0-win32
             runs_on: windows-latest
           - arch_label: x64
+            identifier: v1.28.0-win_amd64
             runs_on: windows-latest
           - arch_label: arm64
+            identifier: v1.28.0-win_arm64
             runs_on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
@@ -430,7 +438,7 @@ jobs:
           path: build
 
       - name: Run tests (windows-${{ matrix.arch_label }})
-        run: .\build\micropython.exe tests\test_bclibc.py
+        run: .\build\micropython-${{ matrix.identifier }}.exe tests\test_bclibc.py
 
   # ── ESP32: usermod firmware, build-only ─────────────────────────────────────
   # Build-only, and that is not a shortcut -- there is no esp32 emulator to
