@@ -78,7 +78,7 @@ jobs:
       - if: matrix.arch == 'x86'
         run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/cibuildmp@v0.4.1
+      - uses: ballistics-lab/cibuildmp@v0.4.2
         with:
           # mpy*-<tag>-<arch>: cibuildmp resolves the current .mpy ABI from
           # the checked-out MicroPython itself, so this stays correct even
