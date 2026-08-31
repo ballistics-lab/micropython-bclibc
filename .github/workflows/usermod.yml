@@ -110,7 +110,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (${{ matrix.identifier }})
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: ${{ matrix.identifier }}
 
@@ -119,14 +119,14 @@ jobs:
         # is a 32-bit ARM binary executing on an arm64 host with no emulator
         # in the picture, which is the whole point of this row's runner.
         run: |
-          BIN="$CIBMP_CACHE_PATH/micropython/$MPY_TAG/ports/unix/build-${{ matrix.identifier }}/micropython"
+          BIN="mpyhouse/${{ matrix.identifier }}/micropython-${{ matrix.identifier }}"
           file "$BIN"
           "$BIN" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-${{ matrix.arch_label }}
-          path: ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/unix/build-${{ matrix.identifier }}/micropython
+          path: mpyhouse/${{ matrix.identifier }}/
           if-no-files-found: error
 
   # ── unix: mipsel, cross-built and run under qemu-user ───────────────────────
@@ -172,7 +172,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-user-static
 
       - name: Build usermod (${{ env.MPY_TAG }}-manylinux_2_39_mipsel)
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: ${{ env.MPY_TAG }}-manylinux_2_39_mipsel
 
@@ -181,11 +181,14 @@ jobs:
         # intercepts the binary transparently, same as upstream's own recipe.
         # `file` first so the log records what actually ran.
         #
-        # cibuildmp's collected copy, not the build tree the rows above read
-        # -- an identifier-qualified name that does not depend on the port's
-        # own internal build-<identifier>/ layout, and the directory record
-        # 0070 made carry a binary's repaired lib/ sidecar where one is
-        # needed.
+        # cibuildmp's collected copy -- an identifier-qualified name that
+        # does not depend on the port's own internal build-<identifier>/
+        # layout, and the directory record 0070 made carry a binary's
+        # repaired lib/ sidecar where one is needed. Every other row here
+        # reads the same place now; this job was the first to, and the
+        # rest followed once cibuildmp record 0079 made the collected
+        # directory complete for every port.
+
         run: |
           BIN="mpyhouse/$MPY_TAG-manylinux_2_39_mipsel/micropython-$MPY_TAG-manylinux_2_39_mipsel"
           file "$BIN"
@@ -216,7 +219,7 @@ jobs:
           pip install pyserial
 
       - name: Build usermod (v1.28.0-qemu-MPS2_AN385)
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: v1.28.0-qemu-MPS2_AN385
 
@@ -225,7 +228,7 @@ jobs:
           MPY_DIR: ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}
         run: |
           python3 usermod/ci/run_qemu.py \
-            "$CIBMP_CACHE_PATH/micropython/$MPY_TAG/ports/qemu/build-v1.28.0-qemu-MPS2_AN385/firmware.elf" \
+            "mpyhouse/v1.28.0-qemu-MPS2_AN385/firmware-v1.28.0-qemu-MPS2_AN385.elf" \
             tests/
 
   # ── WebAssembly ───────────────────────────────────────────────────────────────
@@ -264,20 +267,18 @@ jobs:
         # port's own default `standard`, which is broken against modern
         # emsdk -- micropython/micropython#19380) -- same reasoning
         # o-murphy/micropython-wasm3's own webassembly job already recorded.
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: v1.28.0-wasm32
 
       - name: Run tests
         run: |
-          node "$CIBMP_CACHE_PATH/micropython/$MPY_TAG/ports/webassembly/build-v1.28.0-wasm32/micropython.mjs" tests/test_bclibc.py
+          node "mpyhouse/v1.28.0-wasm32/micropython-v1.28.0-wasm32.mjs" tests/test_bclibc.py
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-wasm
-          path: |
-            ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/webassembly/build-v1.28.0-wasm32/micropython.mjs
-            ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/webassembly/build-v1.28.0-wasm32/micropython.wasm
+          path: mpyhouse/v1.28.0-wasm32/
           if-no-files-found: error
 
   # ── RP2040: usermod firmware, tested via the rp2040py emulator ──────────────
@@ -290,7 +291,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (v1.28.0-rp2-RPI_PICO)
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: v1.28.0-rp2-RPI_PICO
 
@@ -324,7 +325,7 @@ jobs:
         run: |
           set -o pipefail
           timeout 120 rp2040py micropython \
-            --image "$CIBMP_CACHE_PATH/micropython/$MPY_TAG/ports/rp2/build-RPI_PICO/firmware.uf2" \
+            --image "mpyhouse/$MPY_TAG-rp2-RPI_PICO/firmware-$MPY_TAG-rp2-RPI_PICO.uf2" \
             tests/test_bclibc.py 2>&1 | tee test_bclibc.log
           status=$?
           if [ "$status" -ne 0 ]; then
@@ -339,7 +340,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-rp2040
-          path: ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/rp2/build-RPI_PICO/firmware.uf2
+          path: mpyhouse/${{ env.MPY_TAG }}-rp2-RPI_PICO/
           if-no-files-found: error
 
   # ── Windows, build (Linux, cross-compiled) ──────────────────────────────────
@@ -382,14 +383,14 @@ jobs:
       - uses: docker/setup-qemu-action@v4
 
       - name: Build usermod (${{ matrix.identifier }})
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: ${{ matrix.identifier }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-windows-${{ matrix.arch_label }}
-          path: ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/windows/build-${{ matrix.identifier }}/micropython.exe
+          path: mpyhouse/${{ matrix.identifier }}/
           if-no-files-found: error
 
   # ── Windows, run (real Windows hosts) ───────────────────────────────────────
@@ -451,14 +452,12 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (v1.28.0-esp32-ESP32_GENERIC)
-        uses: ballistics-lab/cibuildmp@v0.4.2
+        uses: ballistics-lab/cibuildmp@fix/companions
         with:
           build: v1.28.0-esp32-ESP32_GENERIC
 
       - uses: actions/upload-artifact@v7
         with:
           name: tiny-bclibc-usermod-esp32
-          path: |
-            ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/esp32/build-ESP32_GENERIC/micropython.bin
-            ${{ env.CIBMP_CACHE_PATH }}/micropython/${{ env.MPY_TAG }}/ports/esp32/build-ESP32_GENERIC/firmware.bin
+          path: mpyhouse/${{ env.MPY_TAG }}-esp32-ESP32_GENERIC/
           if-no-files-found: error
