@@ -380,8 +380,6 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: docker/setup-qemu-action@v4
-
       - name: Build usermod (${{ matrix.identifier }})
         uses: ballistics-lab/cibuildmp@v0.5.0
         with:
