@@ -360,6 +360,44 @@ jobs:
           path: mpyhouse/${{ env.MPY_TAG }}-rp2-${{ matrix.board }}/
           if-no-files-found: error
 
+  # ── RP2350: usermod firmware, build-only ────────────────────────────────────
+  # RPI_PICO2/RPI_PICO2_W are Cortex-M33 (RP2350), not RP2040 -- rp2040py is,
+  # per its own name and docs, an RP2040-only emulator (its Kaluma section
+  # even notes upstream Kaluma splits `pico`/`pico2-w` builds, which is the
+  # closest this tool gets to acknowledging RP2350 exists). No RP2350 CI
+  # emulator exists anywhere here, so same situation as build-esp32 below:
+  # this proves tiny_bclibc compiles and links into a real RPI_PICO2/
+  # RPI_PICO2_W firmware, not that it runs. The Pico SDK cibuildmp's rp2
+  # driver needs is vendored by the MicroPython release tarball itself
+  # (same as every other rp2 board), so no separate RP2350 toolchain pin is
+  # needed here.
+  build-rp2350:
+    name: build (rp2350-${{ matrix.board_label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board_label: pico2
+            board: RPI_PICO2
+          - board_label: pico2w
+            board: RPI_PICO2_W
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Build usermod (v1.28.0-rp2-${{ matrix.board }})
+        uses: ballistics-lab/cibuildmp@v0.6.1
+        with:
+          build: v1.28.0-rp2-${{ matrix.board }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tiny-bclibc-usermod-rp2350-${{ matrix.board_label }}
+          path: mpyhouse/${{ env.MPY_TAG }}-rp2-${{ matrix.board }}/
+          if-no-files-found: error
+
   # ── Windows, build (Linux, cross-compiled) ──────────────────────────────────
   # natmod categorically cannot reach this port: ports/windows/mpconfigport.h
   # sets MICROPY_EMIT_X64 (0), and py/persistentcode.c gates .mpy native-code

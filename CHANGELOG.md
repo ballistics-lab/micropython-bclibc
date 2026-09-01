@@ -20,6 +20,17 @@ a second job. `cibuildmp.toml`'s `build` list picks up
 `tests/test_bclibc.py` doesn't touch networking, so this is board-firmware
 build+boot coverage, not a second functional test of the library.
 
+#### `usermod.yml`, `cibuildmp.toml` — RP2350: RPI_PICO2 / RPI_PICO2_W, build-only
+
+A new `build-rp2350` matrix job builds `v1.28.0-rp2-RPI_PICO2` and
+`v1.28.0-rp2-RPI_PICO2_W` (Cortex-M33, not RP2040) and uploads the firmware
+as an artifact. Build-only, same as `build-esp32`: `rp2040py` emulates
+RP2040 only (its own name and docs say so explicitly), and no RP2350 CI
+emulator exists anywhere here, so there is nothing to run the firmware on
+in CI. cibuildmp's rp2 driver needs no separate RP2350 toolchain pin --
+the Pico SDK it builds against is vendored by the MicroPython release
+tarball itself, same as every other rp2 board.
+
 #### `usermod.yml` — Windows x86 / x64 / arm64, built and tested natively
 
 A new `build-test-windows` matrix job builds `ports/windows` with
