@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### `usermod.yml`, `cibuildmp.toml` — RP2040: RPI_PICO_W built and tested alongside RPI_PICO
+
+`build-test-rp2040` is now a two-row matrix (`RPI_PICO`, `RPI_PICO_W`) instead
+of a single hardcoded job: both boards are the same RP2040 silicon, and
+`rp2040py`'s own `--board pico_w` gives the emulator the onboard CYW43439 the
+`RPI_PICO_W` firmware expects, so exercising it costs one more matrix row, not
+a second job. `cibuildmp.toml`'s `build` list picks up
+`v1.28.0-rp2-RPI_PICO_W` next to the existing `RPI_PICO` entry.
+`tests/test_bclibc.py` doesn't touch networking, so this is board-firmware
+build+boot coverage, not a second functional test of the library.
+
 #### `usermod.yml` — Windows x86 / x64 / arm64, built and tested natively
 
 A new `build-test-windows` matrix job builds `ports/windows` with
@@ -34,6 +45,21 @@ separately confirmed to compile clean under the port's exact set
 (`-Wall -Wpointer-arith -Wdouble-promotion -Werror`, double precision).
 
 ### Changed
+
+#### `natmod.yml`, `usermod.yml`, `cibuildmp.toml` — `ballistics-lab/cibuildmp` bumped to v0.6.1; mipsel identifier renamed
+
+Every `uses: ballistics-lab/cibuildmp@` pin (both workflows) moves from
+`v0.5.0` to `v0.6.1`. cibuildmp v0.6.0 is a breaking release for the mipsel
+cell: Debian 13 "Trixie" dropped the mipsel port, so cibuildmp's mipsel
+Dockerfile now pins a Bootlin tarball (`mips32el--glibc--stable-2025.08-1`,
+gcc 14.3.0, glibc 2.41-70) instead of apt packages, and every identifier
+naming that cell is renamed accordingly — `manylinux_2_39_mipsel` →
+`manylinux_2_41_mipsel`, with no backward-compatible alias. `cibuildmp.toml`'s
+`build` list and `usermod.yml`'s `build-test-unix-mipsel` job (build input,
+binary path, and artifact path all embed the identifier) are updated to the
+new name. v0.6.1 itself is a fix-only release (natmod's `x86` multilib
+package pin, qemu's `POWERNV9` toolchain) that does not otherwise change
+identifiers this repo builds.
 
 #### `natmod/Makefile`, `usermod/micropython.mk`, `usermod/micropython.cmake` — always single precision, no more `MP_BCLIBC_PRECISION` knob
 
