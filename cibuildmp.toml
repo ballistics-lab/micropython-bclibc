@@ -21,17 +21,19 @@
 # from the old [natmod] table's own archs= list).
 #
 # usermod: unix x64/x86/aarch64/armhf/mipsel, qemu MPS2_AN385, wasm32,
-# windows all three arches, esp32 ESP32_GENERIC, rp2 RPI_PICO -- every
-# port/arch usermod.yml already builds.
+# windows all three arches, esp32 ESP32_GENERIC,
+# rp2 RPI_PICO/RPI_PICO_W/RPI_PICO2/RPI_PICO2_W -- every port/arch
+# usermod.yml already builds.
 build = """
 mpy*-v1.28.0-*
 v1.28.0-manylinux_2_28_x86_64 v1.28.0-manylinux_2_28_i686 v1.28.0-manylinux_2_28_aarch64
-v1.28.0-manylinux_2_31_armv7l v1.28.0-manylinux_2_39_mipsel
+v1.28.0-manylinux_2_31_armv7l v1.28.0-manylinux_2_41_mipsel
 v1.28.0-qemu-MPS2_AN385
 v1.28.0-wasm32
 v1.28.0-win32 v1.28.0-win_amd64 v1.28.0-win_arm64
 v1.28.0-esp32-ESP32_GENERIC
-v1.28.0-rp2-RPI_PICO
+v1.28.0-rp2-RPI_PICO v1.28.0-rp2-RPI_PICO_W
+v1.28.0-rp2-RPI_PICO2 v1.28.0-rp2-RPI_PICO2_W
 """
 
 module-dir = "natmod"
