@@ -387,7 +387,7 @@ jobs:
       # .py/.js before it, so handing it tiny_bclibc.mpy below died with "File must have one
       # of the following extensions: .py, .js" (exit 2) - a real failure seen on this branch
       # while it was still pinned to v0.2.4.
-      - uses: o-murphy/rp2040py@v0.3.2
+      - uses: o-murphy/rp2040py@v0.3.3
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
