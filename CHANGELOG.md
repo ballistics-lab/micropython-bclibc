@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### `natmod.yml`, `usermod.yml`, `cibuildmp.toml` — MicroPython v1.28.0 → v1.29.0
+
+Every `v1.28.0` build identifier, `mpy_tag` default and `MPY_TAG` fallback
+now targets `v1.29.0`; all of them (natmod's 10 ARCHes, every usermod
+port/board row) exist for `v1.29.0` in cibuildmp v0.7.3's
+`build-platforms.toml`. The esp32 row now gets ESP-IDF v5.5.2 (what
+`ports/esp32/README.md` recommends for v1.29.0), chosen per tag by cibuildmp.
+`dynruntime.mk` in v1.29.0 still has no `aarch64` ARCH, so natmod's aarch64
+gap is unchanged. README build instructions updated to match.
+
 ### Added
 
 #### `usermod.yml`, `cibuildmp.toml` — RP2040: RPI_PICO_W built and tested alongside RPI_PICO

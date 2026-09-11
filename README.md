@@ -91,13 +91,13 @@ pip install pyelftools ar      # required by mpy_ld.py
 
 ### MicroPython source
 
-The build system needs MicroPython v1.28 (for `dynruntime.mk`, `mpy-cross`,
-and `lib/libm`).  Pass `MPY_DIR` explicitly or place it at `../micropython-1.28.0`:
+The build system needs MicroPython v1.29 (for `dynruntime.mk`, `mpy-cross`,
+and `lib/libm`).  Pass `MPY_DIR` explicitly or place it at `../micropython-1.29.0`:
 
 ```bash
-wget https://github.com/micropython/micropython/releases/download/v1.28.0/micropython-1.28.0.tar.xz
-tar xf micropython-1.28.0.tar.xz
-export MPY_DIR=$(pwd)/micropython-1.28.0
+wget https://github.com/micropython/micropython/releases/download/v1.29.0/micropython-1.29.0.tar.xz
+tar xf micropython-1.29.0.tar.xz
+export MPY_DIR=$(pwd)/micropython-1.29.0
 ```
 
 ### Cross-compilers
@@ -151,7 +151,7 @@ Useful locally too, if you have any ARM box to hand:
 ```bash
 # a 32-bit ARM host interpreter; drop the -D for armv7emdp (double is the
 # unix port's own default)
-make -C /path/to/micropython-1.28.0/ports/unix VARIANT=standard \
+make -C /path/to/micropython-1.29.0/ports/unix VARIANT=standard \
     BUILD=/tmp/mpy-armhf CROSS_COMPILE=arm-linux-gnueabihf- \
     MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
     CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT
@@ -231,7 +231,7 @@ mip.install("https://github.com/ballistics-lab/micropython-bclibc/releases/downl
 ### Custom MPY_DIR
 
 ```bash
-make ARCH=armv6m MPY_DIR=/path/to/micropython-1.28.0
+make ARCH=armv6m MPY_DIR=/path/to/micropython-1.29.0
 ```
 
 ## Test (x64 / x86 host)
@@ -303,7 +303,7 @@ need a static binary for, and stops working on the minimal board you did. Drop t
 options below if you want the same plain build locally.
 
 ```bash
-cd /path/to/micropython-1.28.0
+cd /path/to/micropython-1.29.0
 
 # 1. build lib/libffi as a static .a (needs autoconf/libtool/libtool-bin/libltdl-dev
 #    installed — no manual libtoolize/autoreconf, the port's own ./autogen.sh handles it)
@@ -361,7 +361,7 @@ lost and so the next person does not have to re-derive it.
 ### RP2040 (CMake / pico-sdk)
 
 ```bash
-make -C /path/to/micropython-1.28.0/ports/rp2 BOARD=RPI_PICO \
+make -C /path/to/micropython-1.29.0/ports/rp2 BOARD=RPI_PICO \
     USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 # flash build-RPI_PICO/firmware.uf2 to the board, then from the REPL:
@@ -388,13 +388,13 @@ manifest/firmware build needed:
 
 ```bash
 # Prerequisites: cmake, gcc-arm-none-eabi
-make -C /path/to/micropython-1.28.0/ports/rp2 BOARD=RPI_PICO \
+make -C /path/to/micropython-1.29.0/ports/rp2 BOARD=RPI_PICO \
     USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
 pip install rp2040py[fs]   # or: uv tool install rp2040py[fs]
 rp2040py micropython \
-    --image /path/to/micropython-1.28.0/ports/rp2/build-RPI_PICO/firmware.uf2 \
+    --image /path/to/micropython-1.29.0/ports/rp2/build-RPI_PICO/firmware.uf2 \
     tests/test_bclibc.py
 ```
 
@@ -412,19 +412,19 @@ builds a `.mpy` against `dynruntime` and only borrows the compiler out of
 ESP-IDF, deliberately skipping IDF's own submodules. A usermod is compiled
 into the firmware, so it needs the full IDF.
 
-ESP-IDF v5.5.1 is what `ports/esp32/README.md` names as recommended for
-MicroPython v1.28.0 (5.3, 5.4, 5.4.1 and 5.4.2 are also supported). No precision
+ESP-IDF v5.5.2 is what `ports/esp32/README.md` names as recommended for
+MicroPython v1.29.0 (5.3, 5.4, 5.4.1, 5.4.2, 5.5.1 and 5.5.4 are also supported). No precision
 flag to pass — `usermod/micropython.cmake` has no `MP_BCLIBC_PRECISION` knob at all
 any more, single precision unconditionally.
 
 ```bash
-git clone --depth 1 --recursive --branch v5.5.1 \
+git clone --depth 1 --recursive --branch v5.5.2 \
     https://github.com/espressif/esp-idf.git
 ./esp-idf/install.sh esp32
 source esp-idf/export.sh
 
-make -C /path/to/micropython-1.28.0/mpy-cross
-make -C /path/to/micropython-1.28.0/ports/esp32 BOARD=ESP32_GENERIC \
+make -C /path/to/micropython-1.29.0/mpy-cross
+make -C /path/to/micropython-1.29.0/ports/esp32 BOARD=ESP32_GENERIC \
     USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 ```
@@ -444,12 +444,12 @@ No FPU on Cortex-M3 — not that it matters, since single precision is unconditi
 ```bash
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
 
-make -C /path/to/micropython-1.28.0/ports/qemu BOARD=MPS2_AN385 \
+make -C /path/to/micropython-1.29.0/ports/qemu BOARD=MPS2_AN385 \
     USER_C_MODULES=/path/to/micropython-bclibc \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
 python3 /path/to/micropython-bclibc/usermod/ci/run_qemu.py \
-    /path/to/micropython-1.28.0/ports/qemu/build-MPS2_AN385/firmware.elf \
+    /path/to/micropython-1.29.0/ports/qemu/build-MPS2_AN385/firmware.elf \
     /path/to/micropython-bclibc/tests/
 ```
 
@@ -489,7 +489,7 @@ below overrides `pyscript`'s own (large, micropython-lib-heavy) default manifest
 so nothing extra gets pulled in from it:
 
 ```bash
-make -C /path/to/micropython-1.28.0/ports/webassembly VARIANT=pyscript \
+make -C /path/to/micropython-1.29.0/ports/webassembly VARIANT=pyscript \
     USER_C_MODULES=/path/to/micropython-bclibc \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 
@@ -510,8 +510,8 @@ every other target. CI builds and runs all three natively — x86/x64 on an x64 
 
 ```bash
 # In an MSYS2 shell (MINGW64 here), with: make git python3 mingw-w64-x86_64-gcc
-make -C /path/to/micropython-1.28.0/mpy-cross
-make -C /path/to/micropython-1.28.0/ports/windows \
+make -C /path/to/micropython-1.29.0/mpy-cross
+make -C /path/to/micropython-1.29.0/ports/windows \
     USER_C_MODULES=/path/to/micropython-bclibc \
     FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
 

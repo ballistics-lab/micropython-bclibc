@@ -21,18 +21,18 @@ on:
   workflow_dispatch:
     inputs:
       mpy_tag:
-        description: "MicroPython release tag (e.g. v1.28.0)"
+        description: "MicroPython release tag (e.g. v1.29.0)"
         required: false
-        default: "v1.28.0"
+        default: "v1.29.0"
   # Lets release.yml build every natmod arch by calling this workflow
   # instead of keeping a second copy of the matrix below in sync by hand.
   workflow_call:
     inputs:
       mpy_tag:
-        description: "MicroPython release tag (e.g. v1.28.0)"
+        description: "MicroPython release tag (e.g. v1.29.0)"
         required: false
         type: string
-        default: "v1.28.0"
+        default: "v1.29.0"
 
 concurrency:
   # Literal "natmod-" prefix, not ${{ github.workflow }} -- when this workflow
@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MPY_TAG: ${{ inputs.mpy_tag || github.event.inputs.mpy_tag || 'v1.28.0' }}
+  MPY_TAG: ${{ inputs.mpy_tag || github.event.inputs.mpy_tag || 'v1.29.0' }}
 
 jobs:
   # ── Build every arch, always single-precision now (no more per-ARCH
@@ -63,7 +63,19 @@ jobs:
         # then a pinned download (cibuildmp's own docs/BACKLOG.md D3/M2) --
         # so this is still just the flat list of dynruntime.mk ARCHes to
         # build.
-        arch: [x64, x86, armv6m, armv7m, armv7emsp, armv7emdp, rv32imc, rv64imc, xtensa, xtensawin]
+        arch:
+          [
+            x64,
+            x86,
+            armv6m,
+            armv7m,
+            armv7emsp,
+            armv7emdp,
+            rv32imc,
+            rv64imc,
+            xtensa,
+            xtensawin,
+          ]
 
     steps:
       - uses: actions/checkout@v7
@@ -78,7 +90,7 @@ jobs:
       - if: matrix.arch == 'x86'
         run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/cibuildmp@v0.7.2
+      - uses: ballistics-lab/cibuildmp@v0.7.3
         with:
           # mpy*-<tag>-<arch>: cibuildmp resolves the current .mpy ABI from
           # the checked-out MicroPython itself, so this stays correct even
@@ -387,7 +399,7 @@ jobs:
       # .py/.js before it, so handing it tiny_bclibc.mpy below died with "File must have one
       # of the following extensions: .py, .js" (exit 2) - a real failure seen on this branch
       # while it was still pinned to v0.2.4.
-      - uses: o-murphy/rp2040py@v0.3.4
+      - uses: o-murphy/rp2040py@v0.3.5
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
@@ -431,7 +443,7 @@ jobs:
   # execution test for these in this workflow (matches a7p's own natmod job,
   # which also only build-checks these ARCHes, not runs them).
 
-  # aarch64: dynruntime.mk in MicroPython ≤ v1.28 explicitly does not support
+  # aarch64: dynruntime.mk in MicroPython ≤ v1.29 explicitly does not support
   # aarch64 as a native module link target. No job for it here until
   # upstream adds support -- it's covered today via usermod.yml instead
   # (usermod has no such ARCH restriction: it compiles straight into the
