@@ -21,18 +21,18 @@ on:
   workflow_dispatch:
     inputs:
       mpy_tag:
-        description: "MicroPython release tag (e.g. v1.28.0)"
+        description: "MicroPython release tag (e.g. v1.29.0)"
         required: false
-        default: "v1.28.0"
+        default: "v1.29.0"
   # Lets release.yml build every natmod arch by calling this workflow
   # instead of keeping a second copy of the matrix below in sync by hand.
   workflow_call:
     inputs:
       mpy_tag:
-        description: "MicroPython release tag (e.g. v1.28.0)"
+        description: "MicroPython release tag (e.g. v1.29.0)"
         required: false
         type: string
-        default: "v1.28.0"
+        default: "v1.29.0"
 
 concurrency:
   # Literal "natmod-" prefix, not ${{ github.workflow }} -- when this workflow
@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MPY_TAG: ${{ inputs.mpy_tag || github.event.inputs.mpy_tag || 'v1.28.0' }}
+  MPY_TAG: ${{ inputs.mpy_tag || github.event.inputs.mpy_tag || 'v1.29.0' }}
 
 jobs:
   # ── Build every arch, always single-precision now (no more per-ARCH
@@ -63,7 +63,19 @@ jobs:
         # then a pinned download (cibuildmp's own docs/BACKLOG.md D3/M2) --
         # so this is still just the flat list of dynruntime.mk ARCHes to
         # build.
-        arch: [x64, x86, armv6m, armv7m, armv7emsp, armv7emdp, rv32imc, rv64imc, xtensa, xtensawin]
+        arch:
+          [
+            x64,
+            x86,
+            armv6m,
+            armv7m,
+            armv7emsp,
+            armv7emdp,
+            rv32imc,
+            rv64imc,
+            xtensa,
+            xtensawin,
+          ]
 
     steps:
       - uses: actions/checkout@v7
@@ -78,7 +90,7 @@ jobs:
       - if: matrix.arch == 'x86'
         run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/cibuildmp@v0.7.2
+      - uses: ballistics-lab/cibuildmp@v0.7.3
         with:
           # mpy*-<tag>-<arch>: cibuildmp resolves the current .mpy ABI from
           # the checked-out MicroPython itself, so this stays correct even
@@ -94,8 +106,8 @@ jobs:
 
   # ── Test built artifacts (x64 native, x86 32-bit, armv7m via QEMU) ────────
   # One matrix job instead of three near-identical ones -- each leg only
-  # differs in toolchain/build-deps and how the interpreter gets built
-  # (plain unix, 32-bit unix, or QEMU firmware), same `if: matrix.X` style
+  # differs in how the interpreter gets built (a stock cibuildmp manylinux
+  # unix host, or QEMU firmware from the release tarball), same `if: matrix.X` style
   # the build job above already uses. Mirrors a7p's own natmod job, which
   # folds its (single, x64-only) test step into the build matrix the same
   # way rather than a separate job.
@@ -111,10 +123,12 @@ jobs:
           - arch: x64
             build_dir: x64
             kind: unix
+            manylinux: manylinux_2_28_x86_64
             label: x64 / micropython
           - arch: x86
             build_dir: x86
-            kind: unix32
+            kind: unix
+            manylinux: manylinux_2_28_i686
             label: x86 / micropython 32-bit
           - arch: armv7m
             build_dir: armv7m
@@ -125,17 +139,43 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Build stock micropython unix/standard (${{ env.MPY_TAG }}-${{ matrix.manylinux }})
+        if: matrix.kind == 'unix'
+        # Matches the natmod .mpy ABI by building from the same MPY_TAG, the
+        # same stock route o-murphy/micropython-wasm3's natmod `test` job
+        # takes for its x64/x86 hosts, and the same identifiers usermod.yml
+        # already builds and runs on ubuntu-latest, i686 included.
+        #
+        # Not a plain `make -C ports/unix` any more because MicroPython
+        # v1.29.0 retired MICROPY_FORCE_32BIT (upstream 80705342e, see
+        # ports/unix/README.md "Notes about x86 (i686) support"): x86 is now
+        # a cross-compilation target, and the old flag only prints a warning
+        # and builds a 64-bit host -- which then rejects the x86 .mpy with
+        # "ValueError: incompatible .mpy arch", a real failure of this job on
+        # the v1.29.0 bump. cibuildmp's manylinux_2_28_i686 image is a real
+        # i686 toolchain with its own libffi, so no multilib/libffi:i386
+        # juggling on the runner either.
+        #
+        # package-dir natmod/ci, not ".": the top-level cibuildmp.toml sets
+        # user-c-modules, and cibuildmp rejects that together with
+        # no-user-c-modules outright -- same as test-arm-linux below. Output
+        # lands under natmod/ci/mpyhouse, outside natmod/build/, which the
+        # artifact download below unpacks into.
+        uses: ballistics-lab/cibuildmp@v0.7.3
+        env:
+          CIBMP_NO_USER_C_MODULES: "1"
+        with:
+          package-dir: natmod/ci
+          build: ${{ env.MPY_TAG }}-${{ matrix.manylinux }}
+
       - name: Fetch MicroPython ${{ env.MPY_TAG }}
+        if: matrix.kind == 'qemu'
         # A plain tarball fetch, not cibuildmp's own `fetch-micropython`
         # composite action. That whole `.github/actions/*` layer never
         # invokes the cibuildmp CLI at all -- it is a permanent legacy
         # fallback, not a second supported way to use the project
         # (cibuildmp record 0073) -- and what this one did is the five
         # lines below, verbatim.
-        #
-        # No cibuildmp step runs in this job at all (it consumes the build
-        # job's artifact), so there is no cibuildmp-resolved checkout under
-        # $CIBMP_CACHE_PATH to point at the way usermod.yml's own jobs do.
         #
         # The release tarball rather than a git clone, deliberately: it
         # already carries every port's vendored lib/ sources, which is why
@@ -147,22 +187,6 @@ jobs:
           tar xf mpy.tar.xz && rm mpy.tar.xz
           echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-$VER" >> "$GITHUB_ENV"
 
-      - name: Install micropython unix build deps
-        if: matrix.kind == 'unix'
-        # apt-get update first -- see the build job's "Install cross-compiler"
-        # step for why (stale baked-in runner package index, confirmed by
-        # repeated real CI 404s, not a one-off mirror blip).
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y libffi-dev pkg-config
-
-      - name: Install 32-bit build deps
-        if: matrix.kind == 'unix32'
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -q
-          sudo apt-get install -y gcc-multilib libffi-dev:i386 pkg-config
-
       - name: Install QEMU toolchain
         if: matrix.kind == 'qemu'
         # apt-get update first -- see the build job's "Install cross-compiler"
@@ -172,14 +196,6 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-arm-none-eabi qemu-system-arm
           pip install pyelftools ar pyserial
-
-      - name: Build micropython unix/standard (matches natmod .mpy version)
-        if: matrix.kind == 'unix'
-        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard
-
-      - name: Build micropython unix/standard 32-bit
-        if: matrix.kind == 'unix32'
-        run: make -C "$MPY_DIR/ports/unix" VARIANT=standard MICROPY_FORCE_32BIT=1
 
       - name: Build mpy-cross
         if: matrix.kind == 'qemu'
@@ -198,8 +214,15 @@ jobs:
         run: ln -sf ../natmod/build/${{ matrix.build_dir }}/tiny_bclibc.mpy tests/tiny_bclibc.mpy
 
       - name: Run tests
-        if: matrix.kind != 'qemu'
-        run: "$MPY_DIR/ports/unix/build-standard/micropython tests/test_bclibc.py"
+        if: matrix.kind == 'unix'
+        # `file` first so the log shows the host's real word size -- the
+        # check that would have caught MICROPY_FORCE_32BIT silently building
+        # a 64-bit "x86" host.
+        run: |
+          ID="$MPY_TAG-${{ matrix.manylinux }}"
+          HOST="$GITHUB_WORKSPACE/natmod/ci/mpyhouse/$ID/micropython-$ID"
+          file "$HOST"
+          "$HOST" tests/test_bclibc.py
 
       - name: Run tests via QEMU
         if: matrix.kind == 'qemu'
@@ -263,65 +286,57 @@ jobs:
             # #ifndef, so a -D on the command line wins. Verified on the
             # resulting binary rather than assumed: `print(1/3)` gives
             # 0.33333334, not 0.3333333333333333.
-            host_float: "-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT"
+            host_make_args: "CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT"
           - arch: armv7emdp
             build_dir: armv7emdp
             # armv7emdp is MICROPY_FLOAT_IMPL=double, which is already the
             # unix port's own default -- nothing to override.
-            host_float: ""
+            host_make_args: ""
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - name: Fetch MicroPython ${{ env.MPY_TAG }}
-        # Same plain tarball fetch as the `test` job above, for the same
-        # reasons -- see that step's own comment.
-        run: |
-          VER="${MPY_TAG#v}"
-          wget -q "https://github.com/micropython/micropython/releases/download/$MPY_TAG/micropython-$VER.tar.xz" \
-            -O mpy.tar.xz
-          tar xf mpy.tar.xz && rm mpy.tar.xz
-          echo "MPY_DIR=$GITHUB_WORKSPACE/micropython-$VER" >> "$GITHUB_ENV"
-
-      - name: Install the armhf cross toolchain
-        # apt-get update first -- see the build job's "Install cross-compiler"
-        # step for why.
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends \
-            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-
-      - name: Build mpy-cross
-        # Native arm64 host tool. Built explicitly so py/mkenv.mk's auto-build
-        # rule never fires mid-port-build, same as every other job here.
-        run: make -C "$MPY_DIR/mpy-cross" -j"$(nproc)"
-
-      - name: Build a 32-bit ARM micropython host
-        # MICROPY_PY_FFI=0/MICROPY_PY_BTREE=0: both want target libraries the
-        # cross toolchain does not ship (libffi headers for armhf in
-        # particular), and neither is reachable from tests/test_bclibc.py --
-        # this host exists only to load a natmod .mpy and run that one suite.
-        # usermod.yml's own armhf row is where a full-featured static armhf
-        # build is actually exercised.
+      - name: Build stock micropython unix/standard (${{ env.MPY_TAG }}-manylinux_2_31_armv7l)
+        # cibuildmp's own armv7l cell, the same identifier usermod.yml's armhf
+        # row already builds and runs on this runner, and the same stock route
+        # o-murphy/micropython-wasm3's natmod `test` job takes for its x64/x86
+        # hosts: built inside cibuildmp's pinned manylinux_2_31_armv7l image
+        # rather than with whatever cross gcc the runner's apt serves that day.
+        # That image carries armhf libffi, so the old MICROPY_PY_FFI=0 /
+        # MICROPY_PY_BTREE=0 workarounds for a bare cross toolchain are gone.
         #
-        # LDFLAGS_EXTRA=-static is load-bearing, not a nicety. The runner is
-        # arm64: its CPU executes AArch32, but its filesystem has no armhf
-        # glibc and no /lib/ld-linux-armhf.so.3, so a dynamically linked
-        # armhf binary dies with "cannot execute: required file not found"
-        # (exit 127) -- a real failure of the first version of this job. A
-        # static link has no interpreter to find. Same reason usermod.yml's
-        # armhf row links static.
+        # package-dir is natmod/ci, not ".", on purpose: the top-level
+        # cibuildmp.toml sets user-c-modules, and cibuildmp rejects that
+        # together with no-user-c-modules outright (mutually exclusive, not a
+        # precedence rule). natmod/ci has no config of its own, so the env
+        # var is the only thing selecting the stock path, and `build` names
+        # the one target. Output lands under natmod/ci/mpyhouse, outside
+        # natmod/build/, which the artifact download below unpacks into.
         #
-        # BUILD stays outside natmod/build/, which the artifact download below
-        # unpacks into.
-        run: |
-          make -C "$MPY_DIR/ports/unix" VARIANT=standard \
-            BUILD="$GITHUB_WORKSPACE/mpy-host-${{ matrix.arch }}" \
-            CROSS_COMPILE=arm-linux-gnueabihf- \
-            MICROPY_PY_FFI=0 MICROPY_PY_BTREE=0 \
-            CFLAGS_EXTRA="${{ matrix.host_float }}" \
-            LDFLAGS_EXTRA="-static" -j"$(nproc)"
+        # Which is also why LDFLAGS_EXTRA=-static has to be restated here:
+        # the top-level cibuildmp.toml's [override] for this identifier is
+        # not read from natmod/ci. It is load-bearing, not a nicety. The
+        # runner is arm64: its CPU executes AArch32, but its filesystem has
+        # no armhf glibc and no /lib/ld-linux-armhf.so.3, so a dynamically
+        # linked armhf binary dies with "cannot execute: required file not
+        # found" (exit 127) -- a real failure of the first version of this
+        # job. A static link has no interpreter to find.
+        #
+        # host_make_args' CFLAGS_EXTRA cannot clobber one of cibuildmp's own:
+        # it passes none for this (tag, arch) cell. Nor can it reach
+        # mpy-cross, which cibuildmp builds separately with only its own
+        # flags and hands to the port via MICROPY_MPYCROSS -- so the
+        # "MICROPY_FLOAT_IMPL redefined" -Werror collision with
+        # mpy-cross/mpconfigport.h that a CFLAGS_EXTRA leaking into an
+        # auto-built mpy-cross causes cannot happen here.
+        uses: ballistics-lab/cibuildmp@v0.7.3
+        env:
+          CIBMP_NO_USER_C_MODULES: "1"
+          CIBMP_EXTRA_MAKE_ARGS: "LDFLAGS_EXTRA=-static ${{ matrix.host_make_args }}"
+        with:
+          package-dir: natmod/ci
+          build: ${{ env.MPY_TAG }}-manylinux_2_31_armv7l
 
       - uses: actions/download-artifact@v8
         with:
@@ -337,7 +352,8 @@ jobs:
         # 32-bit ARM binary, the arch it advertises to the .mpy loader, and
         # which float width it was built with.
         run: |
-          HOST="$GITHUB_WORKSPACE/mpy-host-${{ matrix.arch }}/micropython"
+          ID="$MPY_TAG-manylinux_2_31_armv7l"
+          HOST="$GITHUB_WORKSPACE/natmod/ci/mpyhouse/$ID/micropython-$ID"
           file "$HOST"
           "$HOST" -c "import sys; print('MPY_FEATURE_ARCH', sys.implementation._mpy >> 10)"
           "$HOST" -c "print('float width probe', 1/3)"
@@ -387,7 +403,7 @@ jobs:
       # .py/.js before it, so handing it tiny_bclibc.mpy below died with "File must have one
       # of the following extensions: .py, .js" (exit 2) - a real failure seen on this branch
       # while it was still pinned to v0.2.4.
-      - uses: o-murphy/rp2040py@v0.3.4
+      - uses: o-murphy/rp2040py@v0.3.5
 
       - name: Build littlefs image (natmod .mpy only - tests go over raw-REPL)
         run: |
@@ -431,7 +447,7 @@ jobs:
   # execution test for these in this workflow (matches a7p's own natmod job,
   # which also only build-checks these ARCHes, not runs them).
 
-  # aarch64: dynruntime.mk in MicroPython ≤ v1.28 explicitly does not support
+  # aarch64: dynruntime.mk in MicroPython ≤ v1.29 explicitly does not support
   # aarch64 as a native module link target. No job for it here until
   # upstream adds support -- it's covered today via usermod.yml instead
   # (usermod has no such ARCH restriction: it compiles straight into the

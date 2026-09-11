@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### `natmod.yml`, `usermod.yml`, `cibuildmp.toml` — MicroPython v1.28.0 → v1.29.0
+
+Every `v1.28.0` build identifier, `mpy_tag` default and `MPY_TAG` fallback
+now targets `v1.29.0`; all of them (natmod's 10 ARCHes, every usermod
+port/board row) exist for `v1.29.0` in cibuildmp v0.7.3's
+`build-platforms.toml`. The esp32 row now gets ESP-IDF v5.5.2 (what
+`ports/esp32/README.md` recommends for v1.29.0), chosen per tag by cibuildmp.
+`dynruntime.mk` in v1.29.0 still has no `aarch64` ARCH, so natmod's aarch64
+gap is unchanged. README build instructions updated to match.
+
+#### `natmod.yml` — `test-arm-linux` builds its armhf host through cibuildmp
+
+The tarball fetch, apt `gcc-arm-linux-gnueabihf` cross toolchain, explicit
+mpy-cross and hand-rolled `make ports/unix` steps are replaced by one stock
+cibuildmp build of `$MPY_TAG-manylinux_2_31_armv7l`
+(`CIBMP_NO_USER_C_MODULES=1`, `package-dir: natmod/ci`) — the same route
+o-murphy/micropython-wasm3's natmod `test` job takes for its x64/x86 hosts.
+`LDFLAGS_EXTRA=-static` and the armv7emsp row's
+`CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT` ride in via
+`CIBMP_EXTRA_MAKE_ARGS`; `MICROPY_PY_FFI=0`/`MICROPY_PY_BTREE=0` are dropped,
+since the manylinux image carries armhf libffi.
+
+#### `natmod.yml` — `test` job's x64/x86 hosts built through cibuildmp
+
+MicroPython v1.29.0 retired `MICROPY_FORCE_32BIT` (upstream `80705342e`): x86
+is a cross-compilation target now, and the flag only warns and builds a 64-bit
+host. The x86 leg's `make ... MICROPY_FORCE_32BIT=1` therefore produced an x64
+interpreter that rejected the x86 `.mpy` with `ValueError: incompatible .mpy
+arch`. Both unix legs now build a stock `$MPY_TAG-manylinux_2_28_x86_64` /
+`$MPY_TAG-manylinux_2_28_i686` host through cibuildmp
+(`CIBMP_NO_USER_C_MODULES=1`, `package-dir: natmod/ci`), as
+o-murphy/micropython-wasm3 does, replacing the tarball fetch, apt
+`libffi-dev`/`gcc-multilib`/`libffi-dev:i386` and plain `make` steps; the test
+step runs `file` on the host first. The QEMU leg keeps its tarball fetch.
+README's x86 cross-compiler is now `gcc-i686-linux-gnu`, which v1.29.0's
+`dynruntime.mk` expects (`CROSS = i686-linux-gnu-`).
+
 ### Added
 
 #### `usermod.yml`, `cibuildmp.toml` — RP2040: RPI_PICO_W built and tested alongside RPI_PICO
