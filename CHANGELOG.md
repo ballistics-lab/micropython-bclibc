@@ -31,6 +31,21 @@ o-murphy/micropython-wasm3's natmod `test` job takes for its x64/x86 hosts.
 `CIBMP_EXTRA_MAKE_ARGS`; `MICROPY_PY_FFI=0`/`MICROPY_PY_BTREE=0` are dropped,
 since the manylinux image carries armhf libffi.
 
+#### `natmod.yml` — `test` job's x64/x86 hosts built through cibuildmp
+
+MicroPython v1.29.0 retired `MICROPY_FORCE_32BIT` (upstream `80705342e`): x86
+is a cross-compilation target now, and the flag only warns and builds a 64-bit
+host. The x86 leg's `make ... MICROPY_FORCE_32BIT=1` therefore produced an x64
+interpreter that rejected the x86 `.mpy` with `ValueError: incompatible .mpy
+arch`. Both unix legs now build a stock `$MPY_TAG-manylinux_2_28_x86_64` /
+`$MPY_TAG-manylinux_2_28_i686` host through cibuildmp
+(`CIBMP_NO_USER_C_MODULES=1`, `package-dir: natmod/ci`), as
+o-murphy/micropython-wasm3 does, replacing the tarball fetch, apt
+`libffi-dev`/`gcc-multilib`/`libffi-dev:i386` and plain `make` steps; the test
+step runs `file` on the host first. The QEMU leg keeps its tarball fetch.
+README's x86 cross-compiler is now `gcc-i686-linux-gnu`, which v1.29.0's
+`dynruntime.mk` expects (`CROSS = i686-linux-gnu-`).
+
 ### Added
 
 #### `usermod.yml`, `cibuildmp.toml` — RP2040: RPI_PICO_W built and tested alongside RPI_PICO

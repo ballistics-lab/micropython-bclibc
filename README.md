@@ -105,14 +105,14 @@ export MPY_DIR=$(pwd)/micropython-1.29.0
 | Target                     | Package (Debian/Ubuntu)                                |
 | -------------------------- | ------------------------------------------------------ |
 | x64                        | `gcc` (host compiler, already installed)               |
-| x86                        | `gcc-multilib`                                         |
+| x86                        | `gcc-i686-linux-gnu` (MicroPython ≥ v1.29.0)           |
 | RP2040 / Cortex-M          | `gcc-arm-none-eabi libnewlib-arm-none-eabi`            |
 | ESP32-C3/C6 (RISC-V 32/64) | `gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf` |
 | ESP32 / ESP32-S3           | `xtensa-esp32{s3}-elf-gcc` (from ESP-IDF)              |
 
 ```bash
 sudo apt-get install gcc-arm-none-eabi libnewlib-arm-none-eabi \
-                     gcc-multilib gcc-riscv64-unknown-elf
+                     gcc-i686-linux-gnu gcc-riscv64-unknown-elf
 ```
 
 ## Build
