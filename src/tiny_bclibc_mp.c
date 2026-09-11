@@ -422,7 +422,7 @@ static mp_obj_t mp_bclibc_integrate_stream(size_t n_args, const mp_obj_t *args)
 
     StreamCbCtx cb_ctx = {args[3]};
     int32_t total = 0, reason = 0;
-    rc = tiny_bclibc_integrate_stream(&props, &req, mp_stream_cb, &cb_ctx, &total, &reason);
+    rc = tiny_bclibc_integrate_stream(&props, &req, mp_stream_cb, &cb_ctx, &total, &reason, NULL);
 
     if (rc != TINY_BCLIBC_OK)
         _RAISE_BCLIBC_ERROR(_tiny_bclibc_err_str(rc));
