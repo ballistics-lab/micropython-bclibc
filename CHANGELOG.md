@@ -19,6 +19,18 @@ port/board row) exist for `v1.29.0` in cibuildmp v0.7.3's
 `dynruntime.mk` in v1.29.0 still has no `aarch64` ARCH, so natmod's aarch64
 gap is unchanged. README build instructions updated to match.
 
+#### `natmod.yml` — `test-arm-linux` builds its armhf host through cibuildmp
+
+The tarball fetch, apt `gcc-arm-linux-gnueabihf` cross toolchain, explicit
+mpy-cross and hand-rolled `make ports/unix` steps are replaced by one stock
+cibuildmp build of `$MPY_TAG-manylinux_2_31_armv7l`
+(`CIBMP_NO_USER_C_MODULES=1`, `package-dir: natmod/ci`) — the same route
+o-murphy/micropython-wasm3's natmod `test` job takes for its x64/x86 hosts.
+`LDFLAGS_EXTRA=-static` and the armv7emsp row's
+`CFLAGS_EXTRA=-DMICROPY_FLOAT_IMPL=MICROPY_FLOAT_IMPL_FLOAT` ride in via
+`CIBMP_EXTRA_MAKE_ARGS`; `MICROPY_PY_FFI=0`/`MICROPY_PY_BTREE=0` are dropped,
+since the manylinux image carries armhf libffi.
+
 ### Added
 
 #### `usermod.yml`, `cibuildmp.toml` — RP2040: RPI_PICO_W built and tested alongside RPI_PICO
