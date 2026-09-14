@@ -55,7 +55,8 @@ as a library from Python application code.
           **executed for real** against it — all tests pass, including
           all 6 new `MultiBC` cases. The interpolation test's hand-computed
           expected value (`0.3803 / 1.2 = 0.31692`) matched the actual
-          runtime output exactly; G1/G7 counts matched (79/82).
+          runtime output exactly; G1/G7 counts matched (79/84 — see the
+          G7 table correction below).
     - **RP2040 (armv6m) / RP2350 (armv7emsp):** natmod compiles and links
           into a valid `.mpy` (confirmed via real cross-builds, not just
           reasoning) — see the size numbers below — but **not executed**
@@ -86,18 +87,18 @@ as a library from Python application code.
       returns only the written count. **Must work against both reference
       tables, selected by `drag_type`** — `DRAG_G1` uses
       `g1_mach`/`g1_cd`/`G1_N` (79 points), `DRAG_G7` uses
-      `g7_mach`/`g7_cd`/`G7_N` (82 points), both from `src/drag_tables.h`.
-      The two tables are different lengths, so the returned `count` varies
-      by `drag_type` — callers must use it, not assume either table's
-      size; both fit comfortably under the shared `_MAX_DRAG_PTS=128`
-      output-buffer cap regardless. Algorithm: sort BC points by Mach,
-      linear-interpolate the BC ratio at each reference-table Mach value
-      (clamped at the ends, matching py-ballisticcalc's
-      `linear_interpolation`), divide the reference Cd by that ratio.
-      `bc` is always fed into `Shot()` as `1.0` for the resulting curve —
-      it cancels out of `drag_by_mach`'s `Cd(mach) * K / bc` algebraically,
-      so `sectional_density`/weight/diameter do not need to be ported for
-      this.
+      `g7_mach`/`g7_cd`/`G7_N` (84 points — see the table correction
+      below), both from `src/drag_tables.h`. The two tables are different
+      lengths, so the returned `count` varies by `drag_type` — callers
+      must use it, not assume either table's size; both fit comfortably
+      under the shared `_MAX_DRAG_PTS=128` output-buffer cap regardless.
+      Algorithm: sort BC points by Mach, linear-interpolate the BC ratio
+      at each reference-table Mach value (clamped at the ends, matching
+      py-ballisticcalc's `linear_interpolation`), divide the reference Cd
+      by that ratio. `bc` is always fed into `Shot()` as `1.0` for the
+      resulting curve — it cancels out of `drag_by_mach`'s
+      `Cd(mach) * K / bc` algebraically, so `sectional_density`/weight/
+      diameter do not need to be ported for this.
 - [x] Register in both the natmod (`mpy_init`) and usermod
       (`bclibc_module_globals_table`) code paths, matching the existing
       functions' pattern.
@@ -113,21 +114,31 @@ as a library from Python application code.
       loop. Keep the existing per-element path for the case where a
       caller hand-builds a plain Python sequence of floats — don't break
       that usage.
-- [ ] **Not actually done as originally worded — real gap, not just an
-      unchecked box.** This item asked to test against py-ballisticcalc's
-      `DragModelMultiBC` itself. What's actually in `tests/test_bclibc.py`
-      and was executed successfully is a *hand-verified* substitute: an
-      identity case (single BC point ⇒ constant divisor ⇒ output must
-      equal the reference table exactly) and an interpolation case with a
-      by-hand-computed expected value (`0.3803 / 1.2 = 0.31692`, confirmed
-      against real runtime output) — covering both `DRAG_G1` and
-      `DRAG_G7`. That's real verification of the interpolation math, but
-      it is **not** a cross-implementation diff against py-ballisticcalc's
-      actual `DragModelMultiBC()` execution, which is what this item
-      specifically asked for. Still open: run py-ballisticcalc for a
-      real multi-BC profile and diff its output curve against
-      `MultiBC()`'s, the way `tiny_bclibc/tests/test_identity.cpp` does
-      for the rest of the engine.
+- [x] **Done — real cross-implementation check against py-ballisticcalc's
+      actual `DragModelMultiBC()`, not just the hand-verified substitute.**
+      Ran py-ballisticcalc itself against a real multi-point BC profile
+      (`examples/hor_375ct_390_atip.py`, 375 CheyTac, multiple BC/Mach
+      breakpoints) to get `DragModelMultiBC()`'s real output curve, then
+      diffed it point-by-point against `build_multibc()`'s output for the
+      same input, mirroring what `tiny_bclibc/tests/test_identity.cpp`
+      does for the rest of the engine.
+      **This caught a genuine, previously-unknown bug**, not just
+      validated the interpolation math: the built-in G7 table in
+      `src/drag_tables.h` was missing two supersonic-tail breakpoints
+      (Mach 2.85, 2.95 — 82 points instead of 84) and had drifted CD
+      values for every point from Mach 2.80 through 5.00, up to +0.0065
+      absolute (~3.7% relative error at Mach=4.60) versus
+      `py_ballisticcalc.drag_tables.TableG7`. This affected **every**
+      G7-based calculation in the library, not just multi-BC — it was
+      only surfaced here because multi-BC output is sensitive to the
+      full table shape at high Mach. G1 was independently verified exact
+      against `TableG1` (79/79 points, zero diff) and was left unchanged.
+      Fixed `src/drag_tables.h`'s G7 tail wholesale from
+      `TableG7` (commit `45cef094564f063f78ff2ea8d9b925ab86c5c5b9`) and
+      updated `tests/test_bclibc.py`'s own stale hardcoded G7 arrays to
+      match. Reran both checks after the fix: **exact match** against
+      py-ballisticcalc (max relative error 1.2e-7, x64 unix build), and
+      the full `test_bclibc.py` suite passes with **0 failures**.
 - [x] **Scope decision:** v1 reference table is G1/G7 only (what's already
       in ROM). py-ballisticcalc's `DragModelMultiBC` accepts an arbitrary
       reference `drag_table`; not porting that for now — flag if a
