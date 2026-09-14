@@ -155,70 +155,81 @@ as a library from Python application code.
       "don't wait for the previous calculation when input just changed").
       Explicit `ABORT` is just the case where nothing replaces the
       interrupted work.
-- [ ] **Cancel mechanism — leaning `setjmp`/`longjmp`, contained entirely
-      in `micropython-bclibc`'s binding layer, instead of a callback API
-      inside `tiny_bclibc` itself.** Rationale: `tiny_bclibc` is
-      already no-heap/no-lock with caller-owned buffers only (confirmed —
-      see `ShotHolder`, Python-owned, in `tiny_bclibc_mp.c`), which is
-      exactly the precondition that makes abandoning a call mid-flight via
-      `longjmp` safe — no internal mutable state is left corrupted. This
-      avoids the earlier plan's cross-repo dependency (adding a
-      progress/cancel callback to every blocking entry point in `bclibc`
-      itself) entirely — the whole mechanism stays in
-      `src/tiny_bclibc_mp.c`:
-  - Wrap each blocking call (`find_zero_angle`, `find_apex`,
-        `find_max_range`, `integrate`, `integrate_at`) with `setjmp()`
-        right before invoking into `tiny_bclibc`; a single global
-        `jmp_buf` is sufficient given the "no queue, one in-flight
-        computation" rule above.
-  - A preempting event (new valid frame parsed, or explicit `ABORT`)
-        triggers `longjmp()` back to that point from an
-        interrupt/inter-core-interrupt context.
-  - **Needs verification before this is locked in as the approach:**
-    - [ ] `longjmp` fired from an ISR back into normal call-stack
-          execution — confirm this is sound on RP2040/RP2350
-          (bare-metal Cortex-M) *and* ESP32-S3 (Xtensa, typically
-          FreeRTOS-hosted in the MicroPython port) — don't assume parity
-          across the three targets.
-    - [ ] Single-core: the CDC1 RX ISR performs the `longjmp` directly.
-    - [ ] Dual-core (Epic 7): if the blocking call runs on core1, core0
-          cannot `longjmp` across cores — core0's frame receiver signals
-          core1 via an inter-core interrupt/doorbell (e.g. RP2040 SIO FIFO
-          IRQ), and **core1's own ISR** performs the `longjmp`.
-    - [ ] Binding-layer contract: once `setjmp()` returns nonzero (i.e.
-          reached via `longjmp`), the wrapper must treat any
-          output buffer/struct as partial garbage and return
-          `INTERRUPTED` without touching it (no `traj_to_tuple()` etc. on
-          abandoned data).
-  - **Fallback:** if `longjmp`-from-ISR proves unsound on a given target
-        (most likely risk area: ESP32-S3), fall back to the
-        progress-callback-in-`tiny_bclibc` approach for that target only —
-        the two approaches aren't mutually exclusive across platforms.
+- [x] **Resolved — mechanism chosen conditionally on core availability,**
+      rather than one mechanism everywhere:
+  - **Dual-core (the primary path — all three current targets are
+        multi-core: RP2040, RP2350, ESP32-S3):** interrupt = **kill and
+        relaunch the worker core/task**, not `setjmp`/`longjmp`. The
+        entire execution context is discarded rather than partially
+        unwound, so there's no unwind-safety question to verify per
+        platform — this **demotes** the earlier "verify `longjmp`-from-ISR
+        on ESP32-S3" risk, since it's no longer on the primary path for
+        any of the three targets in scope.
+    - RP2040/RP2350: pico-sdk `multicore_reset_core1()` +
+          `multicore_launch_core1()`. **Open:** go through MicroPython's
+          `_thread` module (portable across ports, but doesn't expose a
+          documented kill/reset call) vs. drop to the raw SDK calls from a
+          small helper in `tiny_bclibc_mp.c` for reliable kill semantics.
+    - ESP32-S3: FreeRTOS `vTaskDelete()` + `xTaskCreatePinnedToCore()`.
+    - ⚠️ **New risk, replacing the longjmp-safety question:** killing the
+          worker core/task while it holds a shared lock (MicroPython's
+          GIL-equivalent / GC lock on a shared-heap dual-core port) can
+          deadlock the other core — FreeRTOS's `vTaskDelete()` does **not**
+          release mutexes held by the deleted task, and the same class of
+          problem likely applies to RP2040's shared-heap threading model.
+          Mitigation: the "killable window" must be exactly the pure-C
+          `tiny_bclibc` call (already no-heap/no-lock by design — see
+          `ShotHolder`, caller-owned buffers, confirmed earlier) — needs
+          verifying per port whether calling a native/usermod C function
+          from the worker core already releases the shared interpreter
+          lock for the call's duration, or whether that needs doing
+          explicitly before the call.
+    - The dispatcher (core0) is responsible for emitting the
+          `INTERRUPTED` response for whatever generation it just killed —
+          the killed worker never gets to respond itself, so core0 must
+          track which command generation was in flight and reply on its
+          behalf.
+  - **Single-core (not needed for any of the three current targets, kept
+        as documented fallback for a hypothetical future single-core
+        target):** `setjmp`/`longjmp` contained in
+        `micropython-bclibc`'s binding layer — wrap each blocking call
+        (`find_zero_angle`, `find_apex`, `find_max_range`, `integrate`,
+        `integrate_at`) with `setjmp()`, trigger `longjmp()` from the
+        CDC1 RX ISR on a preempting frame; single global `jmp_buf` given
+        the no-queue rule. Contract: once `setjmp()` returns nonzero, the
+        wrapper treats any output buffer as garbage and returns
+        `INTERRUPTED` without touching it. (Full detail preserved from
+        the earlier draft of this epic — revisit only if a single-core
+        target is actually added to scope.)
 - [ ] `INTERRUPTED` response status for whatever got preempted (distinct
       from the normal response to the command that preempted it).
-- [ ] `INTEGRATE` (streamed) already has an additional, independent
-      cooperative hook available regardless of the above: `mp_stream_cb`
-      returns `TINY_BCLIBC_TERM_HANDLER_STOP` when the Python callback
-      returns truthy — useful as a cheap early-exit check on the
-      streaming path specifically, on top of whichever general mechanism
-      is chosen.
+- [ ] `INTEGRATE` (streamed) keeps its independent cooperative hook
+      regardless of which mechanism above is used: `mp_stream_cb` returns
+      `TINY_BCLIBC_TERM_HANDLER_STOP` when the Python callback returns
+      truthy — a cheap early-exit check worth keeping even inside a
+      dual-core worker, before falling back to a hard kill.
 
 ## Epic 7 — Second core (where supported)
 
+- [x] **Status update:** no longer just a latency optimization — per
+      Epic 6, dual-core kill/relaunch is now the *primary* abort
+      mechanism for all three current targets (RP2040, RP2350, ESP32-S3
+      are all multi-core), so this epic is load-bearing, not optional.
+      Sequence it together with Epic 6, not after it.
 - [ ] Move command execution (the calls into `tiny_bclibc`) to a second
-      core. There's existing precedent in-repo to build from:
+      core/task. There's existing precedent in-repo to build from:
       `natmod/examples/tiny_bclibc_natmod_test_2core.py` and
       `..._bench_2core.py`.
-- [ ] Inter-core channel: an inter-core interrupt/doorbell that triggers
-      core1's own `longjmp` (Epic 6), plus (for streaming) a ring buffer
-      of completed rows from core1 to core0.
-- [ ] With Epic 6's "no queue, latest command preempts" model, dual-core is
-      the clean way to guarantee core0 stays responsive to new/preempting
-      frames while core1 is mid-computation — worth sequencing this epic
-      together with Epic 6 rather than strictly after it.
-- [ ] Single-core fallback (Epic 6's cooperative/ISR-`longjmp` model) for
-      targets without a second core — the protocol layer must not
-      *require* dual-core, only benefit from it when present.
+- [ ] Inter-core channel: core0 tracks the current command generation and
+      the worker's handle (core1 launch state on RP2040/RP2350, task
+      handle on ESP32-S3) so it can kill + relaunch on a preempting frame
+      (Epic 6), plus (for streaming) a ring buffer of completed rows from
+      the worker back to core0.
+- [ ] Single-core fallback (Epic 6's `setjmp`/`longjmp` model) documented
+      but **not currently needed** — no target in the phase-1 list lacks a
+      second core. Keep the protocol layer from *requiring* dual-core in
+      principle, but don't over-invest in the single-core path until an
+      actual single-core target shows up.
 
 ## Epic 8 — Commands on top of existing structures (no a7p)
 
