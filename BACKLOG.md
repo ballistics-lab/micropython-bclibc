@@ -27,18 +27,20 @@ as a library from Python application code.
 
 ## Epic 1 — Build: usermod gated behind a flag
 
-- [ ] Introduce a build flag (e.g. `BCLIBC_APP_ENABLE`, mirroring the
-      existing `BCLIBC_BUILD_NATMOD` switch in `src/tiny_bclibc_mp.c`) that
-      gates whether `usermod/micropython.cmake` / `micropython.mk` pull the
-      tiny_bclibc usermod sources into the firmware build at all.
+- [x] **Resolved — flag name: `BCLIBC_RT`** (mirrors the existing
+      `BCLIBC_BUILD_NATMOD` switch in `src/tiny_bclibc_mp.c`).
 - [ ] Default: **off** — a plain usermod build for non-coprocessor firmware
       should not carry the extra ROM/RAM footprint.
-- [ ] **Open question:** where does the coprocessor "application" (its own
-      `main.py`/`boot.py`, protocol dispatcher, command handlers) live —
-      a new top-level directory in this repo (e.g. `app/`, alongside the
-      existing `natmod/`/`usermod/`/`ffimod/` build modes), or a separate
-      repository that vendors/submodules `micropython-bclibc`? Affects the
-      layout of every epic below.
+- [x] **Resolved:** the application lives in `src/`, alongside
+      `tiny_bclibc.py`/`tiny_bclibc_mp.c` — no new top-level directory, no
+      separate repo. Its `.py` files are only **frozen** into the firmware
+      image when `BCLIBC_RT` is set.
+- [ ] `BCLIBC_RT` needs plumbing through two independent MicroPython build
+      mechanisms that both need to key off the same flag: a CMake/Make
+      option controlling whether the C usermod sources are compiled in,
+      and a `usermod/manifest.py` conditional (via a `--var` passed to
+      `makemanifest.py`) controlling whether the app's `.py` files get
+      frozen.
 
 ## Epic 2 — Multi-BC native binding
 
@@ -69,36 +71,35 @@ as a library from Python application code.
 
 ## Epic 3 — Command/response frame
 
-- [ ] Frame shape: `<start_byte><cmd:1><len><data><crc>`
-  - **Open:** `len` as 1 or 2 bytes — a single trajectory row (16×float32 =
-        64 bytes) fits in 1 byte, but a `LOAD_PROFILE` payload (Shot buffer
-        + winds + drag points) may exceed 255 bytes — needs sizing against
-        the actual max `Shot` buffer.
-  - **Open:** CRC width/scope (CRC16 vs. lighter; computed over
-        `cmd+len+data` only, or `start_byte` included too).
-  - **Open — resync strategy:** earlier discussion assumed COBS+CRC16
-        byte-stuffed framing (per the original project idea). This
-        `start_byte+len+crc` shape as specified has no escaping, so if
-        `start_byte`'s value ever occurs inside arbitrary payload bytes
-        (floats, binary profile data), a receiver mid-stream could
-        false-sync. Needs one of: (a) escape/byte-stuffing for
-        `start_byte` inside `data`, (b) keep a COBS wrapper around this
-        frame, or (c) rely purely on CRC validation + rescan-for-next-
-        `start_byte` on mismatch. Pick one deliberately.
+- [x] **Resolved:** `len` is **2 bytes** — a `LOAD_PROFILE` payload (Shot
+      buffer + winds + drag points) can run up to 2-3 KB, well past what a
+      1-byte length field could address.
+- [x] **Resolved:** COBS-wrapped framing —
+      `<start_byte><cmd:1><len:2><data><crc16>`, the whole thing
+      COBS-encoded — chosen over raw start-byte scanning specifically for
+      reliability against false sync when payload bytes happen to collide
+      with `start_byte`.
+- [x] **Resolved:** CRC16, scope = `cmd+len+data`. Exact polynomial not
+      fixed yet — pick a well-known table-driven variant (e.g. CRC16-CCITT
+      or CRC16/MODBUS) for O(1)-per-byte, RT-safe cost; the specific
+      choice matters less than "fast and table-driven."
+- [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
+      set (both already natively bound).
 - [ ] Command enum: `LOAD_PROFILE, INTEGRATE, INTEGRATE_AT,
-      FIND_ZERO_ANGLE, RESET, SET_BLE_PASS, IDENT, STREAM_START,
-      STREAM_END, ABORT, ACK/NAK/ERROR`.
-  - **Open:** whether `FIND_APEX`/`FIND_MAX_RANGE` (already bound natively)
-        belong in the v1 protocol surface.
+      FIND_ZERO_ANGLE, FIND_APEX, FIND_MAX_RANGE, RESET, SET_BLE_PASS,
+      IDENT, STREAM_START, STREAM_END, ABORT, ACK/NAK/ERROR`.
 - [ ] Response frame: same shape, status code distinguishes
       `OK` / `ERR` / `INTERRUPTED`.
 
 ## Epic 4 — Transport: USB CDC1
 
-- [ ] Dual-CDC USB descriptor in firmware (CDC0 stays REPL/debug/firmware
-      update, unchanged; CDC1 becomes the command channel). This is a
-      MicroPython board-config change (RP2040/RP2350/ESP32-S3 ports), not a
-      `tiny_bclibc` change.
+- [x] **Resolved:** no board-level C descriptor change needed — configure
+      the second CDC interface at runtime from `boot.py` using
+      MicroPython's dynamic USB device API (`usb.device`). CDC0 stays
+      REPL/debug/firmware update, unchanged.
+- [ ] Verify `usb.device` CDC-composite support/parity across the actual
+      MicroPython port versions targeted for RP2040, RP2350, and ESP32-S3
+      — confirm per-port before relying on it uniformly across all three.
 - [ ] Non-blocking read of CDC1 into the frame dispatcher, so CDC1 traffic
       never blocks the CDC0 REPL.
 - [ ] UART and BLE NUS transports: explicitly deferred to a later epic
@@ -111,39 +112,80 @@ as a library from Python application code.
       returned as one packet.
 - [ ] `STREAM_END` — final frame carrying the `stop_reason` code already
       produced by `tiny_bclibc_integrate_stream`.
-- [ ] **Open — ack scheme:** true per-block Y-modem acking (designed for
-      slow modems) would ack every row; at BLE RTTs of tens of ms that
-      kills throughput for 30-100+ row trajectories. Options: (a)
-      sender-paced with a windowed ack every N rows, (b) no ack at all —
-      per-frame CRC plus a row count in `STREAM_END` for host-side
-      integrity check, (c) real per-block ack only over USB/UART (low
-      RTT), a different scheme over BLE. Needs one chosen model so all
-      host libraries implement the same thing.
+- [ ] **Ack scheme — recommendation pending confirmation.** Plain
+      windowed-ack (ack every N rows) is reliable but its throughput cost
+      scales with RTT × (rows / window) — expensive over BLE. Plain no-ack
+      (per-frame CRC + row count in `STREAM_END` only) is fastest but a
+      single dropped/corrupt frame forces restarting the *entire* stream,
+      since there's nothing to resume from. Proposed middle ground: every
+      `STREAM_DATA` frame carries a monotonically increasing sequence
+      number; no ack in the normal case (full throughput); the receiver
+      detects a gap (sequence discontinuity or bad CRC) and sends a single
+      `RESEND(from_seq)` request; the sender resumes from that row
+      (cheap — another `integrate_at`/continued stream, not a full
+      restart) instead of re-sending from row 0. This keeps the common
+      case ack-free while staying recoverable, unlike plain no-ack. Needs
+      sign-off before implementation — and should be the same scheme
+      across USB/UART/BLE so all host libraries implement one thing.
 - [ ] Wire into `tiny_bclibc_integrate_stream`'s row callback
       (`mp_stream_cb` in `tiny_bclibc_mp.c`) — write a wire frame per row
       instead of accumulating a Python list.
 
 ## Epic 6 — Abort / interrupt
 
-- [ ] `ABORT` command + `INTERRUPTED` response status.
-- [ ] For `INTEGRATE` (streamed): already has the hook needed —
-      `mp_stream_cb` returns `TINY_BCLIBC_TERM_HANDLER_STOP` when the
-      Python callback returns truthy. Checking an "abort requested" flag
-      per row works even single-core, as long as CDC1 is read via
-      interrupt into a ring buffer independent of what the main loop is
-      doing.
-- [ ] ⚠️ **Known gap:** `tiny_bclibc_find_zero_angle` and
-      `tiny_bclibc_integrate_at` are opaque C loops with **no** progress
-      callback exposed today — they cannot be cooperatively interrupted at
-      all as currently written (zero-angle can be up to ~40 iterations,
-      each a full integration). Options: (a) add a cancel/progress
-      callback to `tiny_bclibc` itself (a `bclibc` repo change, not just
-      this repo), or (b) rely on Epic 7 (second core) — core0 just
-      discards a stale core1 result when a newer request supersedes it,
-      rather than truly interrupting the computation. Needs a decision on
-      whether current call latencies (single-digit to tens of ms per the
-      project's own numbers) make this acceptable without a real cancel
-      hook.
+- [x] **Resolved — no command queue.** The coprocessor never queues work:
+      receiving any new valid (CRC-passing) command frame implicitly
+      **preempts** whatever computation is currently running (matches
+      "don't wait for the previous calculation when input just changed").
+      Explicit `ABORT` is just the case where nothing replaces the
+      interrupted work.
+- [ ] **Cancel mechanism — leaning `setjmp`/`longjmp`, contained entirely
+      in `micropython-bclibc`'s binding layer, instead of a callback API
+      inside `tiny_bclibc` itself.** Rationale: `tiny_bclibc` is
+      already no-heap/no-lock with caller-owned buffers only (confirmed —
+      see `ShotHolder`, Python-owned, in `tiny_bclibc_mp.c`), which is
+      exactly the precondition that makes abandoning a call mid-flight via
+      `longjmp` safe — no internal mutable state is left corrupted. This
+      avoids the earlier plan's cross-repo dependency (adding a
+      progress/cancel callback to every blocking entry point in `bclibc`
+      itself) entirely — the whole mechanism stays in
+      `src/tiny_bclibc_mp.c`:
+  - Wrap each blocking call (`find_zero_angle`, `find_apex`,
+        `find_max_range`, `integrate`, `integrate_at`) with `setjmp()`
+        right before invoking into `tiny_bclibc`; a single global
+        `jmp_buf` is sufficient given the "no queue, one in-flight
+        computation" rule above.
+  - A preempting event (new valid frame parsed, or explicit `ABORT`)
+        triggers `longjmp()` back to that point from an
+        interrupt/inter-core-interrupt context.
+  - **Needs verification before this is locked in as the approach:**
+    - [ ] `longjmp` fired from an ISR back into normal call-stack
+          execution — confirm this is sound on RP2040/RP2350
+          (bare-metal Cortex-M) *and* ESP32-S3 (Xtensa, typically
+          FreeRTOS-hosted in the MicroPython port) — don't assume parity
+          across the three targets.
+    - [ ] Single-core: the CDC1 RX ISR performs the `longjmp` directly.
+    - [ ] Dual-core (Epic 7): if the blocking call runs on core1, core0
+          cannot `longjmp` across cores — core0's frame receiver signals
+          core1 via an inter-core interrupt/doorbell (e.g. RP2040 SIO FIFO
+          IRQ), and **core1's own ISR** performs the `longjmp`.
+    - [ ] Binding-layer contract: once `setjmp()` returns nonzero (i.e.
+          reached via `longjmp`), the wrapper must treat any
+          output buffer/struct as partial garbage and return
+          `INTERRUPTED` without touching it (no `traj_to_tuple()` etc. on
+          abandoned data).
+  - **Fallback:** if `longjmp`-from-ISR proves unsound on a given target
+        (most likely risk area: ESP32-S3), fall back to the
+        progress-callback-in-`tiny_bclibc` approach for that target only —
+        the two approaches aren't mutually exclusive across platforms.
+- [ ] `INTERRUPTED` response status for whatever got preempted (distinct
+      from the normal response to the command that preempted it).
+- [ ] `INTEGRATE` (streamed) already has an additional, independent
+      cooperative hook available regardless of the above: `mp_stream_cb`
+      returns `TINY_BCLIBC_TERM_HANDLER_STOP` when the Python callback
+      returns truthy — useful as a cheap early-exit check on the
+      streaming path specifically, on top of whichever general mechanism
+      is chosen.
 
 ## Epic 7 — Second core (where supported)
 
@@ -151,11 +193,16 @@ as a library from Python application code.
       core. There's existing precedent in-repo to build from:
       `natmod/examples/tiny_bclibc_natmod_test_2core.py` and
       `..._bench_2core.py`.
-- [ ] Inter-core channel: an abort flag, plus (for streaming) a ring
-      buffer of completed rows from core1 to core0.
-- [ ] Single-core fallback (Epic 6's cooperative model) for targets without
-      a second core — the protocol layer must not *require* dual-core,
-      only benefit from it when present.
+- [ ] Inter-core channel: an inter-core interrupt/doorbell that triggers
+      core1's own `longjmp` (Epic 6), plus (for streaming) a ring buffer
+      of completed rows from core1 to core0.
+- [ ] With Epic 6's "no queue, latest command preempts" model, dual-core is
+      the clean way to guarantee core0 stays responsive to new/preempting
+      frames while core1 is mid-computation — worth sequencing this epic
+      together with Epic 6 rather than strictly after it.
+- [ ] Single-core fallback (Epic 6's cooperative/ISR-`longjmp` model) for
+      targets without a second core — the protocol layer must not
+      *require* dual-core, only benefit from it when present.
 
 ## Epic 8 — Commands on top of existing structures (no a7p)
 
