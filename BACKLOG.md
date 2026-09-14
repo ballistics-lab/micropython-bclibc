@@ -45,23 +45,41 @@ as a library from Python application code.
 ## Epic 2 — Multi-BC native binding
 
 - [ ] `mp_bclibc_build_multibc()` in `src/tiny_bclibc_mp.c`:
-      `build_multibc(drag_type, bc_points_buf) -> (mach_list, cd_list)`.
-      Reuses the already-resident `g1_mach`/`g1_cd`/`G1_N` and
-      `g7_mach`/`g7_cd`/`G7_N` tables from `src/drag_tables.h`.
-      Algorithm: sort BC points by Mach, linear-interpolate the BC ratio at
-      each reference-table Mach value (clamped at the ends, matching
-      py-ballisticcalc's `linear_interpolation`), divide the reference Cd
-      by that ratio. `bc` is always fed into `Shot()` as `1.0` for the
-      resulting curve — it cancels out of `drag_by_mach`'s
-      `Cd(mach) * K / bc` algebraically, so `sectional_density`/
-      weight/diameter do not need to be ported for this.
+      `build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) ->
+      count`. **Zero-copy on both ends, matching `integrate()`'s
+      `traj_buf` convention** — not the boxed-list shape from the first
+      draft of this epic (that would allocate ~2×N Python float objects,
+      e.g. 160 for an 80-point G7 table, only to immediately re-serialize
+      them into `Shot()`'s buffer). `out_mach_buf`/`out_cd_buf` are
+      caller-allocated `bytearray(_MAX_DRAG_PTS * 4)` write targets (reuse
+      the existing `_MAX_DRAG_PTS=128` constant, no new size constant
+      needed); the function writes packed float32 directly via a new
+      `_wrf()` helper (write-side mirror of the existing `_rdf()`) and
+      returns only the written count. Reuses the already-resident
+      `g1_mach`/`g1_cd`/`G1_N` and `g7_mach`/`g7_cd`/`G7_N` tables from
+      `src/drag_tables.h`. Algorithm: sort BC points by Mach,
+      linear-interpolate the BC ratio at each reference-table Mach value
+      (clamped at the ends, matching py-ballisticcalc's
+      `linear_interpolation`), divide the reference Cd by that ratio.
+      `bc` is always fed into `Shot()` as `1.0` for the resulting curve —
+      it cancels out of `drag_by_mach`'s `Cd(mach) * K / bc` algebraically,
+      so `sectional_density`/weight/diameter do not need to be ported for
+      this.
 - [ ] Register in both the natmod (`mpy_init`) and usermod
       (`bclibc_module_globals_table`) code paths, matching the existing
       functions' pattern.
 - [ ] Python wrapper `MultiBC(bc_points, drag_type=DRAG_G7)` in
-      `src/tiny_bclibc.py`, packing points into a buffer and feeding the
-      result straight into `Shot(drag_type=DRAG_CUSTOM, drag_mach=...,
-      drag_cd=...)`.
+      `src/tiny_bclibc.py`: packs `bc_points` into a buffer (unchanged —
+      already zero-copy-style on this side), allocates the two output
+      buffers, calls the native function, returns
+      `(mach_buf, cd_buf, count)` with no slicing/copying.
+- [ ] `Shot()`'s drag-table packing needs a fast path: when `drag_mach`/
+      `drag_cd` are already `bytes`/`bytearray`/`memoryview` (i.e. what
+      `MultiBC()` returns), do a direct byte-range copy into the Shot
+      buffer instead of the current per-element `uctypes`-struct write
+      loop. Keep the existing per-element path for the case where a
+      caller hand-builds a plain Python sequence of floats — don't break
+      that usage.
 - [ ] Test numerical identity against py-ballisticcalc's
       `DragModelMultiBC`, same spirit as `tiny_bclibc/tests/test_identity.cpp`.
 - [ ] **Scope decision:** v1 reference table is G1/G7 only (what's already
