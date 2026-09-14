@@ -113,21 +113,36 @@ as a library from Python application code.
       returned as one packet.
 - [ ] `STREAM_END` — final frame carrying the `stop_reason` code already
       produced by `tiny_bclibc_integrate_stream`.
-- [ ] **Ack scheme — recommendation pending confirmation.** Plain
-      windowed-ack (ack every N rows) is reliable but its throughput cost
-      scales with RTT × (rows / window) — expensive over BLE. Plain no-ack
-      (per-frame CRC + row count in `STREAM_END` only) is fastest but a
-      single dropped/corrupt frame forces restarting the *entire* stream,
-      since there's nothing to resume from. Proposed middle ground: every
-      `STREAM_DATA` frame carries a monotonically increasing sequence
-      number; no ack in the normal case (full throughput); the receiver
-      detects a gap (sequence discontinuity or bad CRC) and sends a single
-      `RESEND(from_seq)` request; the sender resumes from that row
-      (cheap — another `integrate_at`/continued stream, not a full
-      restart) instead of re-sending from row 0. This keeps the common
-      case ack-free while staying recoverable, unlike plain no-ack. Needs
-      sign-off before implementation — and should be the same scheme
-      across USB/UART/BLE so all host libraries implement one thing.
+- [ ] **Ack scheme — still open, latency vs. reliability tradeoff not yet
+      resolved.** Three candidates on the table:
+  - **(a) Y-modem-style windowed ack** (current lean) — reliable, simple
+        mental model, but per-block ack RTT could add up over a
+        higher-latency transport; needs real numbers (see below) before
+        settling on a window size, not just a gut call.
+  - **(b) Plain no-ack** — fastest, but a single dropped/corrupt frame
+        forces restarting the *entire* stream (nothing to resume from).
+  - **(c) Sequence number + gap-triggered `RESEND(from_seq)`** — no ack in
+        the normal case, receiver requests a resend only on a detected gap
+        or bad CRC; sender resumes from that row (re-run + filtered emit,
+        not a full restart). Needs `RESEND` explicitly exempted from the
+        Epic 6 "any new frame preempts" rule, or it would abort the very
+        stream it's trying to recover.
+  - **Transport-specific nuance worth factoring in:** BLE **Indications**
+        (as opposed to Notifications) already carry a per-packet ack at
+        the GATT stack level — the peripheral cannot send the next
+        indication until the central acks the previous one. If the BLE
+        transport uses Indications, app-level per-block acking (a) is
+        largely redundant *on that transport specifically* — the latency
+        concern may be much smaller there than assumed. USB CDC/UART have
+        no such built-in guarantee, so still need an app-level scheme
+        regardless of what's chosen for BLE. This reopens option (c) from
+        the original list ("different ack strategy per transport") as
+        possibly the right shape, rather than forcing one scheme across
+        all three transports.
+  - Needs actual RTT numbers per transport (USB CDC, UART at target baud,
+        BLE connection interval) before picking a window size or deciding
+        whether (a)'s latency worry is real in practice. Not blocking
+        Epic 2/3/4/6 work — can stay open while those proceed.
 - [ ] Wire into `tiny_bclibc_integrate_stream`'s row callback
       (`mp_stream_cb` in `tiny_bclibc_mp.c`) — write a wire frame per row
       instead of accumulating a Python list.
