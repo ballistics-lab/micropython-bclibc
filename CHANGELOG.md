@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pin `bclibc@v1.1.8`
+
 #### `natmod.yml`, `usermod.yml`, `cibuildmp.toml` — MicroPython v1.28.0 → v1.29.0
 
 Every `v1.28.0` build identifier, `mpy_tag` default and `MPY_TAG` fallback
