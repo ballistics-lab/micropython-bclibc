@@ -20,8 +20,8 @@ as a library from Python application code.
 - UART and BLE (Nordic UART Service) transports — phase 1 targets USB
   CDC1 only. UART/BLE are a later transport epic reusing the same frame
   parser.
-- Full BLE pairing/passkey flow — `SET_BLE_PASS` may be stubbed but the
-  actual BLE stack work is out of scope until the BLE transport epic.
+- Full BLE pairing/passkey flow — `SET_BLE_PASS` is deferred entirely
+  until the BLE transport epic (no stub in v1, see Epic 8).
 
 ---
 
