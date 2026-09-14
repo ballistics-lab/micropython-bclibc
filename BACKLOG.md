@@ -44,6 +44,18 @@ as a library from Python application code.
 
 ## Epic 2 — Multi-BC native binding
 
+- [x] **Implemented** — `mp_bclibc_build_multibc()`, `MultiBC()` wrapper,
+      `Shot()` fast byte-copy path, and G1/G7 identity + interpolation +
+      end-to-end tests are pushed to this branch (`src/tiny_bclibc_mp.c`,
+      `src/tiny_bclibc.py`, `tests/test_bclibc.py`).
+      ⚠️ **Not yet compiled or run** — this session has GitHub API access
+      only, no natmod/usermod build toolchain or MicroPython binary to
+      execute `tests/test_bclibc.py` against. Needs a real build (unix
+      port is fastest) and a test run before merging; the numeric
+      expectations in the new tests (G1/G7 table endpoints, the
+      Mach=1.0 interpolation value) were computed by hand against the
+      literal `drag_tables.h`/`G7_MACH`/`G7_CD` values, not verified by
+      execution.
 - [ ] `mp_bclibc_build_multibc()` in `src/tiny_bclibc_mp.c`:
       `build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) ->
       count`. **Zero-copy on both ends, matching `integrate()`'s
