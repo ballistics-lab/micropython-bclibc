@@ -104,6 +104,52 @@ jobs:
           path: natmod/build/${{ matrix.arch }}*/
           if-no-files-found: error
 
+  # ── RP2350 (rp2's RPI_PICO2/RPI_PICO2_W): separate armv7emsp variant ──────
+  # pico-sdk builds that firmware -mfloat-abi=softfp, unlike every other real
+  # armv7emsp target (STM32F4, and the "32-bit ARM Linux" test job below,
+  # whose armhf host is hard-float) -- see natmod/Makefile's own RP2350
+  # override comment for the full story. The on-disk .mpy format has no room
+  # to tag this ABI difference (arch_flags is hardcoded to RV32's own
+  # extension bits in py/persistentcode.c), so this can't be a second entry
+  # in the main package.json the `build` matrix above feeds -- release.yml
+  # gives it its own package.rp2350.json instead. A separate job, not a
+  # matrix leg on `build` above: same ARCH=armv7emsp, so it would overwrite
+  # that job's own natmod/build/armv7emsp/ output if it ran in the same
+  # workspace.
+  build-rp2350:
+    name: build (armv7emsp / RP2350)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ballistics-lab/cibuildmp@v0.7.3
+        env:
+          # No action input for extra-make-args (composite action's own
+          # inputs are package-dir/output-dir/config-file/build/skip/extras/
+          # keep-going only) -- the environment form is the only way to pass
+          # a per-build make argument through this action.
+          CIBMP_EXTRA_MAKE_ARGS: RP2350=1
+        with:
+          build: mpy*-${{ env.MPY_TAG }}-armv7emsp
+
+      - uses: actions/upload-artifact@v7
+        with:
+          # Deliberately NOT "tiny-bclibc-*" -- release.yml's own main
+          # package.json assembly step downloads every artifact matching
+          # that pattern and would otherwise pick this up too, alongside the
+          # plain `build` job's own armv7emsp artifact. Both decode to the
+          # same arch=armv7emsp tag (the .mpy format can't express the ABI
+          # difference -- see natmod/Makefile's RP2350 comment), so
+          # build_release_assets.py would hit its "duplicate arch" guard.
+          # release.yml downloads this one by its exact name instead, in its
+          # own separate step, and feeds it through build_release_assets.py
+          # on its own with --asset-name/--manifest-name overrides.
+          name: natmod-armv7emsp-rp2350
+          path: natmod/build/armv7emsp*/
+          if-no-files-found: error
+
   # ── Test built artifacts (x64 native, x86 32-bit, armv7m via QEMU) ────────
   # One matrix job instead of three near-identical ones -- each leg only
   # differs in how the interpreter gets built (a stock cibuildmp manylinux

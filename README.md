@@ -158,11 +158,20 @@ numbers. Build RP2350's variant explicitly:
 make ARCH=armv7emsp RP2350=1 dist   # → natmod/build/armv7emsp/tiny_bclibc.mpy (softfp)
 ```
 
-Not a `cibuildmp`/release-matrix target: the on-disk `.mpy` format has no
-room to tag this ABI difference (see `natmod/Makefile`'s own comment above
-the `RP2350` override for why), so publishing both as installable assets
-under the same `armv7emsp` arch tag isn't possible — build this one
-yourself for RP2350 boards.
+Not part of the main `package.json` release manifest: the on-disk `.mpy`
+format has no room to tag this ABI difference (see `natmod/Makefile`'s own
+comment above the `RP2350` override for why), so `mip` could never choose
+between two entries sharing one `armv7emsp` arch tag. Every tagged release
+carries this build anyway, as its own separate asset + manifest pair
+(`tiny_bclibc.rp2350.mpy` + `package.rp2350.json` — see `release.yml`'s own
+comment for how) — point `mip` straight at that manifest's release URL
+instead of the default `package.json`:
+
+```bash
+mpremote mip install https://github.com/<owner>/<repo>/releases/download/<tag>/package.rp2350.json
+```
+
+Or build it yourself locally with the command above.
 
 ### Running an ARM natmod on an ARM Linux host
 
