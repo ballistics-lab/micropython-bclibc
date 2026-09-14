@@ -72,7 +72,7 @@ as a library from Python application code.
       | RP2040 (armv6m) | 28132 → 28836 (**+704 B**) | 33142 → 34321 (**+1179 B**) | +0 (bss unchanged) |
       | RP2350 (armv7emsp) | 22340 → 22988 (**+648 B**) | 27345 → 28468 (**+1123 B**) | +0 (bss unchanged) |
       | ESP32-S3 | not measured — expect same order of magnitude | | |
-- [ ] `mp_bclibc_build_multibc()` in `src/tiny_bclibc_mp.c`:
+- [x] `mp_bclibc_build_multibc()` in `src/tiny_bclibc_mp.c`:
       `build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) ->
       count`. **Zero-copy on both ends, matching `integrate()`'s
       `traj_buf` convention** — not the boxed-list shape from the first
@@ -98,28 +98,37 @@ as a library from Python application code.
       it cancels out of `drag_by_mach`'s `Cd(mach) * K / bc` algebraically,
       so `sectional_density`/weight/diameter do not need to be ported for
       this.
-- [ ] Register in both the natmod (`mpy_init`) and usermod
+- [x] Register in both the natmod (`mpy_init`) and usermod
       (`bclibc_module_globals_table`) code paths, matching the existing
       functions' pattern.
-- [ ] Python wrapper `MultiBC(bc_points, drag_type=DRAG_G7)` in
+- [x] Python wrapper `MultiBC(bc_points, drag_type=DRAG_G7)` in
       `src/tiny_bclibc.py`: packs `bc_points` into a buffer (unchanged —
       already zero-copy-style on this side), allocates the two output
       buffers, calls the native function, returns
       `(mach_buf, cd_buf, count)` with no slicing/copying.
-- [ ] `Shot()`'s drag-table packing needs a fast path: when `drag_mach`/
+- [x] `Shot()`'s drag-table packing needs a fast path: when `drag_mach`/
       `drag_cd` are already `bytes`/`bytearray`/`memoryview` (i.e. what
       `MultiBC()` returns), do a direct byte-range copy into the Shot
       buffer instead of the current per-element `uctypes`-struct write
       loop. Keep the existing per-element path for the case where a
       caller hand-builds a plain Python sequence of floats — don't break
       that usage.
-- [ ] Test numerical identity against py-ballisticcalc's
-      `DragModelMultiBC`, same spirit as `tiny_bclibc/tests/test_identity.cpp`
-      — **cover both `DRAG_G1` and `DRAG_G7` as the reference table**, not
-      just one; they have different point counts and different Mach
-      breakpoints (e.g. G7 has a 0.65 point G1 doesn't), so a G7-only test
-      wouldn't catch a G1-specific indexing/length bug.
-- [ ] **Scope decision:** v1 reference table is G1/G7 only (what's already
+- [ ] **Not actually done as originally worded — real gap, not just an
+      unchecked box.** This item asked to test against py-ballisticcalc's
+      `DragModelMultiBC` itself. What's actually in `tests/test_bclibc.py`
+      and was executed successfully is a *hand-verified* substitute: an
+      identity case (single BC point ⇒ constant divisor ⇒ output must
+      equal the reference table exactly) and an interpolation case with a
+      by-hand-computed expected value (`0.3803 / 1.2 = 0.31692`, confirmed
+      against real runtime output) — covering both `DRAG_G1` and
+      `DRAG_G7`. That's real verification of the interpolation math, but
+      it is **not** a cross-implementation diff against py-ballisticcalc's
+      actual `DragModelMultiBC()` execution, which is what this item
+      specifically asked for. Still open: run py-ballisticcalc for a
+      real multi-BC profile and diff its output curve against
+      `MultiBC()`'s, the way `tiny_bclibc/tests/test_identity.cpp` does
+      for the rest of the engine.
+- [x] **Scope decision:** v1 reference table is G1/G7 only (what's already
       in ROM). py-ballisticcalc's `DragModelMultiBC` accepts an arbitrary
       reference `drag_table`; not porting that for now — flag if a
       custom-reference base turns out to be needed.
