@@ -86,8 +86,9 @@ as a library from Python application code.
 - [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
       set (both already natively bound).
 - [ ] Command enum: `LOAD_PROFILE, INTEGRATE, INTEGRATE_AT,
-      FIND_ZERO_ANGLE, FIND_APEX, FIND_MAX_RANGE, RESET, SET_BLE_PASS,
-      IDENT, STREAM_START, STREAM_END, ABORT, ACK/NAK/ERROR`.
+      FIND_ZERO_ANGLE, FIND_APEX, FIND_MAX_RANGE, RESET, IDENT,
+      STREAM_START, STREAM_END, ABORT, ACK/NAK/ERROR`. `SET_BLE_PASS` is
+      deferred to the BLE transport epic (see Epic 8) — not part of v1.
 - [ ] Response frame: same shape, status code distinguishes
       `OK` / `ERR` / `INTERRUPTED`.
 
@@ -211,8 +212,7 @@ as a library from Python application code.
       used internally), not an a7p blob.
 - [ ] `RESET` — needs a definition: clear cached `Shot` state, soft-reset
       the MCU, or both under different codes?
-- [ ] `SET_BLE_PASS` — the BLE transport itself is out of scope for this
-      phase (Epic 4). **Open:** stub this command now as a placeholder, or
-      hold it until the BLE epic so there's no dead code in the meantime.
+- [x] **Resolved:** `SET_BLE_PASS` is deferred entirely until the BLE
+      transport epic — no stub in v1, to avoid dead code in the meantime.
 - [ ] `IDENT` — version + capabilities; minimum viable version is just the
       existing `bc.version()` passthrough.
