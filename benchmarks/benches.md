@@ -1,3 +1,17 @@
+## Summary
+
+Reference: RP2040 Stock (125 MHz) `integrate()` 1 km avg = 1.0x.
+
+| Architecture / Chip                         | Mode                             | integrate(1 km) | integrate(3 km) | integrate_at() | find_zero_angle() | find_apex() | Shots/sec (1km) |     Speedup |
+| -------------------------------------------- | -------------------------------- | --------------: | --------------: | -------------: | ----------------: | ----------: | --------------: | -------------: |
+| RP2040 (armv6m)                             | Stock (125 MHz)                 |       353.75 ms |      2158.65 ms |       66.99 ms |         119.07 ms |    33.42 ms |             2.8 | 1.0x (baseline) |
+| RP2040 (armv6m)                             | OC (200 MHz)                    |       221.08 ms |      1349.12 ms |       41.88 ms |          74.43 ms |    20.90 ms |             4.5 |           1.6x |
+| RP2350 (armv7m, soft-float)                 | Stock (150 MHz)                 |       140.88 ms |       843.10 ms |       27.10 ms |          48.40 ms |    13.41 ms |             7.1 |           2.5x |
+| RP2350 (armv7m, soft-float)                 | OC (200 MHz)                    |       105.71 ms |       632.27 ms |       20.36 ms |          36.30 ms |    10.09 ms |             9.5 |           3.3x |
+| RP2350 (armv7emsp, hardware FPU)            | Stock (150 MHz)                 |        15.99 ms |        73.20 ms |        2.42 ms |           4.13 ms |     1.21 ms |            62.6 |          22.1x |
+| RP2350 (armv7emsp, hardware FPU)            | OC (200 MHz)                    |        11.98 ms |        54.91 ms |        1.81 ms |           3.10 ms |     0.91 ms |            83.6 |          29.5x |
+| ESP32-S3 (xtensawin, usermod, hardware FPU) | Stock (240 MHz, no OC headroom) |        14.85 ms |        66.88 ms |        2.51 ms |           4.01 ms |     1.48 ms |            67.4 |          23.8x |
+
 ## Stock
 
 ### RP2040 (armv6m)
@@ -356,6 +370,82 @@ Benchmark Summary
   Trajectory (1 km, 10 m steps): 83.6 shots/sec
   Interpolation: 551.8 calls/sec
   Zero finding: 322.4 calls/sec
+============================================================
+Benchmark complete.
+
+
+## ESP32-S3 (xtensawin)
+
+Board: LilyGO T-Display-S3 (ESP32-S3R8, 16MB flash, 8MB Octal PSRAM).
+Firmware: official `ESP32_GENERIC_S3-SPIRAM_OCT` v1.29.0 build, `usermod`
+(bclibc compiled directly into the firmware via `usermod/micropython.cmake`,
+ESP-IDF v5.5.2), 240 MHz stock.
+
+**`natmod` (`ARCH=xtensawin`) does NOT work on this firmware** -- the
+built `.mpy` imports cleanly (`dir()` shows every expected attribute) but
+crashes the whole board on the *first* native call, even the trivial
+`bc.version()`, before any bclibc computation runs. Confirmed not a repeat
+of the armv7emsp float-ABI bug (Xtensa's calling convention has no
+hard/softfp split -- `dynruntime.mk`'s `xtensawin` branch sets no
+`-mfloat-abi`-equivalent flag at all). The xtensawin natmod build has 72 GOT
+entries vs. 2 on the ARM builds; root cause not yet isolated -- worth a
+minimal non-bclibc probe natmod to confirm whether *any* xtensawin natmod
+call crashes on this firmware, or something bclibc-specific. `usermod`
+(below) sidesteps the question entirely -- no natmod relocation/loading step
+at all, statically linked into the firmware.
+
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: ed3b702-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 14.85 ms  (14853 µs)
+  Min: 14263 µs  Max: 19161 µs  p95: 19161 µs  p99: 19161 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 66.88 ms  (66875 µs)
+  Min: 66824 µs  Max: 66968 µs  p95: 66968 µs  p99: 66968 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 2.509 ms  (2508.6 µs)
+  Min: 851 µs  Max: 4459 µs  p95: 4448 µs  p99: 4456 µs
+  Calls: 500
+  ~399 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 4.014 ms  (4014.0 µs)
+  Min: 3991 µs  Max: 4152 µs  p95: 4128 µs  p99: 4152 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 1.475 ms  (1474.5 µs)
+  Min: 1458 µs  Max: 1643 µs  p95: 1497 µs  p99: 1643 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 38,976 B
+  After integrate: 49,056 B
+  After GC: 49,040 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 8,282,560 B → 8,272,496 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 67.4 shots/sec
+  Interpolation: 396.9 calls/sec
+  Zero finding: 249.8 calls/sec
 ============================================================
 Benchmark complete.
 
