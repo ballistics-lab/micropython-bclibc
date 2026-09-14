@@ -55,9 +55,14 @@ as a library from Python application code.
       the existing `_MAX_DRAG_PTS=128` constant, no new size constant
       needed); the function writes packed float32 directly via a new
       `_wrf()` helper (write-side mirror of the existing `_rdf()`) and
-      returns only the written count. Reuses the already-resident
-      `g1_mach`/`g1_cd`/`G1_N` and `g7_mach`/`g7_cd`/`G7_N` tables from
-      `src/drag_tables.h`. Algorithm: sort BC points by Mach,
+      returns only the written count. **Must work against both reference
+      tables, selected by `drag_type`** — `DRAG_G1` uses
+      `g1_mach`/`g1_cd`/`G1_N` (79 points), `DRAG_G7` uses
+      `g7_mach`/`g7_cd`/`G7_N` (82 points), both from `src/drag_tables.h`.
+      The two tables are different lengths, so the returned `count` varies
+      by `drag_type` — callers must use it, not assume either table's
+      size; both fit comfortably under the shared `_MAX_DRAG_PTS=128`
+      output-buffer cap regardless. Algorithm: sort BC points by Mach,
       linear-interpolate the BC ratio at each reference-table Mach value
       (clamped at the ends, matching py-ballisticcalc's
       `linear_interpolation`), divide the reference Cd by that ratio.
@@ -81,7 +86,11 @@ as a library from Python application code.
       caller hand-builds a plain Python sequence of floats — don't break
       that usage.
 - [ ] Test numerical identity against py-ballisticcalc's
-      `DragModelMultiBC`, same spirit as `tiny_bclibc/tests/test_identity.cpp`.
+      `DragModelMultiBC`, same spirit as `tiny_bclibc/tests/test_identity.cpp`
+      — **cover both `DRAG_G1` and `DRAG_G7` as the reference table**, not
+      just one; they have different point counts and different Mach
+      breakpoints (e.g. G7 has a 0.65 point G1 doesn't), so a G7-only test
+      wouldn't catch a G1-specific indexing/length bug.
 - [ ] **Scope decision:** v1 reference table is G1/G7 only (what's already
       in ROM). py-ballisticcalc's `DragModelMultiBC` accepts an arbitrary
       reference `drag_table`; not porting that for now — flag if a
