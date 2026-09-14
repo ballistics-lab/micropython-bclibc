@@ -4,7 +4,7 @@
 /* Built-in G1 and G7 drag tables.
  * Requires real_t and REAL_C() from platform.h to be in scope before inclusion. */
 
-/* ── G1 ──────────────────────────────────────────────────────────────────── */
+/* ── G1 ──────────────────────────────────────────────────────────────────────── */
 
 static const real_t g1_mach[] = {
     REAL_C(0.00),
@@ -170,7 +170,16 @@ static const real_t g1_cd[] = {
 };
 #define G1_N ((int32_t)(sizeof(g1_mach) / sizeof(g1_mach[0])))
 
-/* ── G7 ──────────────────────────────────────────────────────────────────── */
+/* ── G7 ──────────────────────────────────────────────────────────────────────── */
+/* Corrected 2026-09-14: source data replaced wholesale with
+ * py_ballisticcalc.drag_tables.TableG7 (the project's own accuracy
+ * reference). The previous table was missing two supersonic-tail points
+ * (Mach 2.85, 2.95) and had drifted CD values for every point from
+ * Mach 2.80 through 5.00 (up to +0.0065, ~3.7% relative error at the
+ * worst point, Mach 4.60) -- confirmed by cross-checking build_multibc()'s
+ * output against a real py-ballisticcalc DragModelMultiBC() run
+ * (examples/hor_375ct_390_atip.py). G1 was independently verified exact
+ * (79/79 points, zero diff) and is unchanged. */
 
 static const real_t g7_mach[] = {
     REAL_C(0.00),
@@ -238,7 +247,9 @@ static const real_t g7_mach[] = {
     REAL_C(2.70),
     REAL_C(2.75),
     REAL_C(2.80),
+    REAL_C(2.85),
     REAL_C(2.90),
+    REAL_C(2.95),
     REAL_C(3.00),
     REAL_C(3.10),
     REAL_C(3.20),
@@ -321,24 +332,26 @@ static const real_t g7_cd[] = {
     REAL_C(0.2615),
     REAL_C(0.2588),
     REAL_C(0.2561),
-    REAL_C(0.2534),
-    REAL_C(0.2481),
-    REAL_C(0.2429),
-    REAL_C(0.2379),
-    REAL_C(0.2330),
-    REAL_C(0.2283),
-    REAL_C(0.2238),
-    REAL_C(0.2194),
-    REAL_C(0.2151),
-    REAL_C(0.2110),
-    REAL_C(0.2070),
-    REAL_C(0.2032),
-    REAL_C(0.1995),
-    REAL_C(0.1924),
-    REAL_C(0.1858),
-    REAL_C(0.1794),
-    REAL_C(0.1732),
+    REAL_C(0.2533),
+    REAL_C(0.2506),
+    REAL_C(0.2479),
+    REAL_C(0.2451),
+    REAL_C(0.2424),
+    REAL_C(0.2368),
+    REAL_C(0.2313),
+    REAL_C(0.2258),
+    REAL_C(0.2205),
+    REAL_C(0.2154),
+    REAL_C(0.2106),
+    REAL_C(0.2060),
+    REAL_C(0.2017),
+    REAL_C(0.1975),
+    REAL_C(0.1935),
+    REAL_C(0.1861),
+    REAL_C(0.1793),
+    REAL_C(0.1730),
     REAL_C(0.1672),
+    REAL_C(0.1618),
 };
 #define G7_N ((int32_t)(sizeof(g7_mach) / sizeof(g7_mach[0])))
 
