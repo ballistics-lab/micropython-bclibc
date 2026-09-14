@@ -201,6 +201,32 @@ as a library from Python application code.
         `INTERRUPTED` without touching it. (Full detail preserved from
         the earlier draft of this epic — revisit only if a single-core
         target is actually added to scope.)
+  - **Unix port** (relevant — it's the "virtual module" deliverable named
+        in the original project idea, not just a test convenience): no
+        real cores, `_thread` there wraps POSIX pthreads.
+        `pthread_cancel()` is **not** a good fit as-is — its default
+        deferred cancellation type only fires at cancellation points
+        (mostly blocking syscalls), and `tiny_bclibc`'s RK4 loop is pure
+        computation with none, so deferred cancel would simply never
+        interrupt it without inserted `pthread_testcancel()` checkpoints
+        — the same cooperative-checkpoint problem this epic is avoiding
+        for the embedded targets, resurfacing here.
+        `PTHREAD_CANCEL_ASYNCHRONOUS` avoids that but carries the same
+        risk class as killing an embedded worker mid-lock, plus it can
+        land mid-libc-call. **Recommended default:** `pthread_kill(tid,
+        SIGUSR1)` from the dispatcher thread, worker's signal handler
+        calls `siglongjmp` (the async-signal-safe pair — plain
+        `setjmp`/`longjmp` is not safe to use from a signal handler) —
+        functionally the same shape as the single-core fallback above,
+        using the correct POSIX primitives instead of an MCU ISR.
+        **Alternative worth checking:** if the unix port's `os` module
+        exposes `fork()` (not confirmed), a forked worker process +
+        `SIGKILL` sidesteps the shared-lock risk entirely (separate
+        address space, no shared MicroPython heap/GIL to corrupt) — at
+        the cost of needing IPC (socket/pipe) instead of shared buffers
+        for the `Shot`/result data. Bigger change; only worth it if fork
+        turns out to be available and the isolation is wanted for other
+        reasons too.
 - [ ] `INTERRUPTED` response status for whatever got preempted (distinct
       from the normal response to the command that preempted it).
 - [ ] `INTEGRATE` (streamed) keeps its independent cooperative hook
