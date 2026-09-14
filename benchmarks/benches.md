@@ -140,6 +140,13 @@ corrupted, so integrate_at()/find_apex() always raised "interception error".
 Elevation avg (0.1434°) and apex (532.1 ft, 0.6 ft) below match the other
 platforms exactly, confirming the fix, not just that it no longer crashes.
 
+Built with `make ARCH=armv7emsp RP2350=1 dist`, not the plain `ARCH=armv7emsp`
+from the table above in `## Build`. `armv7emsp` on its own still means
+`dynruntime.mk`'s own default (hard-float, right for STM32F4 and for the
+`test (armv7emsp / 32-bit ARM Linux)` CI leg) -- RP2350's softfp firmware
+needs the explicit override. See README.md's own "RP2350 needs a separate
+build" section for why this can't just be the shared default.
+
 Already known upstream, actively being fixed from the firmware side:
 [micropython/micropython#19279](https://github.com/micropython/micropython/issues/19279)
 ("mp_obj_new_float returns 0") is the identical symptom/root cause,

@@ -127,7 +127,7 @@ make ARCH=x64        dist   # x64                                → natmod/buil
 make ARCH=x86        dist   # x86                                → natmod/build/x86/
 make ARCH=armv6m     dist   # Cortex-M0+                         → natmod/build/armv6m/  — Raspberry Pi Pico
 make ARCH=armv7m     dist   # Cortex-M3                          → natmod/build/armv7m/  — generic Cortex-M3
-make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp/ — RP2350, STM32F4
+make ARCH=armv7emsp  dist   # Cortex-M4F/M7, single-FPU          → natmod/build/armv7emsp/ — STM32F4 (hard-float, dynruntime.mk default)
 make ARCH=armv7emdp  dist   # Cortex-M7, double-FPU (hardware)   → natmod/build/armv7emdp/ — STM32H7
 make ARCH=xtensawin  dist   # ESP32/ESP32-S3                     → natmod/build/xtensawin/
 make ARCH=xtensa     dist   # ESP8266                            → natmod/build/xtensa/
@@ -140,6 +140,29 @@ and `src/tiny_bclibc.py` are merged into one file (see `natmod/Makefile`'s `SRC`
 one file needs to be copied to the device / uploaded as a release artifact.
 
 `bc.version()` returns `"1.1.3-sp"`.
+
+### RP2350 (rp2's RPI_PICO2/RPI_PICO2_W) needs a separate build
+
+The `armv7emsp` build above targets `dynruntime.mk`'s own default
+(`-mfloat-abi=hard`) — right for STM32F4 and for the "32-bit ARM Linux"
+test route below, but **wrong for RP2350**: pico-sdk builds that firmware
+`-mfloat-abi=softfp` (a pico-sdk quirk, not something this project
+controls — see upstream
+[micropython#19279](https://github.com/micropython/micropython/issues/19279) /
+[#19661](https://github.com/micropython/micropython/pull/19661)). A `hard`
+natmod loads and runs fine on RP2350 but every float crossing the
+natmod↔interpreter boundary comes back corrupted — no error, just wrong
+numbers. Build RP2350's variant explicitly:
+
+```bash
+make ARCH=armv7emsp RP2350=1 dist   # → natmod/build/armv7emsp/tiny_bclibc.mpy (softfp)
+```
+
+Not a `cibuildmp`/release-matrix target: the on-disk `.mpy` format has no
+room to tag this ABI difference (see `natmod/Makefile`'s own comment above
+the `RP2350` override for why), so publishing both as installable assets
+under the same `armv7emsp` arch tag isn't possible — build this one
+yourself for RP2350 boards.
 
 ### Running an ARM natmod on an ARM Linux host
 
