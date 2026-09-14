@@ -13,6 +13,7 @@
  *   bclibc.find_apex(shot._buf, shot._holder)                       -> tuple
  *   bclibc.find_max_range(shot._buf, shot._holder, lo, hi)          -> (float_ft, float_rad)
  *   bclibc.integrate_at(shot._buf, shot._holder, key, target)       -> (tuple_base, tuple_full)
+ *   bclibc.build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) -> count
  *
  * All shot/request arguments are packed binary buffers produced by
  * bclibc_types.Shot.pack() / Request.pack() — no dict parsing.
@@ -88,6 +89,7 @@ static const char *_tiny_bclibc_err_str(int32_t rc)
 
 #define MAX_DRAG_PTS 128
 #define MAX_WINDS 16
+#define MAX_BC_POINTS 16
 
 /* Shot buffer offsets (must match bclibc_types._SHOT_HDR layout) */
 #define SHOT_HDR_SIZE 100u
@@ -100,7 +102,7 @@ static const char *_tiny_bclibc_err_str(int32_t rc)
 /* Request buffer offsets (struct '<3fi') */
 #define REQ_SIZE 16u
 
-/* ── Safe unaligned read helpers (byte-by-byte, no <string.h> needed) ────── */
+/* ── Safe unaligned read/write helpers (byte-by-byte, no <string.h> needed) ── */
 
 static float _rdf(const uint8_t *p, uint32_t off)
 {
@@ -123,7 +125,123 @@ static uint16_t _rdu16(const uint8_t *p, uint32_t off)
     return (uint16_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8));
 }
 
+static void _wrf(uint8_t *p, uint32_t off, float v)
+{
+    union
+    {
+        uint32_t u;
+        float f;
+    } x;
+    x.f = v;
+    p[off] = (uint8_t)(x.u & 0xffu);
+    p[off + 1] = (uint8_t)((x.u >> 8) & 0xffu);
+    p[off + 2] = (uint8_t)((x.u >> 16) & 0xffu);
+    p[off + 3] = (uint8_t)((x.u >> 24) & 0xffu);
+}
+
 #include "drag_tables.h"
+
+/* ── Multi-BC drag curve builder ─────────────────────────────────────────── */
+
+/* Linear interpolation of BC at a single Mach value; bc_mach[]/bc_val[] must
+ * be sorted ascending by bc_mach. Clamps outside the point range (returns
+ * the nearest endpoint's value), matching py-ballisticcalc's
+ * linear_interpolation() boundary behavior. */
+static real_t _interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
+{
+    if (mach <= bc_mach[0])
+        return bc_val[0];
+    if (mach >= bc_mach[n - 1])
+        return bc_val[n - 1];
+    int32_t lo = 0, hi = n - 1;
+    while (hi - lo > 1)
+    {
+        int32_t mid = (lo + hi) / 2;
+        if (bc_mach[mid] <= mach)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    real_t t = (mach - bc_mach[lo]) / (bc_mach[hi] - bc_mach[lo]);
+    return bc_val[lo] + t * (bc_val[hi] - bc_val[lo]);
+}
+
+/* Insertion sort by mach ascending; n is small (<= MAX_BC_POINTS), so O(n^2)
+ * is fine and this avoids pulling in qsort(). */
+static void _sort_bc_points(real_t *mach, real_t *val, int32_t n)
+{
+    for (int32_t i = 1; i < n; i++)
+    {
+        real_t m = mach[i], v = val[i];
+        int32_t j = i - 1;
+        while (j >= 0 && mach[j] > m)
+        {
+            mach[j + 1] = mach[j];
+            val[j + 1] = val[j];
+            j--;
+        }
+        mach[j + 1] = m;
+        val[j + 1] = v;
+    }
+}
+
+/* build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) -> count
+ *
+ * Folds multiple BC-at-Mach points into a single custom drag curve, the same
+ * way py-ballisticcalc's DragModelMultiBC() does: for each point of the
+ * chosen reference table (G1 or G7), divide its Cd by the BC ratio
+ * interpolated from bc_points at that point's Mach value. The caller always
+ * passes bc=1.0 into Shot() for the resulting curve — the constant cancels
+ * out of drag_by_mach()'s Cd(mach)*K/bc algebraically, so no BC baseline
+ * (sectional density or otherwise) needs to be threaded through here.
+ *
+ * bc_points_buf: bc_points_buf.len/8 points, each an interleaved
+ *   (mach:float32, bc:float32) pair, any order (sorted internally).
+ * out_mach_buf / out_cd_buf: caller-allocated write buffers, each at least
+ *   MAX_DRAG_PTS*4 bytes (covers both G1_N and G7_N); filled with packed
+ *   float32 values for exactly the returned count, tail left untouched.
+ */
+static mp_obj_t mp_bclibc_build_multibc(size_t n_args, const mp_obj_t *args)
+{
+    /* args: drag_type (0=G1, 1=G7), bc_points_buf, out_mach_buf, out_cd_buf */
+    uint8_t drag_type = (uint8_t)mp_obj_get_int(args[0]);
+
+    mp_buffer_info_t pbi, mbi, cbi;
+    mp_get_buffer_raise(args[1], &pbi, MP_BUFFER_READ);
+    mp_get_buffer_raise(args[2], &mbi, MP_BUFFER_WRITE);
+    mp_get_buffer_raise(args[3], &cbi, MP_BUFFER_WRITE);
+
+    int32_t n_pts = (int32_t)(pbi.len / 8u);
+    if (n_pts < 1 || n_pts > MAX_BC_POINTS)
+        _RAISE_BCLIBC_ERROR("invalid bc_points count");
+
+    real_t bc_mach[MAX_BC_POINTS], bc_val[MAX_BC_POINTS];
+    const uint8_t *pp = (const uint8_t *)pbi.buf;
+    for (int32_t i = 0; i < n_pts; i++)
+    {
+        bc_mach[i] = (real_t)_rdf(pp, (uint32_t)i * 8u);
+        bc_val[i] = (real_t)_rdf(pp, (uint32_t)i * 8u + 4u);
+    }
+    _sort_bc_points(bc_mach, bc_val, n_pts);
+
+    const real_t *ref_mach = (drag_type == 0u) ? g1_mach : g7_mach;
+    const real_t *ref_cd = (drag_type == 0u) ? g1_cd : g7_cd;
+    int32_t ref_n = (drag_type == 0u) ? G1_N : G7_N;
+
+    if ((uint32_t)mbi.len < (uint32_t)ref_n * 4u || (uint32_t)cbi.len < (uint32_t)ref_n * 4u)
+        _RAISE_BCLIBC_ERROR("output buffer too small");
+
+    uint8_t *mo = (uint8_t *)mbi.buf;
+    uint8_t *co = (uint8_t *)cbi.buf;
+    for (int32_t i = 0; i < ref_n; i++)
+    {
+        real_t bc_at = _interp_bc(bc_mach, bc_val, n_pts, ref_mach[i]);
+        _wrf(mo, (uint32_t)i * 4u, (float)ref_mach[i]);
+        _wrf(co, (uint32_t)i * 4u, (float)(ref_cd[i] / bc_at));
+    }
+    return mp_obj_new_int(ref_n);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bclibc_build_multibc_obj, 4, 4, mp_bclibc_build_multibc);
 
 /* ── Tuple converters ────────────────────────────────────────────────────── */
 
@@ -469,6 +587,7 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_find_apex, MP_OBJ_FROM_PTR(&mp_bclibc_find_apex_obj));
     mp_store_global(MP_QSTR_find_max_range, MP_OBJ_FROM_PTR(&mp_bclibc_find_max_range_obj));
     mp_store_global(MP_QSTR_integrate_at, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_at_obj));
+    mp_store_global(MP_QSTR_build_multibc, MP_OBJ_FROM_PTR(&mp_bclibc_build_multibc_obj));
 
     /* Trajectory flag constants */
     mp_store_global(MP_QSTR_TRAJ_FLAG_NONE, MP_OBJ_NEW_SMALL_INT(TINY_BCLIBC_TRAJ_FLAG_NONE));
@@ -527,6 +646,7 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_find_apex), MP_ROM_PTR(&mp_bclibc_find_apex_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_max_range), MP_ROM_PTR(&mp_bclibc_find_max_range_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_at), MP_ROM_PTR(&mp_bclibc_integrate_at_obj)},
+    {MP_ROM_QSTR(MP_QSTR_build_multibc), MP_ROM_PTR(&mp_bclibc_build_multibc_obj)},
     /* trajectory flags */
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_NONE), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_NONE)},
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_ZERO_UP), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_ZERO_UP)},

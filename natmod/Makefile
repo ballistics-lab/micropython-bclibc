@@ -159,6 +159,68 @@ endif
 _TINY_HEADERS := $(wildcard $(BCLIBC_ROOT)/tiny_bclibc/include/tiny_bclibc/*.h)
 $(SRC_O): $(_TINY_HEADERS)
 
+# ── armv7emsp float ABI: RP2350 is softfp, everyone else on this ARCH is
+#    hard -- opt in per build, do NOT flip the shared default ──────────────
+# dynruntime.mk's own armv7emsp branch hardcodes -mfpu=fpv4-sp-d16
+# -mfloat-abi=hard, which is correct for this ARCH's *other* real targets
+# (STM32/Cortex-M4F) and for the natmod test suite's own "32-bit ARM Linux"
+# CI leg (test-arm-linux in natmod.yml) -- ubuntu-24.04-arm's armhf unix
+# port is hard-float per AAPCS-VFP, same as STM32F4, and that CI job was
+# deliberately built expecting armv7emsp/armv7emdp to line up with it (see
+# natmod.yml's own comment above test-arm-linux: armv6m/armv7m are soft and
+# are *excluded* from that matrix for exactly this reason -- silent wrong
+# answers, not a link error, not a crash).
+#
+# RP2350 (rp2's RPI_PICO2/RPI_PICO2_W, Cortex-M33) is the outlier: pico-sdk
+# builds that whole firmware -mfloat-abi=softfp (see
+# lib/pico-sdk/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake in the
+# micropython tree) -- a pico-sdk quirk predating pico-sdk 2.3.0's new
+# PICO_HARD_FLOAT_ABI option (see upstream micropython#19661, open as of
+# writing, which fixes it from the firmware side once that pico-sdk version
+# is mainstream). A natmod built hard against that softfp firmware still
+# links and runs, but every float crossing the mp_fun_table boundary
+# (mp_obj_new_float_from_d, mp_obj_get_float_to_d, float args/returns) is
+# silently corrupted -- caught live on real RPI_PICO2 hardware:
+# integrate_at() always raised "interception error" because the incoming
+# target distance decoded as garbage. Same failure mode upstream's own
+# micropython#19279 already documents independently.
+#
+# There is no way to ship one armv7emsp .mpy that's correct for both: the
+# on-disk .mpy header only encodes the coarse arch index (MP_NATIVE_ARCH_*),
+# nothing finer -- arch_flags exists in the format but is hardcoded to
+# RV32's own Zba/Zcmp extension bits in py/persistentcode.c (any other arch
+# with arch_flags set hits an unconditional `mp_raise_ValueError("incompatible
+# .mpy file")`, checked against the actual upstream source, not assumed) --
+# and build_release_assets.py derives its package.json tag from that same
+# arch index, so two armv7emsp builds would collide on one tag and mip could
+# never pick the right one; the script refuses outright ("duplicate arch")
+# if handed both. So this stays opt-in, building RP2350's variant locally:
+#   make ARCH=armv7emsp RP2350=1 dist
+# -- not a second cibuildmp/release-matrix entry.
+#
+# Just appending -mfloat-abi=softfp via CFLAGS_EXTRA (after dynruntime.mk's
+# own -mfloat-abi=hard) is not enough: dynruntime.mk's own LINK_RUNTIME=1
+# block (above) re-probes `$(CROSS)gcc $(CFLAGS) --print-libgcc-file-name`
+# for the newlib libgcc.a/libm.a multilib variant to statically link in, and
+# with *both* -mfloat-abi flags present that probe stops matching any
+# thumb/v7e-m multilib at all and silently falls back to the base (non-thumb)
+# variant -- confirmed by a real build: mpy_ld.py then aborts linking with
+# "AssertionError: (28, '__ieee754_sqrtf', ...)" because that library's
+# relocations don't fit the M-profile native module format.
+# `filter-out` strips the conflicting flag from the *expanded* value, so
+# there's exactly one -mfloat-abi in CFLAGS/CFLAGS_ARCH by the time the
+# LINK_RUNTIME libgcc/libm probe (and every compile recipe) reads them --
+# both already ran during the `include` above, so redo them here.
+RP2350 ?= 0
+ifeq ($(ARCH)-$(RP2350),armv7emsp-1)
+CFLAGS       := $(filter-out -mfloat-abi=hard,$(CFLAGS)) -mfloat-abi=softfp
+CFLAGS_ARCH  := $(filter-out -mfloat-abi=hard,$(CFLAGS_ARCH)) -mfloat-abi=softfp
+MPY_LD_FLAGS := $(filter-out -l$(LIBGCC_PATH) -l$(LIBM_PATH),$(MPY_LD_FLAGS))
+LIBGCC_PATH  := $(realpath $(shell $(CROSS)gcc $(CFLAGS) --print-libgcc-file-name))
+LIBM_PATH    := $(realpath $(shell $(CROSS)gcc $(CFLAGS) --print-file-name=libm.a))
+MPY_LD_FLAGS += $(addprefix -l, $(LIBGCC_PATH) $(LIBM_PATH))
+endif
+
 # ── RISC-V + Xtensa: add libgcc.a for soft-float builtins ────────────────────
 # Must be after include so CROSS and CFLAGS_ARCH are set by dynruntime.mk.
 # Both use the fdlibm-from-source route above (no LINK_RUNTIME, which used

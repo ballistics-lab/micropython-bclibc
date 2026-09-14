@@ -104,6 +104,52 @@ jobs:
           path: natmod/build/${{ matrix.arch }}*/
           if-no-files-found: error
 
+  # ── RP2350 (rp2's RPI_PICO2/RPI_PICO2_W): separate armv7emsp variant ──────
+  # pico-sdk builds that firmware -mfloat-abi=softfp, unlike every other real
+  # armv7emsp target (STM32F4, and the "32-bit ARM Linux" test job below,
+  # whose armhf host is hard-float) -- see natmod/Makefile's own RP2350
+  # override comment for the full story. The on-disk .mpy format has no room
+  # to tag this ABI difference (arch_flags is hardcoded to RV32's own
+  # extension bits in py/persistentcode.c), so this can't be a second entry
+  # in the main package.json the `build` matrix above feeds -- release.yml
+  # gives it its own package.rp2350.json instead. A separate job, not a
+  # matrix leg on `build` above: same ARCH=armv7emsp, so it would overwrite
+  # that job's own natmod/build/armv7emsp/ output if it ran in the same
+  # workspace.
+  build-rp2350:
+    name: build (armv7emsp / RP2350)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ballistics-lab/cibuildmp@v0.7.3
+        env:
+          # No action input for extra-make-args (composite action's own
+          # inputs are package-dir/output-dir/config-file/build/skip/extras/
+          # keep-going only) -- the environment form is the only way to pass
+          # a per-build make argument through this action.
+          CIBMP_EXTRA_MAKE_ARGS: RP2350=1
+        with:
+          build: mpy*-${{ env.MPY_TAG }}-armv7emsp
+
+      - uses: actions/upload-artifact@v7
+        with:
+          # Deliberately NOT "tiny-bclibc-*" -- release.yml's own main
+          # package.json assembly step downloads every artifact matching
+          # that pattern and would otherwise pick this up too, alongside the
+          # plain `build` job's own armv7emsp artifact. Both decode to the
+          # same arch=armv7emsp tag (the .mpy format can't express the ABI
+          # difference -- see natmod/Makefile's RP2350 comment), so
+          # build_release_assets.py would hit its "duplicate arch" guard.
+          # release.yml downloads this one by its exact name instead, in its
+          # own separate step, and feeds it through build_release_assets.py
+          # on its own with --asset-name/--manifest-name overrides.
+          name: natmod-armv7emsp-rp2350
+          path: natmod/build/armv7emsp*/
+          if-no-files-found: error
+
   # ── Test built artifacts (x64 native, x86 32-bit, armv7m via QEMU) ────────
   # One matrix job instead of three near-identical ones -- each leg only
   # differs in how the interpreter gets built (a stock cibuildmp manylinux
@@ -203,7 +249,19 @@ jobs:
 
       - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
         if: matrix.kind == 'qemu'
-        run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
+        # MICROPY_HEAP_SIZE override: ports/qemu/Makefile's own ARM default
+        # is 143360 B (140 KB), but MPS2_AN385's linker script (mcu/arm/
+        # mps2.ld) gives the emulated board a full 4 MB RAM region -- the
+        # 140 KB heap is an arbitrary upstream default, not a real hardware
+        # limit, and it's too tight for tests/test_bclibc.py's own "RAM:
+        # integrate 3 km / 100 m step" test once earlier tests in the same
+        # run have fragmented/consumed part of it: "memory allocation
+        # failed, allocating 6016 bytes". Real target boards don't hit this
+        # -- RP2040 alone has ~150 KB free at that same point (see
+        # benchmarks/benches.md's own "Free memory" lines). 1 MB leaves
+        # ample headroom inside the 4 MB region without masking a genuine
+        # leak (bclibc's own peak allocation for this trajectory is ~10 KB).
+        run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 MICROPY_HEAP_SIZE=1048576
 
       - uses: actions/download-artifact@v8
         with:

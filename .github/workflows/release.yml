@@ -11,6 +11,15 @@ name: release
 # See tools/build_release_assets.py for how the assets and package.json are
 # assembled -- it reads each file's own compat tag directly from its .mpy
 # header, so it takes the built files as plain positional arguments.
+#
+# One extra asset pair rides along outside that main manifest: RP2350's own
+# armv7emsp/softfp build (tiny_bclibc.rp2350.mpy + package.rp2350.json) --
+# see natmod/Makefile's own RP2350 override comment for why it can't be a
+# second entry in package.json (the .mpy format has no room to tag it, and
+# mip couldn't choose between two entries sharing one arch tag anyway).
+# RP2350 users install it with mip pointed directly at that manifest's own
+# release URL, e.g.:
+#   mpremote mip install https://github.com/<owner>/<repo>/releases/download/<tag>/package.rp2350.json
 
 on:
   push:
@@ -54,6 +63,30 @@ jobs:
             --tag "${{ github.ref_name }}" \
             --out-dir release_assets \
             artifacts/*/*/tiny_bclibc.mpy
+
+      - uses: actions/download-artifact@v8
+        with:
+          # Exact name, not the "tiny-bclibc-*" pattern above -- see
+          # natmod.yml's own comment on this artifact's name for why it has
+          # to stay out of that glob (same arch=armv7emsp tag as the plain
+          # build, would trip build_release_assets.py's duplicate-arch guard
+          # if fed through the same call above).
+          name: natmod-armv7emsp-rp2350
+          path: artifacts-rp2350
+
+      - name: Assemble RP2350 armv7emsp/softfp variant into its own manifest
+        # Same script, its own manifest file: mip can't pick between two
+        # entries sharing one arch tag, so this variant isn't in the main
+        # package.json at all (see natmod/Makefile's RP2350 comment for the
+        # underlying .mpy-format reason). RP2350 users point mip straight at
+        # this file's own release URL instead of the default package.json.
+        run: |
+          python3 tools/build_release_assets.py \
+            --tag "${{ github.ref_name }}" \
+            --out-dir release_assets \
+            --asset-name tiny_bclibc.rp2350.mpy \
+            --manifest-name package.rp2350.json \
+            artifacts-rp2350/*/tiny_bclibc.mpy
 
       - uses: actions/upload-artifact@v7
         with:

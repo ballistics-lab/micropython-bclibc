@@ -132,9 +132,29 @@ def main():
         "--out-dir", required=True, help="directory to write release assets into"
     )
     ap.add_argument(
+        "--asset-name",
+        default=None,
+        help="override the derived tiny_bclibc_<arch>.native.mpy asset filename "
+        "-- only valid with exactly one input file. For a variant that can't "
+        "share the main package.json's arch tag (e.g. RP2350's armv7emsp/"
+        "softfp build vs. everyone else's armv7emsp/hard -- see natmod/"
+        "Makefile's own RP2350 override comment), give it a distinct name here "
+        "and pair with --manifest-name to keep it out of the main manifest",
+    )
+    ap.add_argument(
+        "--manifest-name",
+        default="package.json",
+        help="filename for the written manifest (default: package.json) -- "
+        "point mip at a non-default one directly by URL to install a variant "
+        "that isn't in the main manifest",
+    )
+    ap.add_argument(
         "mpy_files", nargs="+", metavar="FILE.mpy", help="built native .mpy files"
     )
     args = ap.parse_args()
+
+    if args.asset_name and len(args.mpy_files) != 1:
+        raise SystemExit("--asset-name requires exactly one input file")
 
     os.makedirs(args.out_dir, exist_ok=True)
     urls = []
@@ -142,7 +162,7 @@ def main():
 
     for src in args.mpy_files:
         info = read_mpy_tag(src)
-        asset_name = f"tiny_bclibc_{info['arch']}.native.mpy"
+        asset_name = args.asset_name or f"tiny_bclibc_{info['arch']}.native.mpy"
 
         if asset_name in seen:
             raise SystemExit(
@@ -167,7 +187,7 @@ def main():
         "urls": urls,
         "version": args.tag.lstrip("v"),
     }
-    package_json_path = os.path.join(args.out_dir, "package.json")
+    package_json_path = os.path.join(args.out_dir, args.manifest_name)
     with open(package_json_path, "w") as f:
         json.dump(package_json, f, indent=2)
         f.write("\n")

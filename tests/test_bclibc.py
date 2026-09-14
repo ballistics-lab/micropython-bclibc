@@ -21,7 +21,7 @@ except NameError:
 sys.path.append(_HERE)
 
 import tiny_bclibc as bc
-from tiny_bclibc import Shot, Request, Wind, Config, DRAG_G7, DRAG_CUSTOM
+from tiny_bclibc import Shot, Request, Wind, Config, DRAG_G1, DRAG_G7, DRAG_CUSTOM
 
 # ── Custom drag table (same values as built-in G7) ────────────────────────
 G7_MACH = array.array(
@@ -92,7 +92,9 @@ G7_MACH = array.array(
         2.70,
         2.75,
         2.80,
+        2.85,
         2.90,
+        2.95,
         3.00,
         3.10,
         3.20,
@@ -111,6 +113,12 @@ G7_MACH = array.array(
         5.00,
     ],
 )
+# G7 CD values match py_ballisticcalc.drag_tables.TableG7 exactly (84 points,
+# including the 2.85/2.95 breakpoints and corrected supersonic-tail values --
+# see src/drag_tables.h's 2026-09-14 correction comment: the previous 82-point
+# table here and in drag_tables.h both carried a stale/wrong G7 tail, caught
+# by cross-checking build_multibc() against a real py-ballisticcalc
+# DragModelMultiBC() run).
 G7_CD = array.array(
     "f",
     [
@@ -178,24 +186,26 @@ G7_CD = array.array(
         0.2615,
         0.2588,
         0.2561,
-        0.2534,
-        0.2481,
-        0.2429,
-        0.2379,
-        0.2330,
-        0.2283,
-        0.2238,
-        0.2194,
-        0.2151,
-        0.2110,
-        0.2070,
-        0.2032,
-        0.1995,
-        0.1924,
-        0.1858,
-        0.1794,
-        0.1732,
+        0.2533,
+        0.2506,
+        0.2479,
+        0.2451,
+        0.2424,
+        0.2368,
+        0.2313,
+        0.2258,
+        0.2205,
+        0.2154,
+        0.2106,
+        0.2060,
+        0.2017,
+        0.1975,
+        0.1935,
+        0.1861,
+        0.1793,
+        0.1730,
         0.1672,
+        0.1618,
     ],
 )
 
@@ -457,6 +467,140 @@ try:
         )
 except Exception as ex:
     _fail("integrate_stream stop", ex)
+
+# -- MultiBC (multi-point BC drag curve builder) --------------------------------
+print("\n--- MultiBC ---")
+try:
+    # Single BC point => constant divisor everywhere => output must equal the
+    # reference table exactly (division by 1.0 is a no-op). Also exercises
+    # both drag_type values, per the backlog requirement to cover G1 and G7,
+    # not just one.
+    mach_g7, cd_g7, n_g7 = bc.MultiBC([(1.0, 1.0)], drag_type=DRAG_G7)
+    mach_g7_arr = array.array("f", mach_g7)
+    cd_g7_arr = array.array("f", cd_g7)
+    if n_g7 == len(G7_MACH):
+        _pass("MultiBC G7 identity — count={}".format(n_g7))
+    else:
+        _fail(
+            "MultiBC G7 identity count",
+            "expected {}, got {}".format(len(G7_MACH), n_g7),
+        )
+    ok = True
+    for i in range(n_g7):
+        if (
+            abs(mach_g7_arr[i] - G7_MACH[i]) > 1e-6
+            or abs(cd_g7_arr[i] - G7_CD[i]) > 1e-6
+        ):
+            ok = False
+            _fail(
+                "MultiBC G7 identity value @{}".format(i),
+                "mach {} vs {}, cd {} vs {}".format(
+                    mach_g7_arr[i], G7_MACH[i], cd_g7_arr[i], G7_CD[i]
+                ),
+            )
+            break
+    if ok:
+        _pass("MultiBC G7 identity — values match reference table exactly")
+except Exception as ex:
+    _fail("MultiBC G7 identity", ex)
+
+try:
+    # Non-trivial interpolation: BC rises linearly 1.0 (Mach 0) -> 2.0 (Mach 5),
+    # so at the reference table's Mach=1.0 point (Cd=0.3803),
+    # bc_interp(1.0) = 1.0 + 1.0/5.0 = 1.2, expected cd = 0.3803 / 1.2.
+    mach_i, cd_i, n_i = bc.MultiBC([(0.0, 1.0), (5.0, 2.0)], drag_type=DRAG_G7)
+    mach_i_arr = array.array("f", mach_i)
+    cd_i_arr = array.array("f", cd_i)
+    idx_mach1 = None
+    for i in range(n_i):
+        if abs(mach_i_arr[i] - 1.0) < 1e-6:
+            idx_mach1 = i
+            break
+    if idx_mach1 is None:
+        _fail("MultiBC G7 interpolation", "Mach=1.0 point not found in output")
+    else:
+        cv = cd_i_arr[idx_mach1]
+        expected = 0.3803 / 1.2
+        if abs(cv - expected) < 1e-4:
+            _pass(
+                "MultiBC G7 interpolation @Mach=1.0 — cd={:.5f} (expected {:.5f})".format(
+                    cv, expected
+                )
+            )
+        else:
+            _fail(
+                "MultiBC G7 interpolation @Mach=1.0",
+                "got {:.5f}, expected {:.5f}".format(cv, expected),
+            )
+except Exception as ex:
+    _fail("MultiBC G7 interpolation", ex)
+
+try:
+    # G1 table: same identity check (single BC point), checked at the
+    # first/last points only since this file doesn't carry a literal G1
+    # array the way it does for G7 above. Values read directly from
+    # src/drag_tables.h's g1_mach/g1_cd.
+    mach_g1, cd_g1, n_g1 = bc.MultiBC([(1.0, 1.0)], drag_type=DRAG_G1)
+    mach_g1_arr = array.array("f", mach_g1)
+    cd_g1_arr = array.array("f", cd_g1)
+    if (
+        abs(mach_g1_arr[0] - 0.00) < 1e-6
+        and abs(cd_g1_arr[0] - 0.2629) < 1e-6
+        and abs(mach_g1_arr[n_g1 - 1] - 5.00) < 1e-6
+        and abs(cd_g1_arr[n_g1 - 1] - 0.4988) < 1e-6
+    ):
+        _pass("MultiBC G1 identity — count={}, endpoints match".format(n_g1))
+    else:
+        _fail(
+            "MultiBC G1 identity",
+            "endpoints m0={} c0={} mlast={} clast={}".format(
+                mach_g1_arr[0],
+                cd_g1_arr[0],
+                mach_g1_arr[n_g1 - 1],
+                cd_g1_arr[n_g1 - 1],
+            ),
+        )
+    if n_g1 != n_g7:
+        _pass(
+            "MultiBC G1 vs G7 table length differs as expected ({} vs {})".format(
+                n_g1, n_g7
+            )
+        )
+    else:
+        _fail(
+            "MultiBC G1 vs G7 table length",
+            "expected different lengths, both were {}".format(n_g1),
+        )
+except Exception as ex:
+    _fail("MultiBC G1 identity", ex)
+
+try:
+    # Feed the result straight into Shot()'s fast byte-copy path and confirm
+    # it integrates without error (end-to-end plumbing check).
+    mach_mb, cd_mb, n_mb = bc.MultiBC([(1.0, 1.0)], drag_type=DRAG_G7)
+    shot_mb = Shot(
+        bc=1.0,
+        weight_grain=168.0,
+        diameter_inch=0.308,
+        length_inch=1.2,
+        muzzle_velocity_fps=2750.0,
+        sight_height_ft=0.125,
+        twist_inch=11.0,
+        drag_type=DRAG_CUSTOM,
+        drag_mach=mach_mb,
+        drag_cd=cd_mb,
+        drag_count=n_mb,
+    )
+    rows_mb, reason_mb = bc.integrate(shot_mb, REQUEST)
+    if len(rows_mb) >= 2:
+        _pass("MultiBC -> Shot() -> integrate — {} rows".format(len(rows_mb)))
+    else:
+        _fail(
+            "MultiBC -> Shot() -> integrate",
+            "expected >=2 rows, got {}".format(len(rows_mb)),
+        )
+except Exception as ex:
+    _fail("MultiBC -> Shot() -> integrate", ex)
 
 # -- RAM usage during 3 km trajectory (100 m step) ----------------------------
 print("\n--- RAM: integrate 3 km / 100 m step ---")

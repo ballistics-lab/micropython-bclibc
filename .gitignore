@@ -82,3 +82,4 @@ usermod/wasm_manifest.py
 **/*.egg-info
 **/.venv
 **/mpyhouse
+**/.mpy_ld_cache*

@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-09-14
+
+### Fixed
+
+#### `natmod/Makefile` — new `RP2350=1` override for armv7emsp float-ABI mismatch
+
+`dynruntime.mk`'s `armv7emsp` branch hardcodes `-mfloat-abi=hard`, correct
+for this ARCH's other real targets (STM32/Cortex-M4F) but wrong for rp2's
+`RPI_PICO2`/`RPI_PICO2_W` (Cortex-M33): pico-sdk builds that firmware
+`-mfloat-abi=softfp`. Every float crossing the `mp_fun_table` boundary
+(`mp_obj_new_float_from_d`, `mp_obj_get_float_to_d`, natmod function
+args/returns) was silently corrupted by the mismatch — confirmed live on
+real RPI_PICO2 hardware: `integrate_at()`/`find_apex()` always raised
+`"interception error"` because the incoming target distance decoded as
+garbage. Same failure mode upstream independently documents in
+[micropython#19279](https://github.com/micropython/micropython/issues/19279)
+(open) / [#19661](https://github.com/micropython/micropython/pull/19661)
+(open, fixes it from the firmware side via pico-sdk 2.3.0's
+`PICO_HARD_FLOAT_ABI`).
+
+`make ARCH=armv7emsp RP2350=1 dist` now filters `-mfloat-abi=hard` out of
+`CFLAGS`/`CFLAGS_ARCH` and re-adds `-mfloat-abi=softfp`, then redoes
+`LINK_RUNTIME=1`'s own `libgcc.a`/`libm.a` multilib resolution against the
+corrected flags (its result was baked in earlier in `dynruntime.mk`, before
+the override took effect, and a stray leftover `-mfloat-abi=hard` alongside
+the added `softfp` was enough to make that probe fall back to a non-thumb
+multilib entirely and fail to link). Verified on real RPI_PICO2 hardware:
+`find_zero_angle()`'s elevation (`0.1434°`) and `find_apex()`'s apex
+(`532.1 ft, 0.6 ft`) now match every other platform exactly — see
+[`benches.md`](benches.md).
+
+This is opt-in, not the new default for `ARCH=armv7emsp`: an earlier
+version of this fix flipped the ARCH-wide default to `softfp`, which broke
+`test (armv7emsp / 32-bit ARM Linux)` in CI — that job's `ubuntu-24.04-arm`
+host is hard-float (same as STM32F4), and the on-disk `.mpy` format has no
+room to tag *which* `armv7emsp` ABI a build targets (`arch_flags` in
+`py/persistentcode.c` is hardcoded to RV32's own extension bits; any other
+arch with it set hits an unconditional `incompatible .mpy file` error), so
+`tools/build_release_assets.py`'s `package.json` generation can't publish a
+`hard` and a `softfp` `armv7emsp` build side by side either — it refuses
+outright on the duplicate arch tag. RP2350 users build their own with
+`RP2350=1`; see [`README.md`](README.md#rp2350-rp2s-rpi_pico2rpi_pico2_w-needs-a-separate-build).
+
+### Added
+
+#### `natmod.yml`, `release.yml`, `tools/build_release_assets.py` — RP2350 gets its own release asset
+
+Tagged releases now also publish RP2350's `armv7emsp`/softfp build, so
+`RP2350=1` users don't have to build it themselves. It can't be a second
+entry in the main `package.json` — see the `Fixed` entry above for why the
+`.mpy` format and `build_release_assets.py`'s arch-tag scheme can't tell it
+apart from the regular hard-float `armv7emsp` build — so it ships as its
+own asset + manifest pair instead: `tiny_bclibc.rp2350.mpy` +
+`package.rp2350.json`.
+
+`natmod.yml` gained a `build-rp2350` job (`ARCH=armv7emsp`,
+`CIBMP_EXTRA_MAKE_ARGS: RP2350=1`) alongside the regular `build` matrix,
+uploading under the exact artifact name `natmod-armv7emsp-rp2350` rather
+than the `tiny-bclibc-*` pattern the regular build uses — release.yml's
+manifest-assembly step globs that pattern and would otherwise pick up
+both armv7emsp variants and trip `build_release_assets.py`'s
+duplicate-arch guard. `release.yml` downloads it separately and feeds it
+through the same script with two new flags: `--asset-name
+tiny_bclibc.rp2350.mpy` (rename the output instead of deriving it from
+the arch tag) and `--manifest-name package.rp2350.json` (write a second,
+non-default manifest instead of `package.json`). RP2350 boards install it
+with `mip`/`mpremote mip install` pointed directly at that manifest's
+release URL instead of the default `package.json` — see
+[`README.md`](README.md#rp2350-rp2s-rpi_pico2rpi_pico2_w-needs-a-separate-build).
+
+#### `tests/tiny_bclibc_bench.py` — p95/p99 in timing output
+
+`benches.md`'s `integrate_at()` numbers on RP2350 (`armv7emsp`, hardware
+FPU) show a large min/max spread (437–4736 µs, ~11×) relative to the
+average — for a coprocessor where worst-case latency matters more than
+the mean, avg/min/max alone doesn't say whether that's a rare outlier or
+a real chunk of the distribution. Added a small nearest-rank
+`_percentile()` helper (plain sort, no imports) and wired `p95_us`/
+`p99_us` into all four timing benchmarks (`integrate`, `integrate_at`,
+`find_zero_angle`, `find_apex`); `integrate()`'s 10-iteration and
+`find_zero_angle`/`find_apex`'s 50-iteration sample sizes make `p99`
+degenerate close to `max` (still honest, just low-resolution at that
+end) — `integrate_at()`'s 500×5 = 2500 samples give both percentiles
+real resolution.
+
 ## [1.2.2] - 2026-09-14
 
 ### Changed
@@ -858,7 +943,8 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.1.3...v1.2.0

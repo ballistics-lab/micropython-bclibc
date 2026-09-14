@@ -17,6 +17,11 @@ from micropython import const
 from collections import namedtuple as _namedtuple
 
 try:
+    import ustruct as _struct
+except ImportError:
+    import struct as _struct
+
+try:
     from _tiny_bclibc import (
         # Trajectory filter flags
         TRAJ_FLAG_NONE,
@@ -67,6 +72,7 @@ try:
         find_zero_angle as _find_zero_angle,
         find_apex as _find_apex,
         find_max_range as _find_max_range,
+        build_multibc as _build_multibc,
     )
 except ImportError:
     # Merged natmod build (see natmod/Makefile) -- no separate _tiny_bclibc
@@ -82,10 +88,11 @@ except ImportError:
     # never would.
     #
     # integrate/integrate_at/integrate_stream/find_zero_angle/find_apex/
-    # find_max_range collide with this file's own wrapper functions of the
-    # same name below -- capture each native global under its private alias
-    # *before* the matching `def` executes and overwrites it, or the
-    # wrapper would end up calling itself instead of the native function.
+    # find_max_range/build_multibc collide with this file's own wrapper
+    # functions of the same name below -- capture each native global under
+    # its private alias *before* the matching `def` executes and overwrites
+    # it, or the wrapper would end up calling itself instead of the native
+    # function.
     _SHOT_HOLDER_SIZE = SHOT_HOLDER_SIZE
     _TRAJ_DATA_SIZE = TRAJ_DATA_SIZE
     _integrate = integrate
@@ -94,6 +101,7 @@ except ImportError:
     _find_zero_angle = find_zero_angle
     _find_apex = find_apex
     _find_max_range = find_max_range
+    _build_multibc = build_multibc
     del SHOT_HOLDER_SIZE, TRAJ_DATA_SIZE
 
 # Public API -- marks the re-exported native constants/version as
@@ -112,6 +120,7 @@ __all__ = [
     "find_zero_angle",
     "find_apex",
     "find_max_range",
+    "MultiBC",
     "DRAG_G1",
     "DRAG_G7",
     "DRAG_CUSTOM",
@@ -301,6 +310,7 @@ def Shot(
     drag_type=DRAG_G7,
     drag_mach=None,
     drag_cd=None,
+    drag_count=None,
     winds=None,
     config=None,
 ):
@@ -308,8 +318,21 @@ def Shot(
     winds = winds or []
     wc = min(len(winds), _MAX_WINDS)
     dc = 0
+    # "packed" drag input is a raw bytes-like buffer of interleaved-free,
+    # parallel float32 arrays (what MultiBC() returns) -- copied by byte
+    # range below instead of unpacked element-by-element through uctypes,
+    # so no intermediate Python float is ever boxed for these values.
+    # Plain Python sequences (hand-built custom curves) keep the original
+    # per-element path unchanged.
+    packed = False
     if drag_type == DRAG_CUSTOM and drag_mach and drag_cd:
-        dc = min(len(drag_mach), len(drag_cd), _MAX_DRAG_PTS)
+        packed = isinstance(drag_mach, (bytes, bytearray, memoryview))
+        if drag_count is not None:
+            dc = min(drag_count, _MAX_DRAG_PTS)
+        elif packed:
+            dc = min(len(drag_mach) // 4, len(drag_cd) // 4, _MAX_DRAG_PTS)
+        else:
+            dc = min(len(drag_mach), len(drag_cd), _MAX_DRAG_PTS)
 
     buf = bytearray(_SHOT_SIZE + wc * _WIND_SIZE + dc * _DRAG_SIZE)
     base = uctypes.addressof(buf)
@@ -342,11 +365,18 @@ def Shot(
         buf[off : off + _WIND_SIZE] = winds[i].buf
         off += _WIND_SIZE
 
-    for i in range(dc):
-        sd = uctypes.struct(base + off, _DRAG_DESC, uctypes.LITTLE_ENDIAN)
-        sd.mach = drag_mach[i]
-        sd.cd = drag_cd[i]
-        off += _DRAG_SIZE
+    if packed:
+        for i in range(dc):
+            o = off + i * _DRAG_SIZE
+            buf[o : o + 4] = drag_mach[i * 4 : i * 4 + 4]
+            buf[o + 4 : o + 8] = drag_cd[i * 4 : i * 4 + 4]
+        off += dc * _DRAG_SIZE
+    else:
+        for i in range(dc):
+            sd = uctypes.struct(base + off, _DRAG_DESC, uctypes.LITTLE_ENDIAN)
+            sd.mach = drag_mach[i]
+            sd.cd = drag_cd[i]
+            off += _DRAG_SIZE
 
     return _Shot(buf, s, bytearray(_SHOT_HOLDER_SIZE))
 
@@ -397,3 +427,29 @@ def find_apex(shot):
 
 def find_max_range(shot, lo, hi):
     return _find_max_range(shot.buf, shot.holder, lo, hi)
+
+
+def MultiBC(bc_points, drag_type=DRAG_G7):
+    """Fold multiple (mach, bc) points into a single custom drag curve.
+
+    bc_points: iterable of (mach, bc) pairs, any order -- sorted internally.
+    drag_type: DRAG_G1 or DRAG_G7, selects the reference table to scale.
+
+    Returns (mach_buf, cd_buf, count): two packed float32 buffers and the
+    number of valid entries in each (the two reference tables have
+    different lengths, so always use `count`, never assume a fixed size).
+    Feed the result straight into
+        Shot(bc=1.0, drag_type=DRAG_CUSTOM,
+             drag_mach=mach_buf, drag_cd=cd_buf, drag_count=count)
+    -- bc=1.0 is correct regardless of the actual bullet's BC: the
+    constant cancels out of the drag-factor formula algebraically once
+    the curve itself already carries the BC-ratio scaling.
+    """
+    pts = list(bc_points)
+    pts_buf = bytearray(len(pts) * 8)
+    for i, (mach, bc_val) in enumerate(pts):
+        _struct.pack_into("<ff", pts_buf, i * 8, mach, bc_val)
+    mach_buf = bytearray(_MAX_DRAG_PTS * 4)
+    cd_buf = bytearray(_MAX_DRAG_PTS * 4)
+    count = _build_multibc(drag_type, pts_buf, mach_buf, cd_buf)
+    return mach_buf, cd_buf, count
