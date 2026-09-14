@@ -249,7 +249,19 @@ jobs:
 
       - name: Build MicroPython QEMU firmware (MPS2_AN385 / Cortex-M3)
         if: matrix.kind == 'qemu'
-        run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385
+        # MICROPY_HEAP_SIZE override: ports/qemu/Makefile's own ARM default
+        # is 143360 B (140 KB), but MPS2_AN385's linker script (mcu/arm/
+        # mps2.ld) gives the emulated board a full 4 MB RAM region -- the
+        # 140 KB heap is an arbitrary upstream default, not a real hardware
+        # limit, and it's too tight for tests/test_bclibc.py's own "RAM:
+        # integrate 3 km / 100 m step" test once earlier tests in the same
+        # run have fragmented/consumed part of it: "memory allocation
+        # failed, allocating 6016 bytes". Real target boards don't hit this
+        # -- RP2040 alone has ~150 KB free at that same point (see
+        # benchmarks/benches.md's own "Free memory" lines). 1 MB leaves
+        # ample headroom inside the 4 MB region without masking a genuine
+        # leak (bclibc's own peak allocation for this trajectory is ~10 KB).
+        run: make -C "$MPY_DIR/ports/qemu" BOARD=MPS2_AN385 MICROPY_HEAP_SIZE=1048576
 
       - uses: actions/download-artifact@v8
         with:
