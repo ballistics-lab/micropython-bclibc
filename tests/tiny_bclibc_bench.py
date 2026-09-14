@@ -50,6 +50,13 @@ REQUEST_3KM = Request(
 # ── Benchmark functions ──────────────────────────────────────────────────────
 
 
+def _percentile(times, p):
+    """Nearest-rank percentile over a *copy* of times (leaves caller's list order intact)."""
+    s = sorted(times)
+    idx = min(len(s) - 1, int(round(p / 100.0 * (len(s) - 1))))
+    return s[idx]
+
+
 def bench_integrate(req, iterations=10):
     """Benchmark integrate() function."""
     times = []
@@ -71,6 +78,8 @@ def bench_integrate(req, iterations=10):
         "avg_ms": avg_ms,
         "min_us": min(times),
         "max_us": max(times),
+        "p95_us": _percentile(times, 95),
+        "p99_us": _percentile(times, 99),
         "iterations": iterations,
         "rows": rows_count,
         "reason": reason,
@@ -99,6 +108,8 @@ def bench_integrate_at(iterations=100):
         "avg_ms": avg_ms,
         "min_us": min(times),
         "max_us": max(times),
+        "p95_us": _percentile(times, 95),
+        "p99_us": _percentile(times, 99),
         "iterations": iterations * len(targets),
         "calls_per_sec": 1.0 / (avg_us / 1_000_000) if avg_us > 0 else 0,
     }
@@ -127,6 +138,8 @@ def bench_find_zero_angle(iterations=50):
         "avg_ms": avg_ms,
         "min_us": min(times),
         "max_us": max(times),
+        "p95_us": _percentile(times, 95),
+        "p99_us": _percentile(times, 99),
         "iterations": iterations,
         "elev_rad_avg": sum(results) / len(results),
     }
@@ -166,6 +179,8 @@ def bench_find_apex(iterations=50):
         "avg_ms": avg_ms,
         "min_us": min(times),
         "max_us": max(times),
+        "p95_us": _percentile(times, 95),
+        "p99_us": _percentile(times, 99),
         "iterations": iterations,
         "apex_dist_ft": apex[1],
         "apex_height_ft": apex[4],
@@ -212,7 +227,7 @@ if __name__ == "__main__":
     print(f"  Rows: {r['rows']}")
     print(f"  Stop reason: {r['reason']}")
     print(f"  Avg: {r['avg_ms']:.2f} ms  ({r['avg_us']:.0f} µs)")
-    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs")
+    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs  p95: {r['p95_us']} µs  p99: {r['p99_us']} µs")
     print(f"  Iterations: {r['iterations']}")
 
     print()
@@ -221,14 +236,14 @@ if __name__ == "__main__":
     print(f"  Rows: {r['rows']}")
     print(f"  Stop reason: {r['reason']}")
     print(f"  Avg: {r['avg_ms']:.2f} ms  ({r['avg_us']:.0f} µs)")
-    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs")
+    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs  p95: {r['p95_us']} µs  p99: {r['p99_us']} µs")
     print(f"  Iterations: {r['iterations']}")
 
     print()
     print("--- integrate_at() (single point interpolation) ---")
     r = bench_integrate_at()
     print(f"  Avg: {r['avg_ms']:.3f} ms  ({r['avg_us']:.1f} µs)")
-    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs")
+    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs  p95: {r['p95_us']} µs  p99: {r['p99_us']} µs")
     print(f"  Calls: {r['iterations']}")
     print(f"  ~{r['calls_per_sec']:.0f} calls/sec")
 
@@ -236,7 +251,7 @@ if __name__ == "__main__":
     print("--- find_zero_angle() (300 m zero) ---")
     r = bench_find_zero_angle()
     print(f"  Avg: {r['avg_ms']:.3f} ms  ({r['avg_us']:.1f} µs)")
-    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs")
+    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs  p95: {r['p95_us']} µs  p99: {r['p99_us']} µs")
     print(f"  Elevation avg: {math.degrees(r['elev_rad_avg']):.4f}°")
     print(f"  Iterations: {r['iterations']}")
 
@@ -244,7 +259,7 @@ if __name__ == "__main__":
     print("--- find_apex() ---")
     r = bench_find_apex()
     print(f"  Avg: {r['avg_ms']:.3f} ms  ({r['avg_us']:.1f} µs)")
-    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs")
+    print(f"  Min: {r['min_us']} µs  Max: {r['max_us']} µs  p95: {r['p95_us']} µs  p99: {r['p99_us']} µs")
     print(f"  Apex: {r['apex_dist_ft']:.1f} ft, {r['apex_height_ft']:.1f} ft")
     print(f"  Iterations: {r['iterations']}")
 
