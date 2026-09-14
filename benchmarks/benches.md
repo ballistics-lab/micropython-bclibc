@@ -140,6 +140,18 @@ corrupted, so integrate_at()/find_apex() always raised "interception error".
 Elevation avg (0.1434°) and apex (532.1 ft, 0.6 ft) below match the other
 platforms exactly, confirming the fix, not just that it no longer crashes.
 
+Already known upstream, actively being fixed from the firmware side:
+[micropython/micropython#19279](https://github.com/micropython/micropython/issues/19279)
+("mp_obj_new_float returns 0") is the identical symptom/root cause,
+confirmed by a MicroPython maintainer.
+[micropython/micropython#19661](https://github.com/micropython/micropython/pull/19661)
+(open) fixes it the other way -- makes the RP2350 firmware itself
+`-mfloat-abi=hard` via pico-sdk 2.3.0's new `PICO_HARD_FLOAT_ABI`, instead
+of what we did here (build the natmod softfp to match the firmware that's
+already out there). Complementary, not redundant: that PR only helps once
+users rebuild/reflash with pico-sdk >= 2.3.0; this natmod-side fix works
+against any already-deployed RP2350 firmware today.
+
 MPY: soft reboot
 ============================================================
 tiny_bclibc Performance Benchmark
@@ -381,18 +393,69 @@ Firmware: official `ESP32_GENERIC_S3-SPIRAM_OCT` v1.29.0 build, `usermod`
 (bclibc compiled directly into the firmware via `usermod/micropython.cmake`,
 ESP-IDF v5.5.2), 240 MHz stock.
 
-**`natmod` (`ARCH=xtensawin`) does NOT work on this firmware** -- the
-built `.mpy` imports cleanly (`dir()` shows every expected attribute) but
-crashes the whole board on the *first* native call, even the trivial
-`bc.version()`, before any bclibc computation runs. Confirmed not a repeat
-of the armv7emsp float-ABI bug (Xtensa's calling convention has no
+**`natmod` (`ARCH=xtensawin`) does NOT work on real ESP32-S3 hardware --
+likely an upstream MicroPython bug, not bclibc's.** `usermod` (below)
+works fine and is the supported route on this platform; this natmod finding
+is recorded here for anyone who hits the same wall.
+
+Symptom: the built `.mpy` imports cleanly -- `import tiny_bclibc as bc`
+succeeds, `dir(bc)` lists every expected attribute -- but the board hard-crashes
+on the *first* native call, before any bclibc computation runs. No exception,
+no Python traceback: the USB-Serial-JTAG console itself drops mid-call
+(`OSError: [Errno 5] Input/output error` from the host side) and the board
+silently resets, with no panic backtrace captured on either side of the
+reset (tried re-opening the serial port across the reset window in case the
+dump landed after re-enumeration -- nothing).
+
+Isolated with a minimal non-bclibc probe module (`mp_obj_new_int(42)`, no
+floats, no bclibc, 5 GOT entries vs. bclibc's 72) built the same way
+(`dynruntime.mk`, `ARCH=xtensawin`): **same crash**, on the very first call
+to a plain builtin native function. So this is not a bclibc bug, not the
+armv7emsp float-ABI class of bug (Xtensa's calling convention has no
 hard/softfp split -- `dynruntime.mk`'s `xtensawin` branch sets no
-`-mfloat-abi`-equivalent flag at all). The xtensawin natmod build has 72 GOT
-entries vs. 2 on the ARM builds; root cause not yet isolated -- worth a
-minimal non-bclibc probe natmod to confirm whether *any* xtensawin natmod
-call crashes on this firmware, or something bclibc-specific. `usermod`
-(below) sidesteps the question entirely -- no natmod relocation/loading step
-at all, statically linked into the firmware.
+`-mfloat-abi`-equivalent flag at all), and not a GOT-size/relocation-count
+edge case (5 entries is about as minimal as a natmod gets).
+
+Telling detail: `mpy_init()` itself -- the natmod's own entry point, invoked
+directly by the import machinery -- runs fine (it's what registers the
+module's globals, and that clearly succeeds). The crash is specifically in
+calling a *plain builtin function object* pulled out of those globals
+through the VM's normal call dispatch afterward. That points at
+`tools/mpy_ld.py`'s Xtensa relocation/trampoline code (`asm_jump_xtensa`,
+`build_got_xtensa`) or how the VM's generic call path invokes a relocated
+native function pointer on `xtensawin` -- not at anything specific to this
+module.
+
+Circumstantial support: upstream `tools/ci.sh`'s own xtensawin natmod job
+is literally named `ci_native_mpy_modules_build` -- build-only, no ESP32
+hardware or emulator to run it on. So this may be an upstream bug nobody
+has actually executed on real silicon before.
+
+Root-causing further needs a real backtrace -- JTAG over the same USB port
+the board already exposes (`openocd` + `xtensa-esp32s3-elf-gdb`, not set up
+in this session) -- since the panic handler never gets to print before the
+USB peripheral itself goes down.
+
+Searched upstream for an existing report before writing this up (~25 query
+variants, issues + PRs, open + closed) -- nothing matches this exact
+symptom (crash on the very first call, minimal single-file probe, no
+linker errors). Checked and ruled out as unrelated, all older and already
+resolved:
+[#8781](https://github.com/micropython/micropython/issues/8781) `R_XTENSA_NDIFF32 not supported`
+(closed, link-time only, fix landed in
+[#19286](https://github.com/micropython/micropython/pull/19286), already in v1.29.0),
+[#8782](https://github.com/micropython/micropython/issues/8782) and
+[#8783](https://github.com/micropython/micropython/issues/8783) (sibling
+reports from the same person, both closed, both link-time `mpy_ld.py`
+errors, not a runtime crash),
+[#19276](https://github.com/micropython/micropython/issues/19276) `mpy-ld incorrectly merging literals (esp32) across source files`
+(open, but needs two source files sharing a literal offset -- our probe is
+one file), and
+[#19452](https://github.com/micropython/micropython/pull/19452) `Fix aligned jump target in natmod trampolines`
+(merged, already in v1.29.0; notable mainly as a reminder that a real
+xtensawin natmod regression already slipped past upstream CI once before,
+for the same reason -- QEMU-only testing, no real ESP32 hardware). No
+upstream issue filed for this yet as of this writing.
 
 MPY: soft reboot
 ============================================================
