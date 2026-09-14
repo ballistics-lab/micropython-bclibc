@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### `natmod/Makefile` — armv7emsp (RP2350) float-ABI mismatch
+
+`dynruntime.mk`'s `armv7emsp` branch hardcodes `-mfloat-abi=hard`, tuned for
+STM32/Cortex-M4F. The only real `armv7emsp` target here is rp2's
+`RPI_PICO2`/`RPI_PICO2_W` (Cortex-M33), and pico-sdk's own toolchain file
+builds that firmware `-mfloat-abi=softfp`. Every float crossing the
+`mp_fun_table` boundary (`mp_obj_new_float_from_d`, `mp_obj_get_float_to_d`,
+natmod function args/returns) was silently corrupted by the mismatch —
+confirmed live on real RPI_PICO2 hardware: `integrate_at()`/`find_apex()`
+always raised `"interception error"` because the incoming target distance
+decoded as garbage.
+
+`natmod/Makefile` now filters `-mfloat-abi=hard` out of `CFLAGS`/`CFLAGS_ARCH`
+for `ARCH=armv7emsp` and re-adds `-mfloat-abi=softfp`, then redoes
+`LINK_RUNTIME=1`'s own `libgcc.a`/`libm.a` multilib resolution against the
+corrected flags (its result was baked in earlier in `dynruntime.mk`, before
+the override took effect, and a stray leftover `-mfloat-abi=hard` alongside
+the added `softfp` was enough to make that probe fall back to a non-thumb
+multilib entirely and fail to link). Verified on real RPI_PICO2 hardware:
+`find_zero_angle()`'s elevation (`0.1434°`) and `find_apex()`'s apex
+(`532.1 ft, 0.6 ft`) now match every other platform exactly — see
+[`benches.md`](benches.md).
+
 ## [1.2.2] - 2026-09-14
 
 ### Changed

@@ -159,6 +159,42 @@ endif
 _TINY_HEADERS := $(wildcard $(BCLIBC_ROOT)/tiny_bclibc/include/tiny_bclibc/*.h)
 $(SRC_O): $(_TINY_HEADERS)
 
+# ── armv7emsp float ABI: match RP2350, not dynruntime.mk's generic default ──
+# dynruntime.mk's own armv7emsp branch hardcodes -mfpu=fpv4-sp-d16
+# -mfloat-abi=hard (right for STM32/Cortex-M4F, which this project doesn't
+# target). The only real armv7emsp target here is rp2's
+# RPI_PICO2/RPI_PICO2_W (Cortex-M33), and pico-sdk's own toolchain file
+# builds that whole firmware -mfloat-abi=softfp (see
+# lib/pico-sdk/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake in the
+# micropython tree). A natmod built hard against a softfp firmware still
+# links and runs, but every float crossing the mp_fun_table boundary
+# (mp_obj_new_float_from_d, mp_obj_get_float_to_d, float args/returns) is
+# silently corrupted -- caught live on real RPI_PICO2 hardware:
+# integrate_at() always raised "interception error" because the incoming
+# target distance decoded as garbage.
+#
+# Just appending -mfloat-abi=softfp via CFLAGS_EXTRA (after dynruntime.mk's
+# own -mfloat-abi=hard) is not enough: dynruntime.mk's own LINK_RUNTIME=1
+# block (above) re-probes `$(CROSS)gcc $(CFLAGS) --print-libgcc-file-name`
+# for the newlib libgcc.a/libm.a multilib variant to statically link in, and
+# with *both* -mfloat-abi flags present that probe stops matching any
+# thumb/v7e-m multilib at all and silently falls back to the base (non-thumb)
+# variant -- confirmed by a real build: mpy_ld.py then aborts linking with
+# "AssertionError: (28, '__ieee754_sqrtf', ...)" because that library's
+# relocations don't fit the M-profile native module format.
+# `filter-out` strips the conflicting flag from the *expanded* value, so
+# there's exactly one -mfloat-abi in CFLAGS/CFLAGS_ARCH by the time the
+# LINK_RUNTIME libgcc/libm probe (and every compile recipe) reads them --
+# both already ran during the `include` above, so redo them here.
+ifeq ($(ARCH),armv7emsp)
+CFLAGS       := $(filter-out -mfloat-abi=hard,$(CFLAGS)) -mfloat-abi=softfp
+CFLAGS_ARCH  := $(filter-out -mfloat-abi=hard,$(CFLAGS_ARCH)) -mfloat-abi=softfp
+MPY_LD_FLAGS := $(filter-out -l$(LIBGCC_PATH) -l$(LIBM_PATH),$(MPY_LD_FLAGS))
+LIBGCC_PATH  := $(realpath $(shell $(CROSS)gcc $(CFLAGS) --print-libgcc-file-name))
+LIBM_PATH    := $(realpath $(shell $(CROSS)gcc $(CFLAGS) --print-file-name=libm.a))
+MPY_LD_FLAGS += $(addprefix -l, $(LIBGCC_PATH) $(LIBM_PATH))
+endif
+
 # ── RISC-V + Xtensa: add libgcc.a for soft-float builtins ────────────────────
 # Must be after include so CROSS and CFLAGS_ARCH are set by dynruntime.mk.
 # Both use the fdlibm-from-source route above (no LINK_RUNTIME, which used
