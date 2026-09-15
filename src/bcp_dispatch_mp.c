@@ -8,6 +8,20 @@
  * dispatch() is also directly callable from Python (see
  * tests/test_bcp_dispatch_native.py) for testing without that loop.
  *
+ * Cached state (BcpState below) is native, typed C -- TINY_BCLIBC_Shot,
+ * the engine's own raw-field struct, not a byte-packed buffer. Earlier
+ * drafts of this file kept a `_SHOT_DESC`-shaped byte buffer instead,
+ * because tiny_bclibc_mp.c's existing Python-facing functions expect a
+ * buffer-protocol object. That constraint doesn't apply here: this file
+ * is meant to call straight into the C engine (tiny_bclibc_build_shot_props(),
+ * tiny_bclibc_find_zero_angle(), etc. -- wired up starting with
+ * LOAD_PROFILE, next), never through Python objects -- a real-time
+ * target has no business converting through Python just to call C. Once
+ * state is a native struct, winds and the drag curve are
+ * independent pointers/arrays (TINY_BCLIBC_Shot's own shape), so there's
+ * no byte-offset interleaving to manage regardless of which order
+ * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
+ *
  * Only IDENT and LOAD_CONFIG are implemented so far — see BACKLOG.md
  * Epic 3/8 for the rest of the command table; unimplemented commands raise
  * NotImplementedError (a development-time signal, not a wire status —
@@ -25,7 +39,7 @@
 
 #include "tiny_bclibc.h"
 #include "generated/bclibc_mp/version.h"
-#include "bcp_shot_layout.h"
+#include "drag_tables.h" /* g1_mach/g1_cd/g7_mach/g7_cd, G1_N/G7_N -- same header tiny_bclibc_mp.c uses */
 
 /* ── Command ids (PROTOCOL.md §4) — final, not provisional ──────────────── */
 enum
@@ -66,6 +80,11 @@ enum
 /* From bcp_frame_mp.c — frames dropped for bad COBS/size/CRC since boot. */
 extern uint32_t bcp_frame_drop_count(void);
 
+/* ── Explicit byte-order wire helpers (response packing / payload parsing)
+ * -- same convention as tiny_bclibc_mp.c's own _rdf()/_wrf() (a union
+ * would work too on our little-endian-only targets, but this is correct
+ * regardless). Only used at the wire boundary now -- the cached state
+ * itself is native C, not bytes. */
 static void bcp_wu16(uint8_t *p, size_t off, uint16_t v)
 {
     p[off] = (uint8_t)(v & 0xFFu);
@@ -80,9 +99,6 @@ static void bcp_wu32(uint8_t *p, size_t off, uint32_t v)
     }
 }
 
-/* Explicit byte-order float/int32 write -- same convention as
- * tiny_bclibc_mp.c's own _wrf() (a union would work too on our
- * little-endian-only targets, but this is correct regardless). */
 static void bcp_wf32(uint8_t *p, size_t off, float v)
 {
     union
@@ -105,48 +121,56 @@ static float bcp_rdf32(const uint8_t *p, size_t off)
     return x.f;
 }
 
-/* ── Persistent BCP state ──────────────────────────────────────────────────
- * Survives across dispatch() calls until RESET (not implemented yet). Laid
- * out exactly like tiny_bclibc.py's internal Shot buffer (bcp_shot_layout.h)
- * so it can later be handed directly to tiny_bclibc_mp.c's own integrate()/
- * find_zero_angle()/etc. once INTEGRATE(_FAST)/INTEGRATE_AT land, with no
- * repacking -- LOAD_PROFILE/LOAD_CONFIG/LOAD_CONDITIONS each scatter their
- * own wire fields into this one buffer's existing offsets (BACKLOG.md
- * Epic 8's "internal Shot layout stays untouched" resolution), rather than
- * each keeping a separate cache that would need merging later. */
-#define BCP_SHOT_BUF_CAP (BCP_SHOT_HDR_SIZE + BCP_MAX_WINDS * 16u + BCP_MAX_DRAG_PTS * 8u)
-static uint8_t bcp_shot_buf[BCP_SHOT_BUF_CAP];
-static bool bcp_has_profile = false;
-static bool bcp_has_config = false;
-static bool bcp_state_ready = false;
+static int32_t bcp_rdi32(const uint8_t *p, size_t off)
+{
+    return (int32_t)((uint32_t)p[off] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16) | ((uint32_t)p[off + 3] << 24));
+}
 
-/* Config()'s own Python-side defaults (tiny_bclibc.py) -- applied once here
- * too, so the cached config is never garbage before the first
- * LOAD_CONFIG (matches LOAD_CONDITIONS's already-established "defaults
- * apply on-device" pattern, PROTOCOL.md §4.3, extended to config). Lazy
- * init on first dispatch() call: usermod modules have no natmod-style
- * mpy_init hook to run this at boot instead. */
+/* ── Persistent BCP state ──────────────────────────────────────────────────
+ * Survives across dispatch() calls until RESET (not implemented yet).
+ * `shot` is TINY_BCLIBC_Shot -- the engine's own raw-field struct, the
+ * exact input tiny_bclibc_build_shot_props() already expects. Winds and
+ * the drag curve are independent backing arrays that `shot.winds`/
+ * `shot.mach_data`/`shot.cd_data` point into (or, for G1/G7, directly at
+ * the static reference tables below, zero-copy) -- no interleaving, no
+ * offset arithmetic, regardless of which order LOAD_PROFILE/
+ * LOAD_CONDITIONS arrive in. */
+typedef struct
+{
+    TINY_BCLIBC_Shot shot;
+    real_t drag_mach[BCP_MAX_DRAG_PTS]; /* backing storage for CUSTOM or MULTIBC curves */
+    real_t drag_cd[BCP_MAX_DRAG_PTS];
+    TINY_BCLIBC_Wind winds[BCP_MAX_WINDS];
+    TINY_BCLIBC_CurvePoint curve_buf[BCP_MAX_DRAG_PTS]; /* scratch for tiny_bclibc_build_shot_props()'s PCHIP */
+    bool has_profile;
+    bool has_config;
+    bool has_conditions;
+    bool ready;
+} BcpState;
+static BcpState bcp_state;
+
+/* Lazy init on first dispatch() call: usermod modules have no natmod-style
+ * mpy_init hook to run this at boot instead. Config defaults come straight
+ * from the engine's own TINY_BCLIBC_Config_default() -- not hand-copied
+ * numbers, so there's no way for this to drift from what the library
+ * itself considers "default" (the same class of mistake this session
+ * already hit once, hand-transcribing the COBS test vectors). */
 static void bcp_state_ensure_init(void)
 {
-    if (bcp_state_ready)
+    if (bcp_state.ready)
     {
         return;
     }
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_STEP_MULTIPLIER, 0.5f);
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_ZERO_FINDING_ACCURACY, 0.001f);
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_MINIMUM_VELOCITY, 50.0f);
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_MAXIMUM_DROP, -15000.0f);
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_GRAVITY_CONSTANT, -32.17405f);
-    bcp_wf32(bcp_shot_buf, BCP_SHOT_OFF_MINIMUM_ALTITUDE, -1500.0f);
-    bcp_wu32(bcp_shot_buf, BCP_SHOT_OFF_CFG_MAXITER, 50u);
-    bcp_state_ready = true;
+    bcp_state.shot.config = TINY_BCLIBC_Config_default();
+    bcp_state.ready = true;
 }
 
 /* ── LOAD_CONFIG (PROTOCOL.md §4.2a) ──────────────────────────────────────
- * Request: fixed 28 B, identical layout to the internal cfg range
- * (BCP_SHOT_OFF_CFG..+28) -- a straight memcpy, no field-by-field
- * repacking. No variable-length part, so its "array-count rule" (§4.1)
- * reduces to an exact size match.
+ * Request: fixed 28 B. Field-by-field parse, not a memcpy: the wire order
+ * (step_multiplier..minimum_altitude, max_iterations last) differs from
+ * TINY_BCLIBC_Config's own field order (cMaxIterations sits before
+ * cGravityConstant/cMinimumAltitude there). No variable-length part, so
+ * its "array-count rule" (§4.1) reduces to an exact size match.
  *
  * Response: barrel_elevation_rad -- solver tuning affects the zero-angle
  * solve too, so LOAD_CONFIG re-triggers it exactly like LOAD_PROFILE/
@@ -165,10 +189,16 @@ static int bcp_handle_load_config(const uint8_t *payload, size_t payload_len, ui
         status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
         return 0;
     }
-    memcpy(bcp_shot_buf + BCP_SHOT_OFF_CFG, payload, BCP_LOAD_CONFIG_SIZE);
-    bcp_has_config = true;
+    bcp_state.shot.config.cStepMultiplier = (real_t)bcp_rdf32(payload, 0);
+    bcp_state.shot.config.cZeroFindingAccuracy = (real_t)bcp_rdf32(payload, 4);
+    bcp_state.shot.config.cMinimumVelocity = (real_t)bcp_rdf32(payload, 8);
+    bcp_state.shot.config.cMaximumDrop = (real_t)bcp_rdf32(payload, 12);
+    bcp_state.shot.config.cGravityConstant = (real_t)bcp_rdf32(payload, 16);
+    bcp_state.shot.config.cMinimumAltitude = (real_t)bcp_rdf32(payload, 20);
+    bcp_state.shot.config.cMaxIterations = bcp_rdi32(payload, 24);
+    bcp_state.has_config = true;
 
-    if (!bcp_has_profile)
+    if (!bcp_state.has_profile)
     {
         /* Nothing cached to solve a zero against yet -- see the comment
          * above. Config is stored regardless. */
@@ -177,7 +207,7 @@ static int bcp_handle_load_config(const uint8_t *payload, size_t payload_len, ui
     }
     /* TODO(LOAD_PROFILE): re-solve the zero against zero_distance_ft here
      * and return barrel_elevation_rad:f32. Unreachable today since
-     * bcp_has_profile can't yet become true. */
+     * bcp_state.has_profile can't yet become true. */
     status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
     return 0;
 }
@@ -270,7 +300,7 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         if (ok)
         {
             uint8_t out[4];
-            bcp_wf32(out, 0, bcp_rdf32(bcp_shot_buf, BCP_SHOT_OFF_BARREL_ELEVATION_RAD));
+            bcp_wf32(out, 0, (float)bcp_state.shot.barrel_elevation_rad);
             resp_payload = mp_obj_new_bytes(out, sizeof(out));
         }
         mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};

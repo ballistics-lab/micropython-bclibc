@@ -91,16 +91,13 @@ static const char *_tiny_bclibc_err_str(int32_t rc)
 #define MAX_WINDS 16
 #define MAX_BC_POINTS 16
 
-/* Shot buffer offsets (must match bclibc_types._SHOT_HDR layout) --
- * shared with bcp_dispatch_mp.c via bcp_shot_layout.h (single source of
- * truth for both, see that header's own comment for why). */
-#include "bcp_shot_layout.h"
-#define SHOT_HDR_SIZE BCP_SHOT_HDR_SIZE
-#define OFF_CFG_MAXITER BCP_SHOT_OFF_CFG_MAXITER
-#define OFF_DRAG_TYPE BCP_SHOT_OFF_DRAG_TYPE
-#define OFF_WIND_CNT BCP_SHOT_OFF_WIND_CNT
-#define OFF_DRAG_CNT BCP_SHOT_OFF_DRAG_CNT
-#define OFF_WINDS_START BCP_SHOT_OFF_WINDS_START
+/* Shot buffer offsets (must match bclibc_types._SHOT_HDR layout) */
+#define SHOT_HDR_SIZE 100u
+#define OFF_CFG_MAXITER 92u /* int32_t */
+#define OFF_DRAG_TYPE 96u   /* uint8_t */
+#define OFF_WIND_CNT 97u    /* uint8_t */
+#define OFF_DRAG_CNT 98u    /* uint16_t */
+#define OFF_WINDS_START 100u
 
 /* Request buffer offsets (struct '<3fi') */
 #define REQ_SIZE 16u
