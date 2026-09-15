@@ -295,10 +295,10 @@ whole loop -- proven for real (see below), not just reasoned about.
   `benches.md`'s older/different-build numbers, for a true
   wire-vs-no-wire comparison):
 
-  | Board | local (REPL, no wire) | CDC1 wire | overhead | ratio |
-  |---|---:|---:|---:|---:|
-  | RP2040-Zero | 313.98 ms | 355.65 ms | +41.7 ms | 1.13× |
-  | RP2350 (Pico 2) | 17.90 ms | 43.42 ms | +25.5 ms | 2.43× |
+  | Board           | local (REPL, no wire) | CDC1 wire | overhead | ratio |
+  | --------------- | --------------------: | --------: | -------: | ----: |
+  | RP2040-Zero     |             313.98 ms | 355.65 ms | +41.7 ms | 1.13× |
+  | RP2350 (Pico 2) |              17.90 ms |  43.42 ms | +25.5 ms | 2.43× |
 
   The ~25-42 ms real overhead (framing + USB + `LOAD_PROFILE`'s own
   zero-solve, folded into the same measurement) is roughly constant
@@ -501,11 +501,11 @@ assuming a real MicroPython/pico-sdk incompatibility.
     - **Measured ROM/RAM impact** (baseline `main` vs this branch, real
           `size`/file-size diffs, not estimates):
 
-      | Target | native `.text` | full `.mpy` | RAM |
-      |---|---|---|---|
-      | RP2040 (armv6m) | 28132 → 28836 (**+704 B**) | 33142 → 34321 (**+1179 B**) | +0 (bss unchanged) |
-      | RP2350 (armv7emsp) | 22340 → 22988 (**+648 B**) | 27345 → 28468 (**+1123 B**) | +0 (bss unchanged) |
-      | ESP32-S3 | not measured — expect same order of magnitude | | |
+      | Target             | native `.text`                                | full `.mpy`                 | RAM                |
+      | ------------------ | --------------------------------------------- | --------------------------- | ------------------ |
+      | RP2040 (armv6m)    | 28132 → 28836 (**+704 B**)                    | 33142 → 34321 (**+1179 B**) | +0 (bss unchanged) |
+      | RP2350 (armv7emsp) | 22340 → 22988 (**+648 B**)                    | 27345 → 28468 (**+1123 B**) | +0 (bss unchanged) |
+      | ESP32-S3           | not measured — expect same order of magnitude |                             |                    |
 - [x] `mp_bclibc_build_multibc()` in `src/tiny_bclibc_mp.c`:
       `build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf) ->
       count`. **Zero-copy on both ends, matching `integrate()`'s
@@ -666,12 +666,12 @@ assuming a real MicroPython/pico-sdk incompatibility.
       hardware, not assumed** — Waveshare RP2040-Zero (RP2040), MicroPython
       1.29.0, plain bytecode (no `@native`/`@viper`), via `mpremote run`:
 
-      | variant | µs/byte | vs. table256 |
-      |---|---|---|
-      | 256-entry table (chosen) | ~12.6 | 1× |
-      | 16-entry nibble table | ~24.9 | 2× slower |
-      | bitwise, no table | ~87.5 | 7× slower |
-      | (for comparison) COBS encode | ~17.5 | same order as CRC |
+      | variant                      | µs/byte | vs. table256      |
+      | ---------------------------- | ------- | ----------------- |
+      | 256-entry table (chosen)     | ~12.6   | 1×                |
+      | 16-entry nibble table        | ~24.9   | 2× slower         |
+      | bitwise, no table            | ~87.5   | 7× slower         |
+      | (for comparison) COBS encode | ~17.5   | same order as CRC |
 
       256-entry wins outright on speed, so the only real cost worth
       minimizing is the table's **RAM** footprint (not ROM/flash — the
@@ -738,12 +738,12 @@ assuming a real MicroPython/pico-sdk incompatibility.
           comparison for real, in C, on the **slow** tier this time (the
           earlier comparison above was RP2350 hw-FPU):
 
-          | | RP2040, plain Python (measured earlier) | RP2040, C (measured now) |
-          |---|---|---|
-          | `crc16` (1636/1060 B*) | ~13.1 µs/byte | ~0.14 µs/byte (~94×) |
-          | `cobs_encode` (1636/1060 B*) | ~17.7 µs/byte | ~0.68 µs/byte (~26×) |
-          | full `build_frame`+`parse_frame`, 68 B `MORE` frame | ~2253 µs | **226.7 µs** |
-          | solver time for the same 4 rows (this board) | — | 9810 µs |
+          |                                                     | RP2040, plain Python (measured earlier) | RP2040, C (measured now) |
+          | --------------------------------------------------- | --------------------------------------- | ------------------------ |
+          | `crc16` (1636/1060 B*)                              | ~13.1 µs/byte                           | ~0.14 µs/byte (~94×)     |
+          | `cobs_encode` (1636/1060 B*)                        | ~17.7 µs/byte                           | ~0.68 µs/byte (~26×)     |
+          | full `build_frame`+`parse_frame`, 68 B `MORE` frame | ~2253 µs                                | **226.7 µs**             |
+          | solver time for the same 4 rows (this board)        | —                                       | 9810 µs                  |
 
           (*the Python-side numbers were measured against the frame sizes
           in effect at the time, 1060 B/`LOAD_PROFILE`; the drag-table cap
@@ -933,10 +933,10 @@ assuming a real MicroPython/pico-sdk incompatibility.
 - [x] **Explored, not adopted — `@micropython.native`/`@micropython.viper`
       for `crc16`, on real RP2040-Zero hardware, `mpremote run`:**
 
-      | impl | µs/byte (1400 B) |
-      |---|---|
-      | plain (current) | ~13.1 |
-      | `@micropython.native` | ~9.0 (1.46×) |
+      | impl                                        | µs/byte (1400 B) |
+      | ------------------------------------------- | ---------------- |
+      | plain (current)                             | ~13.1            |
+      | `@micropython.native`                       | ~9.0 (1.46×)     |
       | `@micropython.viper` (typed `ptr8`/`ptr16`) | **~0.50 (~26×)** |
 
       All three verified byte-identical (`crc16(b"123456789") == 0x29B1`).
@@ -970,12 +970,12 @@ assuming a real MicroPython/pico-sdk incompatibility.
       before their caps were revised further down in this epic — kept as
       real data points, not re-measured against the current caps):
 
-      | size | crc `viper` | crc DMA (incl. Python-level setup) |
-      |---|---|---|
-      | 16 B (`Request`) | 35.7 µs | 106.0 µs |
-      | 68 B (`MORE` frame, 4 rows) | 60.1 µs | 102.3 µs |
-      | 296 B (`LOAD_CONDITIONS` max at the time) | 167.7 µs | 102.1 µs |
-      | 1060 B (`LOAD_PROFILE` max at the time) | 527.5 µs | **109.8 µs** |
+      | size                                      | crc `viper` | crc DMA (incl. Python-level setup) |
+      | ----------------------------------------- | ----------- | ---------------------------------- |
+      | 16 B (`Request`)                          | 35.7 µs     | 106.0 µs                           |
+      | 68 B (`MORE` frame, 4 rows)               | 60.1 µs     | 102.3 µs                           |
+      | 296 B (`LOAD_CONDITIONS` max at the time) | 167.7 µs    | 102.1 µs                           |
+      | 1060 B (`LOAD_PROFILE` max at the time)   | 527.5 µs    | **109.8 µs**                       |
 
       Only wins for the rare large `LOAD_PROFILE` frame, loses for every
       frequent small one — the opposite of "DMA is just strictly faster
@@ -1328,7 +1328,110 @@ assuming a real MicroPython/pico-sdk incompatibility.
         ack-scheme work above eventually lands on needs to size
         `bclibc_bcp.py`'s own `CDCInterface.init(txbuf=...)` to match, not
         just pick a row count against the RX-buffer cap alone.
-- [x] **Implemented — `bcp_stream_row_cb`/`bcp_stream_flush` in
+- **Real-time feasibility of single-point queries (`INTEGRATE_AT` /
+      `INTEGRATE_FAST` with `range_limit_ft == range_step_ft`) at a
+      target 30 Hz refresh rate, measured on real hardware, over real
+      CDC1 -- this is the actual, hardware-grounded answer to "can BCP
+      drive a live reticle/rangefinder display," not a guess.**
+      First-cut testing used `range_limit_ft == range_step_ft == zero_ft`
+      (i.e. querying exactly the zeroed distance) and found both
+      single-point commands cheap on both boards (RP2350: 4-5 ms; RP2040:
+      57-60 ms) -- **misleading**, because it conflated "distance to
+      zero" with "distance being queried." A shot is zeroed once (e.g.
+      100 m) but a rangefinder can hand back *any* distance to actually
+      query (e.g. 1000 m); the query distance, not the zero distance, is
+      what drives RK4 integration cost, since the engine has to step the
+      whole way from the muzzle out to wherever it's asked. Re-measured
+      with `zero_distance_ft` fixed at 100 m and the query target varied
+      -- **and the command choice turned out not to matter at all**:
+      `INTEGRATE_AT` (bracketing/interception search) and
+      `INTEGRATE_FAST` with `range_limit_ft == range_step_ft == target`
+      (direct one-shot stream to that one distance) cost the same to
+      within measurement noise at every distance tested -- the
+      bottleneck is the RK4 stepping itself, not which command shape
+      reaches it. Full curve (`INTEGRATE_AT`, G7/168gr/2750fps,
+      zero=100 m, real CDC1 round trip including framing/USB):
+
+| target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
+| ------ | ---------: | -----------: | ---------: | -----------: |
+| 300 m  |    4.09 ms |        244.5 |   57.67 ms |         17.3 |
+| 500 m  |    5.49 ms |        182.0 |   95.97 ms |         10.4 |
+| 1000 m |   10.29 ms |         97.2 |  228.43 ms |          4.4 |
+| 2000 m |   31.57 ms |         31.7 |  894.09 ms |          1.1 |
+| 3000 m |   60.92 ms |         16.4 | 1794.11 ms |          0.6 |
+
+```mermaid
+xychart-beta
+title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
+x-axis [300, 500, 1000, 2000, 3000]
+y-axis "req/s" 0 --> 250
+line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
+line "30 Hz target" [30, 30, 30, 30, 30]
+```
+
+```mermaid
+xychart-beta
+title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
+x-axis [300, 500, 1000, 2000, 3000]
+y-axis "req/s" 0 --> 30
+line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
+line "30 Hz target" [30, 30, 30, 30, 30]
+```
+
+      **Growth is faster than linear in distance on both boards** (RP2350
+      300→1000 m: 3.3× the distance costs only 2.5× the time; 1000→3000 m:
+      3× the distance costs ~6× the time) -- consistent with the
+      transonic/subsonic drag region needing smaller adaptive steps the
+      longer a projectile flies, not just "more of the same" stepping.
+      **Conclusions:**
+      - **RP2040 (no hardware FPU) cannot hit 30 Hz for a from-scratch
+      single-point query at any realistic hunting/sniping distance** --
+      it's already under 30 Hz at 300 m (17.3 req/s) and falls to just
+      0.6 req/s by 3000 m. This is a hard engine/CPU
+      floor, not a wire or protocol cost (framing overhead is a couple
+      ms at most, per Epic 4's own numbers) -- no command shape, batch
+      size, or transport swap fixes it.
+      - **RP2350/ESP32-S3 (hardware FPU) comfortably clear 30 Hz out to
+      ~1.5-2 km**, but **also fail past there** (31.7 req/s at 2000 m is
+      already borderline; 16.4 req/s at 3000 m is a clear miss). Not a
+      RP2040-only problem once the target is far enough out.
+      - **The only architecture that actually guarantees 30 Hz display
+      refresh at arbitrary target distance, on any of these three
+      boards, is decoupling physics recompute from display refresh**:
+      run a real `LOAD_PROFILE`/`LOAD_CONDITIONS`-triggered solve (or a
+      wider `INTEGRATE`/`INTEGRATE_FAST` sweep covering the ranges of
+      interest) only when the *inputs* actually change (new zero, new
+      wind, rangefinder hands back a new distance to track) -- an
+      event, not a 30 Hz timer -- and have the host interpolate between
+      already-fetched points for the 30 Hz redraw itself. A per-display-
+      frame from-scratch physics call cannot be made to meet 30 Hz for
+      an arbitrarily distant target on any board tested, so the
+      real-time budget has to live on the *host* side of that split,
+      not the device side.
+      - **Directly confirmed: one streamed multi-point request beats N
+      separate single-point requests by ~5×, on both boards** --
+      exactly what "the engine walks the trajectory once and doesn't
+      redo earlier stepping per query" predicts, and the concrete
+      number behind the "compute once" recommendation just above.
+      Compared two ways of building the same 10-point grid (100 m
+      through 1000 m, zero=100 m): **(A)** one `INTEGRATE_FAST` call with
+      `range_limit_ft=1000 m, range_step_ft=100 m` (11 rows, one RK4
+      walk) vs **(B)** ten separate `INTEGRATE_FAST` calls with
+      `range_limit_ft == range_step_ft` at each of 100, 200, ..., 1000 m
+      (each one re-integrating from the muzzle every time):
+
+      |                                     |   RP2350 |     RP2040 |
+      | ----------------------------------- | -------: | ---------: |
+      | (A) one stream, 11 rows             | 13.25 ms |  243.52 ms |
+      | (B) ten separate single-point calls | 69.87 ms | 1168.80 ms |
+      | B/A                                 |    5.27× |      4.80× |
+
+      Building a correction grid (multiple holdover points, e.g. for a
+      BDC reticle or a range card) should always be **one**
+      `INTEGRATE`/`INTEGRATE_FAST` call spanning the grid, never a loop
+      of single-point queries -- the naive per-point loop a client
+      might reach for first is ~5× slower than the one-shot streamed
+      alternative on both boards tested, for no additional accuracy.
       `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
       row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
       (currently 8, a provisional count pending the ack-scheme's real RTT
