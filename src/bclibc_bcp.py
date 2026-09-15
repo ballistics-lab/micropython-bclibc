@@ -29,9 +29,25 @@ automatically. Until then, start it explicitly, e.g. from the REPL itself:
     import bclibc_bcp
 
     cdc1 = CDCInterface()
-    cdc1.init(timeout=0)
+    cdc1.init(timeout=0, txbuf=2048, rxbuf=2048)
     usb.device.get().init(cdc1, builtin_driver=True)
     bclibc_bcp.start(cdc1)
+
+`txbuf`/`rxbuf` must be at least 2048 -- matching PROTOCOL.md/Epic 3's own
+RX-buffer sizing (`LOAD_PROFILE`'s worst case, a 200-point `CUSTOM` drag
+table, is ~1.6 KB). `CDCInterface`'s own *default* is `txbuf=256`, which
+is not big enough: a plain `INTEGRATE` response row is the full native
+`TrajectoryData` (64 B on an SP build), so even one *unmodified*
+`BCP_STREAM_ROWS_PER_FRAME=8` batch (`4 + 8*64 = 516 B`) already exceeds
+it. Found the hard way during this project's own hardware bring-up: with
+the default `txbuf`, `write()`'s non-blocking retry loop spins without
+ever pumping TinyUSB (`mp_event_handle_nowait()` only runs once, after
+the whole write already finished), so the ring buffer never drains and
+the call hangs -- not a wire or protocol issue, purely an under-sized
+buffer. `INTEGRATE_FAST`'s thinner 16 B rows (`4 + 8*16 = 132 B`) happen
+to fit under 256 B, which is why this stayed hidden until `INTEGRATE`
+itself was finally exercised over a real transport (see BACKLOG.md
+Epic 5's own writeup on this).
 """
 
 # ImportError here means the .py half was frozen without the C half (e.g. a
