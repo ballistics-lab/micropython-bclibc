@@ -170,7 +170,7 @@ DRAG_CUSTOM = const(2)
 # ── Buffer sizes ──────────────────────────────────────────────────────────────
 # Shot header: 17*4 + 6*4 + 4 + 1 + 1 + 2 = 100 bytes  (<-prefixed, no padding)
 _MAX_WINDS = const(16)
-_MAX_DRAG_PTS = const(128)
+_MAX_DRAG_PTS = const(200)
 _SHOT_SIZE = const(100)
 _WIND_SIZE = const(16)
 _DRAG_SIZE = const(8)

@@ -81,10 +81,10 @@ ROM: stored as `array('H', ...)` rather than a plain `list` (a list of
 256 ints is really a 256-pointer object array) -- measured **528 B**
 versus **1040 B** for the same 256 values, ~5% slower, noise next to the
 table-size choice itself. See `BACKLOG.md` Epic 3 for the full comparison
-table. Worst-case framing cost (COBS + CRC16 together, the ~1.0 KB
-`LOAD_PROFILE` frame) ≈ 30 ms -- negligible next to how rarely that frame
-is sent (once per rifle/ammo setup) and to actual integration compute
-time for everything
+table. Worst-case framing cost (COBS + CRC16 together, the ~1.6 KB
+`LOAD_PROFILE` frame -- a full 200-point `CUSTOM` drag curve, §4.2) ≈ 49 ms
+-- negligible next to how rarely that frame is sent (once per rifle/ammo
+setup) and to actual integration compute time for everything
 else.
 
 ## 3. Response status codes
@@ -140,7 +140,18 @@ Every variable-length part of a payload (a drag table, a wind array, a
 version string) is preceded by its own count/length at a fixed position.
 The receiver:
 
-1. checks each count against its cap (`drag_count ≤ 128`, `wind_count ≤ 16`);
+1. checks each count against its cap (`drag_count ≤ 200` for `drag_type`
+   `CUSTOM`, `≤ 5` for `*_MULTIBC`, `wind_count ≤ 5`) -- BCP's own chosen
+   limits, matching the real precedent of the established `.a7p` profile
+   format's schema (`coef_rows` maxItems: 200 for `CUSTOM`, 5 for
+   G1/G7 multi-point rows) rather than picked arbitrarily. **The `CUSTOM`
+   cap of 200 exceeds `tiny_bclibc`'s previous internal limit** (was
+   `_MAX_DRAG_PTS`/`MAX_DRAG_PTS`=128) -- raised to 200 in the library
+   itself (`src/tiny_bclibc.py`, `src/tiny_bclibc_mp.c`), not just at the
+   wire layer, see Epic 2's follow-up below. `*_MULTIBC`'s cap of 5 and
+   `wind_count`'s cap of 5 both stay well within the library's own
+   existing limits (`MAX_BC_POINTS`=16, `_MAX_WINDS`=16) and needed no
+   library change;
 2. computes the expected payload size from the fixed fields + counts;
 3. requires that size to **equal** the payload length carried by the frame.
 
@@ -166,12 +177,47 @@ essentially never in normal use (see below). Cached until the next
 | 20 | `sight_height_ft` | `f32` |
 | 24 | `twist_inch` | `f32` |
 | 28 | `zero_distance_ft` | `f32` |
-| 32 | `drag_type` | `u8` (`0`=G1, `1`=G7, `2`=custom) |
+| 32 | `drag_type` | `u8` -- see table below |
 | 33 | `rsvd` | `u8` |
-| 34 | `drag_count` | `u16` (≤ 128; ignored unless `drag_type`=custom) |
-| 36 | `drag_points` | `drag_count × {mach:f32, cd:f32}` |
+| 34 | `drag_count` | `u16` -- meaning depends on `drag_type`, see below |
+| 36 | `drag_points` | `drag_count × {mach:f32, second:f32}` -- shape and cap
+      depend on `drag_type`, see below |
 
-Fixed part: 36 B. Max payload (128-point custom table): 36 + 128·8 = 1060 B.
+`drag_type` values -- **not just a table selector, a tagged union over
+what `drag_points`/`bc` mean**:
+
+| `drag_type` | name | `drag_points` holds | cap | `bc` field (offset 0) |
+|---|---|---|---|---|
+| 0 | G1 | *(ignored, `drag_count` must be 0)* | -- | used normally |
+| 1 | G7 | *(ignored, `drag_count` must be 0)* | -- | used normally |
+| 2 | CUSTOM | `drag_count × {mach:f32, cd:f32}` -- a hand-built drag curve fed straight to the engine | ≤ 200 (matches `.a7p`'s own `CUSTOM` `coef_rows` cap; library's `_MAX_DRAG_PTS` raised to 200 to match) | used normally |
+| 3 | G1_MULTIBC | `drag_count × {mach:f32, bc:f32}` -- BC/Mach breakpoints, device runs `build_multibc()` against the **G1** table | ≤ 5 (BCP cap; library's own `MAX_BC_POINTS`=16) | **ignored** |
+| 4 | G7_MULTIBC | same, against the **G7** table | ≤ 5 (BCP cap; library's own `MAX_BC_POINTS`=16) | **ignored** |
+
+**Epic 2's `MultiBC()`/`build_multibc()` had no wire exposure until now** --
+`drag_type` 0/1/2 only covered "static reference table" or "a curve the
+client already computed," never "BC/Mach breakpoints the *device* should
+fold into a curve," which is the whole point of Epic 2. `G1_MULTIBC`/
+`G7_MULTIBC` close that gap: the dispatcher runs the same
+`build_multibc()` call `MultiBC()` does today, producing a curve of
+exactly the reference table's own length (`G1_N`/`G7_N` -- **not**
+`drag_count`, which is only the *input* breakpoint count), then constructs
+the profile with `bc` forced to `1.0` internally, matching `MultiBC()`'s
+own documented contract (the BC-ratio scaling is already baked into the
+curve, so the scalar has to be `1.0` or it would be applied twice).
+
+**Why `bc` (offset 0) is ignored in `*_MULTIBC` mode, not repurposed or
+removed:** once a curve carries multiple BC/Mach breakpoints there is no
+single scalar BC left to hold in a fixed field, but restructuring the
+payload so offset 0 shifts by `drag_type` would make every other field's
+offset conditional too -- not worth it for 4 don't-care bytes. Contract:
+the dispatcher does not read or validate this field in `*_MULTIBC` mode;
+by convention (not enforced) a client sends `1.0` there anyway, purely so
+a packet capture reads sensibly to a human.
+
+Fixed part: 36 B. Max payload is still the `CUSTOM` case (200-point curve
+-- `*_MULTIBC`'s own cap of 5 points, 40 B, is much smaller): 36 + 200·8 =
+1636 B.
 
 **Zero handling (resolved, see `BACKLOG.md` Epic 8):** the client supplies
 a *distance*, not an angle -- the elevation needed to hit that distance
@@ -234,16 +280,16 @@ Atmosphere + shot geometry + wind. Expected to change every few shots.
 | 24 | `cant_angle_rad` | `f32` |
 | 28 | `latitude_deg` | `f32` |
 | 32 | `azimuth_deg` | `f32` |
-| 36 | `wind_count` | `u8` (≤ 16) |
+| 36 | `wind_count` | `u8` (≤ 5, BCP cap; library's own `_MAX_WINDS`=16) |
 | 37 | `rsvd` | `u8[3]` |
 | 40 | `winds` | `wind_count × {velocity_fps:f32, direction_from_rad:f32, until_distance_ft:f32, max_distance_ft:f32}` |
 
-Fixed part: 40 B. Max payload (16 winds): 40 + 16·16 = 296 B.
+Fixed part: 40 B. Max payload (5 winds): 40 + 5·16 = 120 B.
 
-**If no `LOAD_CONDITIONS` has been sent yet**, `INTEGRATE`/`FIND_*`/the
-`LOAD_PROFILE` zero-solve above fall back to `Shot()`'s existing
-Python-side defaults: ICAO standard atmosphere, no wind, zero cant/look
-angle -- same defaults, just applied on-device.
+**If no `LOAD_CONDITIONS` has been sent yet**, `INTEGRATE(_FAST)`/
+`INTEGRATE_AT`/the `LOAD_PROFILE` zero-solve above fall back to `Shot()`'s
+existing Python-side defaults: ICAO standard atmosphere, no wind, zero
+cant/look angle -- same defaults, just applied on-device.
 
 Response payload: `barrel_elevation_rad:f32` -- `LOAD_CONDITIONS`
 re-solves the cached profile's zero against the new conditions (and
@@ -361,7 +407,7 @@ x/y/z, `5..7`=vel x/y/z -- `TINY_BCLIBC_KEY_*` in
 
 ### 4.6 `IDENT`
 
-No request payload. Response (fixed part, `struct` format `<BBHHBHIB`):
+No request payload. Response (fixed part, `struct` format `<BBHHBHBIB`):
 
 | offset | field | type | meaning |
 |---|---|---|---|
@@ -369,11 +415,12 @@ No request payload. Response (fixed part, `struct` format `<BBHHBHIB`):
 | 1 | `real_size` | `u8` | `4` (single) or `8` (double precision build) |
 | 2 | `traj_row_size` | `u16` | `TrajectoryData` size in bytes (64 or 124) |
 | 4 | `base_traj_size` | `u16` | `BaseTrajData` size in bytes (32 or 64) |
-| 6 | `max_winds` | `u8` | cap for `LOAD_CONDITIONS`'s wind array (16) |
-| 7 | `max_drag_pts` | `u16` | cap for `LOAD_PROFILE`'s custom drag table (128) |
-| 9 | `drop_count` | `u32` | frames dropped for bad CRC/size since boot (optional telemetry, §1) |
-| 13 | `version_len` | `u8` | length of the version string that follows |
-| 14 | `version` | `bytes[version_len]` | `tiny_bclibc.version()` passthrough, e.g. `"0.x.y-sp"` |
+| 6 | `max_winds` | `u8` | cap for `LOAD_CONDITIONS`'s wind array (5) |
+| 7 | `max_drag_pts` | `u16` | cap for `LOAD_PROFILE`'s `CUSTOM` drag table (200) |
+| 9 | `max_bc_points` | `u8` | cap for `LOAD_PROFILE`'s `*_MULTIBC` breakpoints (5) |
+| 10 | `drop_count` | `u32` | frames dropped for bad CRC/size since boot (optional telemetry, §1) |
+| 14 | `version_len` | `u8` | length of the version string that follows |
+| 15 | `version` | `bytes[version_len]` | `tiny_bclibc.version()` passthrough, e.g. `"0.x.y-sp"` |
 
 ### 4.7 `RESET`
 

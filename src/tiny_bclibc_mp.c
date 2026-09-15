@@ -87,7 +87,7 @@ static const char *_tiny_bclibc_err_str(int32_t rc)
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
 
-#define MAX_DRAG_PTS 128
+#define MAX_DRAG_PTS 200
 #define MAX_WINDS 16
 #define MAX_BC_POINTS 16
 
