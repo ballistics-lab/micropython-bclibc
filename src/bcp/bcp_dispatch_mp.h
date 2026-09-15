@@ -26,11 +26,11 @@
  * no byte-offset interleaving to manage regardless of which order
  * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
  *
- * Only IDENT, LOAD_CONFIG and LOAD_PROFILE are implemented so far — see
- * BACKLOG.md Epic 3/8 for the rest of the command table; unimplemented
- * commands raise NotImplementedError (a development-time signal, not a
- * wire status — production dispatch will route every BCP_CMD_* to a
- * real handler before this ships).
+ * Only IDENT, LOAD_CONFIG, LOAD_PROFILE and LOAD_CONDITIONS are implemented
+ * so far — see BACKLOG.md Epic 3/8 for the rest of the command table;
+ * unimplemented commands raise NotImplementedError (a development-time
+ * signal, not a wire status — production dispatch will route every
+ * BCP_CMD_* to a real handler before this ships).
  */
 #ifndef BCP_DISPATCH_MP_H
 #define BCP_DISPATCH_MP_H
@@ -458,6 +458,84 @@ static int bcp_handle_load_profile(const uint8_t *payload, size_t payload_len, u
     return 1;
 }
 
+/* ── LOAD_CONDITIONS (PROTOCOL.md §4.3) ───────────────────────────────────
+ * Request: 40 B fixed (temp_c, pressure_hpa, altitude_ft, humidity,
+ * look_angle_rad, barrel_azimuth_rad, cant_angle_rad, latitude_deg,
+ * azimuth_deg, wind_count:u8, rsvd:u8[3]) + wind_count x 16 B winds
+ * {velocity_fps:f32, direction_from_rad:f32, until_distance_ft:f32,
+ * max_distance_ft:f32}, wind_count <= BCP_MAX_WINDS (5). Field names match
+ * TINY_BCLIBC_Shot's/TINY_BCLIBC_Wind's own field names exactly -- direct
+ * passthrough, no relabeling.
+ *
+ * Response: barrel_elevation_rad, via the shared bcp_resolve_zero() (same
+ * as LOAD_PROFILE/LOAD_CONFIG). ERR_NOT_LOADED if no profile is cached yet
+ * (no zero_distance_ft to solve against). ERR_INTERNAL on a zero-solve
+ * failure.
+ */
+#define BCP_LOAD_CONDITIONS_FIXED_SIZE 40u
+
+static int bcp_handle_load_conditions(const uint8_t *payload, size_t payload_len, uint8_t status_out[1])
+{
+    if (payload_len < BCP_LOAD_CONDITIONS_FIXED_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    uint8_t wind_count = payload[36];
+    if (wind_count > (uint8_t)BCP_MAX_WINDS)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_ARG;
+        return 0;
+    }
+    size_t expected = BCP_LOAD_CONDITIONS_FIXED_SIZE + (size_t)wind_count * 16u;
+    if (payload_len != expected)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+
+    bcp_state.shot.temp_c = (real_t)bcp_rdf32(payload, 0);
+    bcp_state.shot.pressure_hpa = (real_t)bcp_rdf32(payload, 4);
+    bcp_state.shot.altitude_ft = (real_t)bcp_rdf32(payload, 8);
+    bcp_state.shot.humidity = (real_t)bcp_rdf32(payload, 12);
+    bcp_state.shot.look_angle_rad = (real_t)bcp_rdf32(payload, 16);
+    bcp_state.shot.barrel_azimuth_rad = (real_t)bcp_rdf32(payload, 20);
+    bcp_state.shot.cant_angle_rad = (real_t)bcp_rdf32(payload, 24);
+    bcp_state.shot.latitude_deg = (real_t)bcp_rdf32(payload, 28);
+    bcp_state.shot.azimuth_deg = (real_t)bcp_rdf32(payload, 32);
+
+    const uint8_t *wind_points = payload + BCP_LOAD_CONDITIONS_FIXED_SIZE;
+    for (uint8_t i = 0; i < wind_count; i++)
+    {
+        size_t off = (size_t)i * 16u;
+        bcp_state.winds[i].velocity_fps = (real_t)bcp_rdf32(wind_points, off);
+        bcp_state.winds[i].direction_from_rad = (real_t)bcp_rdf32(wind_points, off + 4u);
+        bcp_state.winds[i].until_distance_ft = (real_t)bcp_rdf32(wind_points, off + 8u);
+        bcp_state.winds[i].max_distance_ft = (real_t)bcp_rdf32(wind_points, off + 12u);
+    }
+    /* winds points at bcp_state's own backing array -- valid regardless of
+     * wind_count (0 winds just means the pointer is never dereferenced). */
+    bcp_state.shot.winds = bcp_state.winds;
+    bcp_state.shot.wind_count = (int32_t)wind_count;
+    bcp_state.has_conditions = true;
+
+    if (!bcp_state.has_profile)
+    {
+        /* Nothing cached to solve a zero against yet -- see the comment
+         * above. Conditions are stored regardless. */
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+    real_t angle;
+    if (bcp_resolve_zero(&angle) != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return 1;
+}
+
 /* ── IDENT (PROTOCOL.md §4.6) ─────────────────────────────────────────────
  * No request payload (ignored). Response, fixed part matches struct format
  * "<BBHHBHBIB" (15 B) followed by the version string:
@@ -550,6 +628,14 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
         uint8_t status;
         int ok = bcp_handle_load_profile((const uint8_t *)pbi.buf, pbi.len, &status);
+        return bcp_zero_response(status, ok);
+    }
+    case BCP_CMD_LOAD_CONDITIONS:
+    {
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t status;
+        int ok = bcp_handle_load_conditions((const uint8_t *)pbi.buf, pbi.len, &status);
         return bcp_zero_response(status, ok);
     }
     default:

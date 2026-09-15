@@ -63,14 +63,42 @@ just compiled):
   engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
   via the shared `bcp_resolve_zero()`), no Python involved.
 
+**Implemented, unix-verified only (not yet hardware-verified — no
+RP2040/RP2350/ESP32-S3 available in this session, unlike the bullet
+above)**:
+- `LOAD_CONDITIONS` (`src/bcp/bcp_dispatch_mp.h`'s
+  `bcp_handle_load_conditions()`, PROTOCOL.md §4.3): parses atmosphere
+  (`temp_c`/`pressure_hpa`/`altitude_ft`/`humidity`), shot geometry
+  (`look_angle_rad`/`barrel_azimuth_rad`/`cant_angle_rad`), Coriolis
+  (`latitude_deg`/`azimuth_deg`) and the `wind_count`-prefixed wind array
+  (≤ `BCP_MAX_WINDS`=5) straight into `bcp_state.shot`/`bcp_state.winds`,
+  then re-triggers `bcp_resolve_zero()` exactly like `LOAD_PROFILE`/
+  `LOAD_CONFIG`. `ERR_BAD_ARG` on `wind_count` over the cap, `ERR_BAD_SIZE`
+  on any other payload-length mismatch (§4.1's array-count rule),
+  `ERR_NOT_LOADED` with no profile cached yet. Built and actually run
+  against `tests/test_bcp_dispatch_native.py`'s new `LOAD_CONDITIONS`
+  sections on a freshly built x64 unix usermod (`BCLIBC_BCP=1`,
+  MicroPython v1.29.0) this session — all 30 checks in the file pass,
+  including the ICAO-defaults/no-profile-yet case, a 5-wind (cap) and a
+  6-wind (over-cap → `ERR_BAD_ARG`) case, a `wind_count`/payload-length
+  mismatch (→ `ERR_BAD_SIZE`), and a cold/thin-vs-hot/dense atmosphere
+  regression check (angles differ, not bit-identical — the same class of
+  "defaults silently zeroed" bug `LOAD_PROFILE`'s own regression test
+  above caught). Also cross-compiled and linked clean for RPI_PICO
+  (RP2040, armv6m, CMake path, fresh `build-RPI_PICO/`) with
+  `BCLIBC_BCP=1` this session -- FLASH 361116→364264 B (+3148 B), RAM
+  24700→30220 B (+5520 B, mostly `BcpState`'s 200-point drag/5-wind
+  backing arrays), no warnings. **Not yet exercised**: actually running on
+  real RP2040/RP2350/ESP32-S3 hardware (no board available in this
+  session) -- only the unix build was executed; RPI_PICO was compiled and
+  linked, not flashed/run.
+
 **Not implemented yet** (raise `NotImplementedError` from `dispatch()`
 today) — in roughly the order it makes sense to tackle them, per the
-dependency notes in Epic 8: `LOAD_CONDITIONS` (same shape as
-`LOAD_PROFILE`/`LOAD_CONFIG` — parse atmosphere + wind array into
-`bcp_state.shot`, call `bcp_resolve_zero()`) → `INTEGRATE_AT` (single-row
-response, no streaming machinery needed) → `INTEGRATE`/`INTEGRATE_FAST`
-(need the `MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need
-real cached state/a real stream in flight to be worth building against).
+dependency notes in Epic 8: `INTEGRATE_AT` (single-row response, no
+streaming machinery needed) → `INTEGRATE`/`INTEGRATE_FAST` (need the
+`MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need real cached
+state/a real stream in flight to be worth building against).
 
 **Building/testing, concretely:**
 ```sh

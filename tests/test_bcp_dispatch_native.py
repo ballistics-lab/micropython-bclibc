@@ -10,22 +10,25 @@ Run with:
 or from repo root:
     /path/to/micropython test_bcp_dispatch_native.py
 
-IDENT, LOAD_CONFIG and LOAD_PROFILE are implemented so far (see
-BACKLOG.md Epic 3/8) -- this test covers IDENT itself, the drop_count
-telemetry it reports (from parse_frame's own failure counter),
+IDENT, LOAD_CONFIG, LOAD_PROFILE and LOAD_CONDITIONS are implemented so
+far (see BACKLOG.md Epic 3/8) -- this test covers IDENT itself, the
+drop_count telemetry it reports (from parse_frame's own failure counter),
 LOAD_CONFIG's size validation and its ERR_NOT_LOADED response, the
 unknown-command NotImplementedError, one full
-parse_frame -> dispatch -> build_frame round trip, and LOAD_PROFILE's
+parse_frame -> dispatch -> build_frame round trip, LOAD_PROFILE's
 drag_type tagged union (G1/G7/CUSTOM/*_MULTIBC) plus its array-count
-validation.
+validation, and LOAD_CONDITIONS' atmosphere/wind parsing plus its own
+array-count validation.
 
 BCP state is real persistent C state across dispatch() calls in this one
 process (RESET isn't implemented yet to clear it) -- so test order
-matters here more than in most test files: the LOAD_CONFIG section below
-runs *before* any LOAD_PROFILE call and depends on no profile being
-cached yet (ERR_NOT_LOADED); the LOAD_PROFILE section loads a real
-profile, and the final section re-checks LOAD_CONFIG now succeeds once
-one is cached. Don't reorder sections without checking this.
+matters here more than in most test files: the LOAD_CONFIG and
+LOAD_CONDITIONS ERR_NOT_LOADED checks below run *before* any LOAD_PROFILE
+call and depend on no profile being cached yet; the LOAD_PROFILE section
+loads a real profile, the LOAD_CONDITIONS section after it depends on
+that profile being cached, and the final section re-checks LOAD_CONFIG
+now succeeds once one is cached. Don't reorder sections without checking
+this.
 """
 
 import struct
@@ -135,6 +138,38 @@ try:
         _fail("LOAD_CONFIG one byte too long", "got status={}".format(status))
 except Exception as ex:
     _fail("LOAD_CONFIG one byte too long", ex)
+
+# -- LOAD_CONDITIONS (no profile yet) ---------------------------------------------
+print("\n--- LOAD_CONDITIONS (no profile cached yet) ---")
+
+
+def _pack_conditions(temp_c, pressure_hpa, altitude_ft, humidity, look_angle_rad, barrel_azimuth_rad, cant_angle_rad, latitude_deg, azimuth_deg, winds):
+    """winds: list of (velocity_fps, direction_from_rad, until_distance_ft, max_distance_ft),
+    matching PROTOCOL.md §4.3's wire layout exactly."""
+    hdr = struct.pack("<9fB", temp_c, pressure_hpa, altitude_ft, humidity, look_angle_rad, barrel_azimuth_rad, cant_angle_rad, latitude_deg, azimuth_deg, len(winds)) + b"\x00\x00\x00"
+    body = b"".join(struct.pack("<4f", *w) for w in winds)
+    return hdr + body
+
+
+_ICAO = (15.0, 1013.25, 0.0, 0.5, 0.0, 0.0, 0.0, float("nan"), float("nan"))
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("LOAD_CONDITIONS with no profile cached -> ERR_NOT_LOADED, empty payload")
+    else:
+        _fail("LOAD_CONDITIONS no-profile case", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS no-profile case", ex)
+
+try:
+    status, _ = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, b"too short")
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("LOAD_CONDITIONS with wrong payload size -> ERR_BAD_SIZE")
+    else:
+        _fail("LOAD_CONDITIONS bad size", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS bad size", ex)
 
 # -- unknown command -------------------------------------------------------------
 print("\n--- unknown command ---")
@@ -306,6 +341,94 @@ try:
         _fail("LOAD_PROFILE CUSTOM over cap", "got status={}".format(status))
 except Exception as ex:
     _fail("LOAD_PROFILE CUSTOM over cap", ex)
+
+# -- LOAD_CONDITIONS (profile now cached) -------------------------------------
+print("\n--- LOAD_CONDITIONS (profile cached) ---")
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+    if status == d.STATUS_OK and len(payload) == 4:
+        angle_no_wind = struct.unpack("<f", payload)[0]
+        _pass("LOAD_CONDITIONS ICAO/no-wind -> OK, angle={:.6f}".format(angle_no_wind))
+    else:
+        _fail("LOAD_CONDITIONS ICAO/no-wind", (status, payload))
+        angle_no_wind = None
+except Exception as ex:
+    _fail("LOAD_CONDITIONS ICAO/no-wind", ex)
+    angle_no_wind = None
+
+try:
+    # A strong crosswind must actually move the solved zero angle -- same
+    # class of "not just nonzero, meaningfully different" regression check
+    # LOAD_PROFILE's bc-sensitivity test above uses.
+    winds = [(30.0, 1.5707963, 0.0, 1e7)]  # 30 fps from 90 deg (pure crosswind), full range
+    status, payload = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=winds))
+    if status == d.STATUS_OK and len(payload) == 4:
+        angle_wind = struct.unpack("<f", payload)[0]
+        _pass("LOAD_CONDITIONS with 1 wind segment -> OK, angle={:.6f}".format(angle_wind))
+    else:
+        _fail("LOAD_CONDITIONS with 1 wind segment", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS with 1 wind segment", ex)
+
+try:
+    # Thin, cold air vs. a hot/low-density atmosphere -- must give a clearly
+    # different zero angle, not a bit-identical one (regression class from
+    # LOAD_PROFILE's own atmosphere-defaults bug, applied to LOAD_CONDITIONS
+    # instead of the on-device defaults).
+    cold = (-20.0, 1013.25, 8000.0, 0.1, 0.0, 0.0, 0.0, float("nan"), float("nan"))
+    hot = (40.0, 1013.25, 0.0, 0.1, 0.0, 0.0, 0.0, float("nan"), float("nan"))
+    _, payload_cold = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*cold, winds=[]))
+    _, payload_hot = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*hot, winds=[]))
+    angle_cold = struct.unpack("<f", payload_cold)[0]
+    angle_hot = struct.unpack("<f", payload_hot)[0]
+    if angle_cold != angle_hot:
+        _pass("cold/thin -> {:.6f} rad, hot/dense -> {:.6f} rad (atmosphere clearly applied)".format(angle_cold, angle_hot))
+    else:
+        _fail("atmosphere sensitivity regression", (angle_cold, angle_hot))
+except Exception as ex:
+    _fail("atmosphere sensitivity regression", ex)
+
+try:
+    # 5 winds is the BCP cap (PROTOCOL.md §4.1) -- must be accepted.
+    winds5 = [(10.0, 0.0, float(i) * 100.0, float(i + 1) * 100.0) for i in range(5)]
+    status, payload = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=winds5))
+    if status == d.STATUS_OK and len(payload) == 4:
+        _pass("LOAD_CONDITIONS with 5 winds (BCP cap) -> OK")
+    else:
+        _fail("LOAD_CONDITIONS with 5 winds", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS with 5 winds", ex)
+
+try:
+    # 6 winds is one past the BCP cap -- ERR_BAD_ARG, not silently clamped.
+    winds6 = [(10.0, 0.0, float(i) * 100.0, float(i + 1) * 100.0) for i in range(6)]
+    status, _ = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=winds6))
+    if status == d.STATUS_ERR_BAD_ARG:
+        _pass("LOAD_CONDITIONS with 6 winds (over cap) -> ERR_BAD_ARG")
+    else:
+        _fail("LOAD_CONDITIONS with 6 winds", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS with 6 winds", ex)
+
+try:
+    # wind_count says 2 but only 1 wind's worth of bytes follow -- ERR_BAD_SIZE.
+    bad = _pack_conditions(*_ICAO, winds=[(10.0, 0.0, 100.0, 200.0)])
+    bad = bad[:36] + struct.pack("<B", 2) + b"\x00\x00\x00" + bad[40:]
+    status, _ = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, bad)
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("LOAD_CONDITIONS wind_count/payload-length mismatch -> ERR_BAD_SIZE")
+    else:
+        _fail("LOAD_CONDITIONS wind_count mismatch", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS wind_count mismatch", ex)
+
+# reset back to the ICAO/no-wind baseline so later sections (LOAD_CONFIG
+# re-solve check) aren't affected by whichever conditions ran last above.
+try:
+    d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+except Exception:
+    pass
 
 # -- LOAD_CONFIG now succeeds, since a profile is cached ----------------------
 print("\n--- LOAD_CONFIG after a profile is cached ---")
