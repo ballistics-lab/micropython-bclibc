@@ -78,4 +78,17 @@ target_compile_definitions(usermod_tiny_bclibc INTERFACE
     TINY_BCLIBC_FAST_ZERO_FIND
 )
 
+# ── BCLIBC_BCP: ballistic co-processor (BCP) build (default off) ──────────────
+# BCLIBC_BCP=1 in the environment (e.g. `BCLIBC_BCP=1 make -C ports/rp2 ...`);
+# manifest.py reads the same variable to freeze the application's .py files.
+# Read at configure time only -- switching it needs a fresh build directory.
+#
+# MICROPY_CPP_DEF_EXTRA as well as the target definition: py/mkrules.cmake's
+# QSTR preprocessing does not see usermod INTERFACE_COMPILE_DEFINITIONS, so
+# without it any qstr under #ifdef BCLIBC_BCP is undeclared at compile time.
+if("$ENV{BCLIBC_BCP}" STREQUAL "1")
+    target_compile_definitions(usermod_tiny_bclibc INTERFACE BCLIBC_BCP=1)
+    list(APPEND MICROPY_CPP_DEF_EXTRA BCLIBC_BCP=1)
+endif()
+
 target_link_libraries(usermod INTERFACE usermod_tiny_bclibc)
