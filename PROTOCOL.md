@@ -116,7 +116,7 @@ only cover frames that passed framing but failed at the command layer.
 | 8 | `IDENT` | *(none)* | §4.6 |
 | 9 | `ABORT` | *(none)* | `OK` (see note below) |
 
-Numeric ids above are final, matching `src/bcp_dispatch_mp.c`'s `BCP_CMD_*`
+Numeric ids above are final, matching `src/bcp/bcp_dispatch_mp.h`'s `BCP_CMD_*`
 enum exactly (`IDENT` implemented and hardware-verified; the rest raise
 `NotImplementedError` for now, see BACKLOG.md Epic 3/8).
 

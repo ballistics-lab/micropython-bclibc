@@ -59,9 +59,7 @@ CFLAGS_USERMOD += \
 # change: switch the flag in a clean BUILD directory.
 ifeq ($(BCLIBC_BCP),1)
 CFLAGS_USERMOD += -DBCLIBC_BCP=1
-# bcp_frame_mp.c (COBS+CRC16 wire codec) and bcp_dispatch_mp.c (command
-# dispatch, PROTOCOL.md §4) are BCP-only -- unlike tiny_bclibc_mp.c, not
-# part of a plain usermod build at all.
-SRC_USERMOD_C += $(USERMOD_DIR)/../src/bcp_frame_mp.c
-SRC_USERMOD_C += $(USERMOD_DIR)/../src/bcp_dispatch_mp.c
 endif
+# No SRC_USERMOD_C entries for bcp_frame_mp.h/bcp_dispatch_mp.h -- they are
+# `#include`d directly into tiny_bclibc_mp.c (see that file's own comment,
+# and bcp_frame_mp.h's), not separately compiled usermod sources.

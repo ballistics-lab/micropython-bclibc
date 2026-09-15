@@ -1,7 +1,12 @@
-/* bcp_dispatch_mp.c — BCP command dispatch (PROTOCOL.md §4). Only compiled
+/* bcp_dispatch_mp.h — BCP command dispatch (PROTOCOL.md §4). Only compiled
  * when BCLIBC_BCP=1 (see usermod/micropython.mk/.cmake).
  *
- * bcp_frame_mp.c owns wire framing (COBS+CRC16, header pack/unpack) and
+ * A `.h` on purpose, `#include`d exactly once from tiny_bclibc_mp.c right
+ * after bcp_frame_mp.h (needs its BCP_STATUS_* enum in scope, not
+ * redefined here) -- see bcp_frame_mp.h's own top comment for why this is
+ * a header despite holding full function bodies, not just declarations.
+ *
+ * bcp_frame_mp.h owns wire framing (COBS+CRC16, header pack/unpack) and
  * knows nothing about what a command *means*; this file owns command
  * semantics and knows nothing about wire framing. A future C read/write
  * loop calls both: parse_frame() -> dispatch() -> build_frame(). For now
@@ -27,6 +32,8 @@
  * wire status — production dispatch will route every BCP_CMD_* to a
  * real handler before this ships).
  */
+#ifndef BCP_DISPATCH_MP_H
+#define BCP_DISPATCH_MP_H
 
 #include <math.h>
 #include <stdbool.h>
@@ -39,7 +46,7 @@
 
 #include "tiny_bclibc.h"
 #include "generated/bclibc_mp/version.h"
-#include "drag_tables.h" /* g1_mach/g1_cd/g7_mach/g7_cd, G1_N/G7_N -- same header tiny_bclibc_mp.c uses */
+#include "../drag_tables.h" /* g1_mach/g1_cd/g7_mach/g7_cd, G1_N/G7_N -- same header tiny_bclibc_mp.c uses; relative path since this file now lives in src/bcp/ */
 
 /* ── Command ids (PROTOCOL.md §4) — final, not provisional ──────────────── */
 enum
@@ -55,17 +62,10 @@ enum
     BCP_CMD_ABORT = 9,
 };
 
-/* ── Status codes — mirror bcp_frame's STATUS_* (PROTOCOL.md §3) ─────────── */
-enum
-{
-    BCP_STATUS_OK = 0,
-    BCP_STATUS_MORE = 1,
-    BCP_STATUS_INTERRUPTED = 2,
-    BCP_STATUS_ERR_BAD_SIZE = 3,
-    BCP_STATUS_ERR_BAD_ARG = 4,
-    BCP_STATUS_ERR_NOT_LOADED = 5,
-    BCP_STATUS_ERR_INTERNAL = 6,
-};
+/* Status codes (BCP_STATUS_*, PROTOCOL.md §3) come from bcp_frame_mp.h,
+ * included before this file in tiny_bclibc_mp.c -- not redefined here,
+ * they're the exact same wire status codes bcp_frame's own STATUS_*
+ * Python constants expose. */
 
 /* ── BCP-specific size caps (PROTOCOL.md §4.1) — tighter than tiny_bclibc's
  * own internal limits, matching the .a7p profile schema's own precedent
@@ -77,14 +77,11 @@ enum
 
 #define BCP_PROTO_VERSION 1u
 
-/* From bcp_frame_mp.c — frames dropped for bad COBS/size/CRC since boot. */
-extern uint32_t bcp_frame_drop_count(void);
-
-/* From tiny_bclibc_mp.c — same interpolate-against-a-reference-table math
- * Epic 2's MultiBC()/build_multibc() already does, reused here for
- * LOAD_PROFILE's *_MULTIBC drag_type variants instead of duplicated. */
-extern real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach);
-extern void tiny_bclibc_mp_sort_bc_points(real_t *mach, real_t *val, int32_t n);
+/* bcp_frame_drop_count() (bcp_frame_mp.h) and tiny_bclibc_mp_interp_bc()/
+ * tiny_bclibc_mp_sort_bc_points() (tiny_bclibc_mp.c, reused here for
+ * LOAD_PROFILE's *_MULTIBC drag_type variants instead of duplicated) are
+ * all `static` functions defined earlier in this same translation unit --
+ * no `extern` needed, this header is `#include`d after both. */
 
 /* drag_type values (PROTOCOL.md §4.2) — final, not provisional. */
 enum
@@ -564,36 +561,7 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(mp_bcp_dispatch_obj, mp_bcp_dispatch);
 
-/* ── Module registration (usermod only — BCLIBC_BCP is usermod-only) ────── */
+/* No module table / MP_REGISTER_MODULE here either -- see bcp_frame_mp.h's
+ * own note just above its equivalent spot. */
 
-static const mp_rom_map_elem_t bcp_dispatch_module_globals_table[] = {
-    {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__bcp_dispatch)},
-    {MP_ROM_QSTR(MP_QSTR_dispatch), MP_ROM_PTR(&mp_bcp_dispatch_obj)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_PROFILE), MP_ROM_INT(BCP_CMD_LOAD_PROFILE)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONFIG), MP_ROM_INT(BCP_CMD_LOAD_CONFIG)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONDITIONS), MP_ROM_INT(BCP_CMD_LOAD_CONDITIONS)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE), MP_ROM_INT(BCP_CMD_INTEGRATE)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_FAST), MP_ROM_INT(BCP_CMD_INTEGRATE_FAST)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_AT), MP_ROM_INT(BCP_CMD_INTEGRATE_AT)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_RESET), MP_ROM_INT(BCP_CMD_RESET)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_IDENT), MP_ROM_INT(BCP_CMD_IDENT)},
-    {MP_ROM_QSTR(MP_QSTR_CMD_ABORT), MP_ROM_INT(BCP_CMD_ABORT)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_OK), MP_ROM_INT(BCP_STATUS_OK)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_MORE), MP_ROM_INT(BCP_STATUS_MORE)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_INTERRUPTED), MP_ROM_INT(BCP_STATUS_INTERRUPTED)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_SIZE), MP_ROM_INT(BCP_STATUS_ERR_BAD_SIZE)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_ARG), MP_ROM_INT(BCP_STATUS_ERR_BAD_ARG)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_NOT_LOADED), MP_ROM_INT(BCP_STATUS_ERR_NOT_LOADED)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_INTERNAL), MP_ROM_INT(BCP_STATUS_ERR_INTERNAL)},
-    {MP_ROM_QSTR(MP_QSTR_MAX_WINDS), MP_ROM_INT(BCP_MAX_WINDS)},
-    {MP_ROM_QSTR(MP_QSTR_MAX_DRAG_PTS), MP_ROM_INT(BCP_MAX_DRAG_PTS)},
-    {MP_ROM_QSTR(MP_QSTR_MAX_BC_POINTS), MP_ROM_INT(BCP_MAX_BC_POINTS)},
-};
-static MP_DEFINE_CONST_DICT(bcp_dispatch_module_globals, bcp_dispatch_module_globals_table);
-
-const mp_obj_module_t bcp_dispatch_module = {
-    .base = {&mp_type_module},
-    .globals = (mp_obj_dict_t *)&bcp_dispatch_module_globals,
-};
-
-MP_REGISTER_MODULE(MP_QSTR__bcp_dispatch, bcp_dispatch_module);
+#endif /* BCP_DISPATCH_MP_H */
