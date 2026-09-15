@@ -1275,6 +1275,59 @@ assuming a real MicroPython/pico-sdk incompatibility.
         BLE connection interval) before picking a window size or deciding
         whether (a)'s latency worry is real in practice. Not blocking
         Epic 2/3/4/6 work — can stay open while those proceed.
+  - **Real USB CDC numbers now exist (Epic 4's `benchmarks/bcp_wire_bench.py`,
+        see that epic's own writeup): ~35-43 ms for a full 1 km/10 m
+        `INTEGRATE_FAST` (101 rows, 14 `MORE`+`OK` frames at the current
+        8-rows/frame batch) on RP2350, only ~2× the board's own ~18 ms
+        local solve time.** USB CDC's raw bitrate (full-speed, ~12 Mbit/s)
+        is never the bottleneck there — the whole ~1.8 KB response could
+        transmit in ~1.2 ms of pure bit time; per-frame/USB-transaction
+        overhead is what shows up instead.
+  - **UART is a completely different story, and it's a hard physics
+        floor, not a software problem — confirmed by direct calculation
+        from this same measured payload size.** At 115200 baud/8N1 (10
+        bits/byte, ~86.8 µs/byte -- Epic 3's own already-derived number),
+        the same ~1.8 KB `INTEGRATE_FAST` response takes **≈156 ms of pure
+        bit-transmission time alone**, before any framing/CPU/dispatch
+        cost is even counted — worse than the *entire* measured USB CDC
+        round trip (35-43 ms) by itself, ~4-4.5×. At 921600 baud (a
+        realistic upper end for many UART bridges), the same payload's
+        bit-transmission floor drops to **≈19.6 ms** — comparable to the
+        USB CDC number. At a low-power-link baud like 9600, the floor is
+        **≈1.88 s** for this one request — unusable for anything
+        real-time. **Conclusion for whenever UART actually gets built:**
+        `INTEGRATE_FAST`'s already-thin 16 B row (vs `INTEGRATE`'s 64 B
+        SP/124 B DP row) was the right call for exactly this reason, and
+        target UART baud rate needs to be chosen (or negotiated) with this
+        floor in mind *before* worrying about ack-scheme window sizes —
+        no amount of protocol cleverness moves a hard bitrate limit.
+  - **A real reliability bug found while chasing this, worth carrying
+        into whatever finally changes `BCP_STREAM_ROWS_PER_FRAME`:**
+        tried raising the batch from 8 to 25 rows/frame (fewer, bigger
+        `MORE` frames -- an obvious lever once per-frame overhead was
+        confirmed to dominate on USB CDC) with `CDCInterface`'s **default**
+        `txbuf=256` unchanged. First two calls came back suspiciously fast
+        (~19.7 ms — implausibly close to bare solve time), then the third
+        call hung and timed out entirely. Root cause: a 25-row SP frame is
+        ~1.6 KB, encoded — far bigger than the 256 B `_wb` ring buffer
+        `CDCInterface.write()` fills per call; with `timeout=0` `write()`
+        returns partial almost immediately, and `mp_stream_write_exactly`'s
+        C-level retry loop calls it again in a tight spin with **no**
+        `mp_event_handle_nowait()` in between (that only runs once, after
+        the *whole* write finishes, per Epic 4's own fix) -- so the ring
+        buffer never actually drains via `tud_task()` mid-retry. Bumping
+        `CDCInterface.init(txbuf=2048, rxbuf=2048)` to match fixed it:
+        stable `35.14 ms` avg over 15 runs, no hangs — real, but a much
+        smaller win than the fluke `~19.7 ms` suggested. **Reverted
+        `BCP_STREAM_ROWS_PER_FRAME` back to `8`** rather than keep `25`:
+        raising it also breaks the size invariant this constant's own
+        comment documents for double-precision builds (`25 * 124 + 4 =
+        3104 B`, over the 2048 B RX-buffer precedent) and one existing
+        test's assumption (`tests/test_bcp_dispatch_native.py`'s "more
+        than one MORE frame was needed" check). Whatever value the
+        ack-scheme work above eventually lands on needs to size
+        `bclibc_bcp.py`'s own `CDCInterface.init(txbuf=...)` to match, not
+        just pick a row count against the RX-buffer cap alone.
 - [x] **Implemented — `bcp_stream_row_cb`/`bcp_stream_flush` in
       `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
       row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
