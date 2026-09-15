@@ -146,8 +146,13 @@ static void _wrf(uint8_t *p, uint32_t off, float v)
 /* Linear interpolation of BC at a single Mach value; bc_mach[]/bc_val[] must
  * be sorted ascending by bc_mach. Clamps outside the point range (returns
  * the nearest endpoint's value), matching py-ballisticcalc's
- * linear_interpolation() boundary behavior. */
-static real_t _interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
+ * linear_interpolation() boundary behavior.
+ *
+ * Not static: reused by bcp_dispatch_mp.c's LOAD_PROFILE *_MULTIBC
+ * handling (same interpolate-against-a-reference-table math Epic 2's
+ * MultiBC()/build_multibc() already does) -- extern-declared there
+ * rather than duplicated, same reasoning as bcp_frame_drop_count(). */
+real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
 {
     if (mach <= bc_mach[0])
         return bc_val[0];
@@ -167,8 +172,9 @@ static real_t _interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n,
 }
 
 /* Insertion sort by mach ascending; n is small (<= MAX_BC_POINTS), so O(n^2)
- * is fine and this avoids pulling in qsort(). */
-static void _sort_bc_points(real_t *mach, real_t *val, int32_t n)
+ * is fine and this avoids pulling in qsort(). Not static -- see
+ * tiny_bclibc_mp_interp_bc()'s own comment just above. */
+void tiny_bclibc_mp_sort_bc_points(real_t *mach, real_t *val, int32_t n)
 {
     for (int32_t i = 1; i < n; i++)
     {
@@ -222,7 +228,7 @@ static mp_obj_t mp_bclibc_build_multibc(size_t n_args, const mp_obj_t *args)
         bc_mach[i] = (real_t)_rdf(pp, (uint32_t)i * 8u);
         bc_val[i] = (real_t)_rdf(pp, (uint32_t)i * 8u + 4u);
     }
-    _sort_bc_points(bc_mach, bc_val, n_pts);
+    tiny_bclibc_mp_sort_bc_points(bc_mach, bc_val, n_pts);
 
     const real_t *ref_mach = (drag_type == 0u) ? g1_mach : g7_mach;
     const real_t *ref_cd = (drag_type == 0u) ? g1_cd : g7_cd;
@@ -235,7 +241,7 @@ static mp_obj_t mp_bclibc_build_multibc(size_t n_args, const mp_obj_t *args)
     uint8_t *co = (uint8_t *)cbi.buf;
     for (int32_t i = 0; i < ref_n; i++)
     {
-        real_t bc_at = _interp_bc(bc_mach, bc_val, n_pts, ref_mach[i]);
+        real_t bc_at = tiny_bclibc_mp_interp_bc(bc_mach, bc_val, n_pts, ref_mach[i]);
         _wrf(mo, (uint32_t)i * 4u, (float)ref_mach[i]);
         _wrf(co, (uint32_t)i * 4u, (float)(ref_cd[i] / bc_at));
     }
