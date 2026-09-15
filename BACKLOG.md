@@ -251,8 +251,11 @@ being used purely as a library from Python application code.
     - On USB CDC byte loss is practically limited to host buffer overflow
           or reconnect (bulk transfers have their own CRC + retry); these
           cases matter mostly for the later UART/BLE transports.
-- [ ] **Proposed, not confirmed — packet header (4 B, keeps the payload
-      4-aligned for `uctypes.struct` over the RX buffer):**
+- [x] **Resolved and implemented, not just proposed — packet header (4 B,
+      keeps the payload 4-aligned for `uctypes.struct` over the RX
+      buffer):** matches `src/bcp_frame_mp.c`'s `build_frame`/
+      `parse_frame` exactly, real-hardware-verified (see the C-port
+      confirmation above).
       `type:u8 | seq:u8 | status:u8 | rsvd:u8 | payload | crc16:u16`,
       little-endian. `type` = command, `cmd | 0x80` in a response; `seq`
       set by the host and echoed back (response matching, Epic 6
@@ -559,14 +562,19 @@ being used purely as a library from Python application code.
       BCP — not removed from the engine, just not exposed over the wire
       in v1. Revisit only if a real diagnostics/analysis use case for the
       co-processor specifically shows up.
-- [ ] Command enum: `LOAD_PROFILE, LOAD_CONFIG, LOAD_CONDITIONS, INTEGRATE,
-      INTEGRATE_FAST, INTEGRATE_AT, RESET, IDENT, ABORT, ACK/NAK/ERROR`.
-      **`FIND_ZERO_ANGLE`, `FIND_APEX`, `FIND_MAX_RANGE` dropped from
-      the wire command set** — see Epic 8 (now internal-only,
-      auto-triggered by `LOAD_PROFILE`/`LOAD_CONDITIONS`). **`RESET`
-      redefined, not dropped** — see Epic 8: an application soft-reset,
-      not a data-clearer and not an MCU reboot. `SET_BLE_PASS` is deferred
-      to the BLE transport epic (see Epic 8) — not part of v1.
+- [x] **Resolved — final command enum, implemented in
+      `src/bcp_dispatch_mp.c` (`BCP_CMD_*`), not just a placeholder
+      anymore:** `LOAD_PROFILE=1, LOAD_CONFIG=2, LOAD_CONDITIONS=3,
+      INTEGRATE=4, INTEGRATE_FAST=5, INTEGRATE_AT=6, RESET=7, IDENT=8,
+      ABORT=9`. `ACK/NAK/ERROR` are `status` codes
+      (`BCP_STATUS_*`/`bcp_frame`'s `STATUS_*`), not commands — see the
+      framing resolution above. **`FIND_ZERO_ANGLE`, `FIND_APEX`,
+      `FIND_MAX_RANGE` dropped from the wire command set** — see Epic 8
+      (now internal-only, auto-triggered by `LOAD_PROFILE`/
+      `LOAD_CONDITIONS`). **`RESET` redefined, not dropped** — see Epic
+      8: an application soft-reset, not a data-clearer and not an MCU
+      reboot. `SET_BLE_PASS` is deferred to the BLE transport epic (see
+      Epic 8) — not part of v1.
 - [x] **Resolved — `LOAD_PROFILE` split from `LOAD_CONDITIONS`**
       (supersedes "`LOAD_PROFILE` = the `Shot` buffer byte-for-byte"
       below — see Epic 8 for the field-level breakdown). Rationale: the
@@ -595,11 +603,22 @@ being used purely as a library from Python application code.
       final `OK` with `total:u32, reason:i32`). `IDENT` must report
       `real_size` / `traj_row_size` (64 B float vs 124 B double) since the
       payload layout is effectively the ABI.
-- [ ] Response frame: same shape, status code distinguishes
-      `OK` / `ERR` / `INTERRUPTED`.
-- [ ] **Open:** does a cheap command (`IDENT`) preempt a running
-      computation too, or does core0 answer it without touching the
-      worker? Lean: the latter, otherwise `IDENT` mid-`INTEGRATE` kills it.
+- [x] **Resolved and implemented** — response frame is the identical
+      packet shape (§ below), `status` distinguishes `OK`/`MORE`/
+      `INTERRUPTED`/`ERR_BAD_SIZE`/`ERR_BAD_ARG`/`ERR_NOT_LOADED`/
+      `ERR_INTERNAL` (`bcp_frame`'s `STATUS_*`, mirrored in
+      `bcp_dispatch`'s `BCP_STATUS_*`) — see `PROTOCOL.md` §3 for the
+      full table.
+- [x] **Resolved — no, `IDENT` does not preempt.** Settled by
+      implementation, not just argument: `dispatch()`'s `IDENT` case in
+      `src/bcp_dispatch_mp.c` is a pure, synchronous, side-effect-free
+      read (fixed fields + a `sizeof()`/version-string build + reading
+      `bcp_frame_drop_count()`) — there is no worker, lock, or cached
+      state it touches, so the question of "does it interrupt whatever's
+      running" doesn't actually arise for it the way it does for
+      `LOAD_PROFILE`/`LOAD_CONDITIONS`/`INTEGRATE`. Once the full
+      dispatch loop exists, `IDENT` can be answered immediately without
+      going anywhere near the no-queue preemption rule (Epic 6).
 
 ## Epic 4 — Transport: USB CDC1
 
@@ -970,5 +989,28 @@ being used purely as a library from Python application code.
           command set.
 - [x] **Resolved:** `SET_BLE_PASS` is deferred entirely until the BLE
       transport epic — no stub in v1, to avoid dead code in the meantime.
-- [ ] `IDENT` — version + capabilities; minimum viable version is just the
-      existing `bc.version()` passthrough.
+- [x] **Resolved and implemented — `IDENT`.** First real command handler,
+      in `src/bcp_dispatch_mp.c`'s `dispatch()` (PROTOCOL.md §4.6): fixed
+      15 B header (`proto_ver, real_size, traj_row_size, base_traj_size,
+      max_winds, max_drag_pts, max_bc_points, drop_count`) + a
+      length-prefixed version string built from `MP_BCLIBC_VERSION` +
+      the `-sp`/`-dp` suffix (same source `tiny_bclibc_mp.c`'s own
+      `version()` already uses) — not a hardcoded passthrough call,
+      since `dispatch()` is its own usermod module with no dependency on
+      `tiny_bclibc_mp.c`'s internals beyond the shared `tiny_bclibc.h`
+      types. `drop_count` reads `bcp_frame_mp.c`'s new
+      `bcp_frame_drop_count()` (a counter bumped on every frame
+      `parse_frame()` drops — malformed COBS, under-length, bad CRC),
+      wiring up the "optional telemetry" `IDENT` was always meant to
+      carry (§1) instead of leaving it as a stub. **Verified for real**:
+      `tests/test_bcp_dispatch_native.py` (17/17 PASS) against the unix
+      usermod build, confirming every field including a live
+      `drop_count` bump after feeding it a corrupted frame; then built and
+      **flashed to the same RP2040-Zero** used throughout this epic
+      (`BOARD=WAVESHARE_RP2040_ZERO`) — `dispatch(CMD_IDENT, ...)` over
+      `mpremote` returns the identical, correct payload
+      (`proto_ver=1, real_size=4, traj_row_size=64, base_traj_size=32,
+      max_winds=5, max_drag_pts=200, max_bc_points=5`) on real hardware,
+      not just the host build. Every other command id currently raises
+      `NotImplementedError` — a deliberate development-time signal, not
+      a wire status, so it's obvious nothing else is wired up yet.
