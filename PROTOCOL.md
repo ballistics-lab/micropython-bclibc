@@ -116,9 +116,9 @@ only cover frames that passed framing but failed at the command layer.
 | 8 | `IDENT` | *(none)* | §4.6 |
 | 9 | `ABORT` | *(none)* | `OK` (see note below) |
 
-Numeric ids above are provisional -- not yet cross-checked against an
-actual enum in code; treat the **names** as fixed, the **numbers** as
-placeholders until `bcp_frame`/`bclibc_bcp` defines the real enum.
+Numeric ids above are final, matching `src/bcp_dispatch_mp.c`'s `BCP_CMD_*`
+enum exactly (`IDENT` implemented and hardware-verified; the rest raise
+`NotImplementedError` for now, see BACKLOG.md Epic 3/8).
 
 `FIND_ZERO_ANGLE` and `STREAM_START`/`STREAM_END` are **not** wire
 commands -- see `BACKLOG.md` Epic 3/8: zero-solving is internal and

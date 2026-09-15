@@ -255,6 +255,16 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bcp_build_frame_obj, 3, 4, mp_bcp_
  * (malformed COBS, under-length packet, bad CRC) — there is no reliable
  * `seq` to reply to on a corrupt frame, matching FrameDecoder's
  * silently-drop contract (PROTOCOL.md §1, BACKLOG.md Epic 3). */
+/* Frames dropped for bad COBS/under-length/bad CRC since boot -- reported
+ * as IDENT's drop_count (PROTOCOL.md §4.6, optional telemetry). Exposed to
+ * bcp_dispatch_mp.c via bcp_frame_drop_count(), not through Python. */
+static uint32_t bcp_frame_drop_count_ = 0;
+
+uint32_t bcp_frame_drop_count(void)
+{
+    return bcp_frame_drop_count_;
+}
+
 static mp_obj_t mp_bcp_parse_frame(mp_obj_t encoded_obj)
 {
     mp_buffer_info_t ebi;
@@ -266,6 +276,7 @@ static mp_obj_t mp_bcp_parse_frame(mp_obj_t encoded_obj)
     if (n == (size_t)-1 || n < BCP_MIN_PACKET_SIZE)
     {
         m_del(uint8_t, packet, cap);
+        bcp_frame_drop_count_++;
         return mp_const_none;
     }
 
@@ -275,6 +286,7 @@ static mp_obj_t mp_bcp_parse_frame(mp_obj_t encoded_obj)
     if (got_crc != want_crc)
     {
         m_del(uint8_t, packet, cap);
+        bcp_frame_drop_count_++;
         return mp_const_none;
     }
 
@@ -288,6 +300,12 @@ static mp_obj_t mp_bcp_parse_frame(mp_obj_t encoded_obj)
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bcp_parse_frame_obj, mp_bcp_parse_frame);
 
+static mp_obj_t mp_bcp_drop_count(void)
+{
+    return mp_obj_new_int_from_uint(bcp_frame_drop_count_);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(mp_bcp_drop_count_obj, mp_bcp_drop_count);
+
 /* ── Module registration (usermod only — BCLIBC_BCP is usermod-only) ────── */
 
 static const mp_rom_map_elem_t bcp_frame_module_globals_table[] = {
@@ -297,6 +315,7 @@ static const mp_rom_map_elem_t bcp_frame_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_cobs_decode), MP_ROM_PTR(&mp_bcp_cobs_decode_obj)},
     {MP_ROM_QSTR(MP_QSTR_build_frame), MP_ROM_PTR(&mp_bcp_build_frame_obj)},
     {MP_ROM_QSTR(MP_QSTR_parse_frame), MP_ROM_PTR(&mp_bcp_parse_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_drop_count), MP_ROM_PTR(&mp_bcp_drop_count_obj)},
     {MP_ROM_QSTR(MP_QSTR_HEADER_SIZE), MP_ROM_INT(BCP_HEADER_SIZE)},
     {MP_ROM_QSTR(MP_QSTR_CRC_SIZE), MP_ROM_INT(BCP_CRC_SIZE)},
     {MP_ROM_QSTR(MP_QSTR_MIN_PACKET_SIZE), MP_ROM_INT(BCP_MIN_PACKET_SIZE)},
