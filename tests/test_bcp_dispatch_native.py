@@ -7,13 +7,22 @@ Run with:
 or from repo root:
     /path/to/micropython test_bcp_dispatch_native.py
 
-Only IDENT and LOAD_CONFIG are implemented so far (see BACKLOG.md Epic
-3/8) -- this test covers IDENT itself, the drop_count telemetry it
-reports (from _bcp_frame.parse_frame's own failure counter), LOAD_CONFIG's
-size validation and its ERR_NOT_LOADED response (no LOAD_PROFILE yet, so
-nothing to re-solve a zero against), the unknown-command
-NotImplementedError, and one full parse_frame -> dispatch -> build_frame
-round trip tying _bcp_frame and _bcp_dispatch together.
+IDENT, LOAD_CONFIG and LOAD_PROFILE are implemented so far (see
+BACKLOG.md Epic 3/8) -- this test covers IDENT itself, the drop_count
+telemetry it reports (from _bcp_frame.parse_frame's own failure
+counter), LOAD_CONFIG's size validation and its ERR_NOT_LOADED response,
+the unknown-command NotImplementedError, one full
+parse_frame -> dispatch -> build_frame round trip tying _bcp_frame and
+_bcp_dispatch together, and LOAD_PROFILE's drag_type tagged union
+(G1/G7/CUSTOM/*_MULTIBC) plus its array-count validation.
+
+_bcp_dispatch's state is real persistent C state across dispatch() calls
+in this one process (RESET isn't implemented yet to clear it) -- so test
+order matters here more than in most test files: the LOAD_CONFIG section
+below runs *before* any LOAD_PROFILE call and depends on no profile being
+cached yet (ERR_NOT_LOADED); the LOAD_PROFILE section loads a real
+profile, and the final section re-checks LOAD_CONFIG now succeeds once
+one is cached. Don't reorder sections without checking this.
 """
 
 import struct
@@ -176,6 +185,133 @@ try:
             _fail(name)
 except Exception as ex:
     _fail("full round trip", ex)
+
+# -- LOAD_PROFILE ------------------------------------------------------------
+print("\n--- LOAD_PROFILE ---")
+
+
+def _pack_profile(bc, wg, dia, length, mv, sh, twist, zero_ft, drag_type, points):
+    """(mach, second) pairs -- {mach,cd} for CUSTOM, {mach,bc} for *_MULTIBC,
+    matching PROTOCOL.md §4.2's drag_points shape per drag_type."""
+    hdr = struct.pack("<8fBBH", bc, wg, dia, length, mv, sh, twist, zero_ft, drag_type, 0, len(points))
+    pts = b"".join(struct.pack("<ff", a, b) for a, b in points)
+    return hdr + pts
+
+
+_ZERO_FT = 300.0 * 3.28084  # 300 m in feet
+_DRAG_G1, _DRAG_G7, _DRAG_CUSTOM, _DRAG_G1_MULTIBC, _DRAG_G7_MULTIBC = 0, 1, 2, 3, 4
+
+try:
+    p = _pack_profile(0.305, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    status, payload = d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    if status == d.STATUS_OK and len(payload) == 4:
+        angle_g7 = struct.unpack("<f", payload)[0]
+        _pass("LOAD_PROFILE G7 static table -> OK, angle={:.6f}".format(angle_g7))
+    else:
+        _fail("LOAD_PROFILE G7", (status, payload))
+except Exception as ex:
+    _fail("LOAD_PROFILE G7", ex)
+
+try:
+    p = _pack_profile(1.0, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_CUSTOM, [(0.5, 0.30), (2.0, 0.25), (3.5, 0.20)])
+    status, payload = d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    if status == d.STATUS_OK and len(payload) == 4:
+        _pass("LOAD_PROFILE CUSTOM curve -> OK")
+    else:
+        _fail("LOAD_PROFILE CUSTOM", (status, payload))
+except Exception as ex:
+    _fail("LOAD_PROFILE CUSTOM", ex)
+
+try:
+    p = _pack_profile(999.0, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7_MULTIBC, [(0.8, 0.30), (2.5, 0.28)])
+    status, payload = d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    if status == d.STATUS_OK and len(payload) == 4:
+        _pass("LOAD_PROFILE G7_MULTIBC -> OK (bc field ignored, not validated)")
+    else:
+        _fail("LOAD_PROFILE G7_MULTIBC", (status, payload))
+except Exception as ex:
+    _fail("LOAD_PROFILE G7_MULTIBC", ex)
+
+# -- Regression: atmosphere defaults must actually be applied -----------------
+# Caught for real during development: bcp_state's atmosphere fields
+# (temp_c/pressure_hpa/altitude_ft/humidity) were left C-zero-initialized
+# instead of ICAO standard atmosphere (PROTOCOL.md §4.3's documented
+# fallback) -- pressure_hpa=0 makes TINY_BCLIBC_Atmosphere_from_conditions()
+# return density_ratio=0 (its own documented vacuum case), so drag silently
+# disappeared regardless of bc. A LOAD_PROFILE with a very different bc
+# must produce a meaningfully different zero angle, not a bit-identical one.
+print("\n--- regression: bc must actually affect the zero angle ---")
+try:
+    p_lowdrag = _pack_profile(2.0, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    _, payload_lowdrag = d.dispatch(d.CMD_LOAD_PROFILE, 1, p_lowdrag)
+    p_highdrag = _pack_profile(0.05, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    _, payload_highdrag = d.dispatch(d.CMD_LOAD_PROFILE, 1, p_highdrag)
+    angle_lowdrag = struct.unpack("<f", payload_lowdrag)[0]
+    angle_highdrag = struct.unpack("<f", payload_highdrag)[0]
+    # bc=0.05 is ~40x more drag than bc=2.0 -- expect a large (>2x), not
+    # merely nonzero, difference at this range.
+    if angle_highdrag > angle_lowdrag * 2.0:
+        _pass(
+            "bc=2.0 -> {:.6f} rad, bc=0.05 -> {:.6f} rad (drag clearly applied)".format(
+                angle_lowdrag, angle_highdrag
+            )
+        )
+    else:
+        _fail("bc sensitivity regression", (angle_lowdrag, angle_highdrag))
+except Exception as ex:
+    _fail("bc sensitivity regression", ex)
+
+# -- LOAD_PROFILE validation errors --------------------------------------------
+print("\n--- LOAD_PROFILE validation errors ---")
+
+_checks = [
+    ("bad drag_type", _pack_profile(0.3, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, 5, []), d.STATUS_ERR_BAD_ARG),
+    ("G1 with a nonzero drag_count", _pack_profile(0.3, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G1, [(0.5, 0.3)]), d.STATUS_ERR_BAD_ARG),
+    ("too short to read the fixed header", b"short", d.STATUS_ERR_BAD_SIZE),
+]
+for name, payload_in, expect_status in _checks:
+    try:
+        status, _ = d.dispatch(d.CMD_LOAD_PROFILE, 1, payload_in)
+        if status == expect_status:
+            _pass("LOAD_PROFILE " + name)
+        else:
+            _fail("LOAD_PROFILE " + name, "got status={}".format(status))
+    except Exception as ex:
+        _fail("LOAD_PROFILE " + name, ex)
+
+try:
+    # MULTIBC with 0 breakpoints must be rejected, not read out-of-bounds.
+    hdr = struct.pack("<8fBBH", 0.3, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G1_MULTIBC, 0, 0)
+    status, _ = d.dispatch(d.CMD_LOAD_PROFILE, 1, hdr)
+    if status == d.STATUS_ERR_BAD_ARG:
+        _pass("LOAD_PROFILE *_MULTIBC with 0 breakpoints -> ERR_BAD_ARG, not a crash")
+    else:
+        _fail("LOAD_PROFILE MULTIBC 0 points", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_PROFILE MULTIBC 0 points", ex)
+
+try:
+    # One more CUSTOM point than the BCP cap (200) -- ERR_BAD_ARG, not silently clamped.
+    hdr = struct.pack("<8fBBH", 0.3, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_CUSTOM, 0, 201)
+    status, _ = d.dispatch(d.CMD_LOAD_PROFILE, 1, hdr + b"\x00" * (201 * 8))
+    if status == d.STATUS_ERR_BAD_ARG:
+        _pass("LOAD_PROFILE CUSTOM over the 200-point cap -> ERR_BAD_ARG")
+    else:
+        _fail("LOAD_PROFILE CUSTOM over cap", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_PROFILE CUSTOM over cap", ex)
+
+# -- LOAD_CONFIG now succeeds, since a profile is cached ----------------------
+print("\n--- LOAD_CONFIG after a profile is cached ---")
+try:
+    cfg = struct.pack("<6fi", 0.5, 0.001, 50.0, -15000.0, -32.17405, -1500.0, 50)
+    status, payload = d.dispatch(d.CMD_LOAD_CONFIG, 1, cfg)
+    if status == d.STATUS_OK and len(payload) == 4:
+        _pass("LOAD_CONFIG with a profile cached -> OK, re-solves the zero")
+    else:
+        _fail("LOAD_CONFIG with profile cached", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONFIG with profile cached", ex)
 
 print("\n=== done ===")
 if _failures:

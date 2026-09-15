@@ -997,6 +997,59 @@ being used purely as a library from Python application code.
           allocated for real, where the byte-buffer draft would have
           paid a similar cost anyway once `LOAD_PROFILE`/
           `LOAD_CONDITIONS` needed the same worst-case sizing.
+    - **Resolved and implemented — `LOAD_PROFILE`** (`src/bcp_dispatch_mp.c`'s
+          `BCP_CMD_LOAD_PROFILE` case): the tagged-union `drag_type`
+          described earlier in this epic, now real code. Parses the 36 B
+          fixed header + `drag_count`-shaped drag points straight into
+          `bcp_state.shot`'s named fields (no byte-offset juggling, per
+          the state redesign above); G1/G7 point `mach_data`/`cd_data` at
+          the static reference tables (zero-copy, matching
+          `build_props_buf`'s own G1/G7 path); `*_MULTIBC` reuses
+          `tiny_bclibc_mp_interp_bc`/`tiny_bclibc_mp_sort_bc_points`
+          (newly exported from `tiny_bclibc_mp.c`, not duplicated) to
+          fold breakpoints into a curve the reference table's own length,
+          then forces `shot.bc = 1.0`, exactly mirroring Epic 2's
+          `MultiBC()` contract. Then calls the shared `bcp_resolve_zero()`
+          (used by `LOAD_CONFIG` too) to actually run
+          `tiny_bclibc_build_shot_props()` + `tiny_bclibc_find_zero_angle()`
+          in C and return `barrel_elevation_rad`.
+          **Caught a real bug during verification, not just confirmed the
+          happy path:** the first working version returned a
+          *bit-identical* zero angle regardless of `bc` — tested `bc`
+          spanning 0.305/0.05/2.0 (a ~6× drag range) and a completely
+          different `CUSTOM` curve, all landing on the exact same float.
+          Root cause: `bcp_state`'s atmosphere fields
+          (`temp_c`/`pressure_hpa`/`altitude_ft`/`humidity`) were left
+          C-zero-initialized rather than given the ICAO-standard-
+          atmosphere fallback `LOAD_CONDITIONS`'s own section promises
+          (§4.3) — `pressure_hpa=0` isn't "unset", it's the engine's own
+          documented vacuum case
+          (`TINY_BCLIBC_Atmosphere_from_conditions`: `if (p_hpa <= 0)
+          density_ratio = 0`), so drag silently vanished regardless of
+          the drag table. Fixed by applying `tiny_bclibc.py`'s exact
+          `Shot()` defaults (15°C/1013.25 hPa/0 ft/50% humidity, NaN
+          lat/az — the engine's own documented "no Coriolis" sentinel,
+          not a hazard) in `bcp_state_ensure_init()`, the same place
+          `LOAD_CONFIG`'s defaults already lived. This is the fallback
+          Epic 8/§4.3 already specified — it just hadn't been
+          implemented yet, since nothing had exercised the zero-solve
+          for real until this command landed. **Verified for real, both
+          before and after the fix**: 30/30 `tests/
+          test_bcp_dispatch_native.py` (G1/G7/`CUSTOM`/`*_MULTIBC` happy
+          paths, every `ERR_BAD_ARG`/`ERR_BAD_SIZE` case including
+          `*_MULTIBC` with 0 breakpoints — a real out-of-bounds risk if
+          unguarded, not just a rejected input — and a permanent
+          regression test asserting `bc` produces a >2× angle change,
+          not a bit-identical one) on the unix usermod build, matched
+          against `tiny_bclibc.py`'s own `Shot()`/`find_zero_angle()` on
+          the same values (bit-identical for the baseline case, within
+          the solver's own `1e-5` rad convergence tolerance for the
+          others — expected iterative-solver variance, not an error);
+          rebuilt and reflashed the same RP2040-Zero — identical
+          `bc`-sensitive angles over `mpremote` on real hardware, and
+          confirmed `LOAD_CONFIG` (previously stuck at `ERR_NOT_LOADED`
+          for lack of a cached profile) now succeeds once a profile is
+          loaded.
     - **`LOAD_CONDITIONS`** — atmosphere + shot geometry + wind, expected
           to change every few shots as the field environment shifts:
           `temp_c, pressure_hpa, altitude_ft, humidity` (atmosphere),
