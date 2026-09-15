@@ -215,26 +215,87 @@ as a library from Python application code.
 
 ## Epic 3 — Command/response frame
 
-- [x] **Resolved:** `len` is **2 bytes** — a `LOAD_PROFILE` payload (Shot
-      buffer + winds + drag points) can run up to 2-3 KB, well past what a
-      1-byte length field could address.
-- [x] **Resolved:** COBS-wrapped framing —
-      `<start_byte><cmd:1><len:2><data><crc16>`, the whole thing
-      COBS-encoded — chosen over raw start-byte scanning specifically for
-      reliability against false sync when payload bytes happen to collide
-      with `start_byte`.
-- [x] **Resolved:** CRC16, scope = `cmd+len+data`. Exact polynomial not
-      fixed yet — pick a well-known table-driven variant (e.g. CRC16-CCITT
-      or CRC16/MODBUS) for O(1)-per-byte, real-time-safe cost; the specific
-      choice matters less than "fast and table-driven."
+- [x] **Resolved — wire format `00 COBS(packet) 00`, no `start_byte`, no
+      `len`** (supersedes the earlier `<start_byte><cmd:1><len:2>...`
+      draft). COBS guarantees no `0x00` inside the encoded bytes, so the
+      delimiter alone is the frame boundary — a `start_byte` inside the
+      COBS payload adds nothing, and the frame length is known once the
+      closing `0x00` arrives. Failure cases:
+    - **Lost frame start:** the decoder collects the tail up to the next
+          `0x00`, CRC fails, the frame is dropped; the next frame starts
+          right after that `0x00` and arrives intact. Same loss as with a
+          `start_byte`, without its false-sync risk.
+    - **Lost delimiter:** the leading **and** trailing `0x00` put two
+          zeros between consecutive frames, so losing one still separates
+          them. An empty frame (`00 00`) is ignored.
+    - **Garbage before the first frame** (host connects mid-stream, line
+          noise): the leading `0x00` resets the decoder.
+    - **No `0x00` within the max frame size:** discard, wait for the next
+          `0x00` — the RX buffer stays bounded.
+    - **What `len` would have caught** (merged/truncated frame passing
+          CRC16, ~1/65536): covered by a **per-command payload size check**
+          instead — fixed sizes for `FIND_*`/`INTEGRATE_AT`, exactly
+          the count-derived size for `LOAD_PROFILE`, plus min packet size and
+          known `type` (see the array-count rule below).
+    - On USB CDC byte loss is practically limited to host buffer overflow
+          or reconnect (bulk transfers have their own CRC + retry); these
+          cases matter mostly for the later UART/BLE transports.
+- [ ] **Proposed, not confirmed — packet header (4 B, keeps the payload
+      4-aligned for `uctypes.struct` over the RX buffer):**
+      `type:u8 | seq:u8 | status:u8 | rsvd:u8 | payload | crc16:u16`,
+      little-endian. `type` = command, `cmd | 0x80` in a response; `seq`
+      set by the host and echoed back (response matching, Epic 6
+      generation for `INTERRUPTED`, Epic 5 option (c) `RESEND`); `status`
+      0 in requests. Payload reuses the internal packed layouts
+      (`LOAD_PROFILE` = the `Shot` buffer byte-for-byte). Max packet
+      ≈ 1.4 KB (`LOAD_PROFILE`: 100 + 16·16 + 128·8 = 1380 B + header +
+      CRC) → fixed 1536 B RX buffer.
+- [x] **Resolved — array element counts:** every variable-length part is
+      preceded by its count at a fixed position in the payload; the
+      payload length (known from the frame) must **equal** the size
+      computed from the counts. Receiver order: counts ≤ caps → compute
+      expected size → `==` payload length. Reply `ERR_BAD_ARG` on a count
+      over its cap, `ERR_BAD_SIZE` on a size mismatch.
+    - **`LOAD_PROFILE`:** counts already live in the `Shot` header —
+          `[96] drag_type:u8`, `[97] wind_count:u8` (≤ 16),
+          `[98] drag_count:u16` (≤ 128). Expected size
+          `100 + wind_count·16 + (drag_type == CUSTOM ? drag_count·8 : 0)`
+          — `drag_count` is ignored for G1/G7.
+    - **Stream `MORE` frames:** `row_idx:u16, count:u8, rsvd:u8,
+          rows[count]`, size exactly `4 + count·traj_row_size` (explicit
+          `count` as the cross-check, even though it is derivable).
+    - **Strings** (`IDENT` version): `u8` length prefix.
+    - **The existing C parser is not strict enough for the wire**
+          (`src/tiny_bclibc_mp.c`, Shot unpacking): it checks
+          `bi.len < needed` (so trailing bytes from a merged/truncated frame
+          pass), and silently clamps `wind_count` to 16 / `drag_count` to
+          128 — with `wind_count > 16` the drag offset is still computed
+          from the unclamped count, i.e. an inconsistent profile instead of
+          an error. Fine for Python callers; the dispatcher must validate
+          strictly before handing the buffer to C.
+- [ ] CRC16 over the whole packet before CRC. Variant not fixed yet —
+      proposed CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), table-driven.
+- [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
+      so there is nothing to reply to); host relies on a timeout. Optional
+      drop counter reported via `IDENT`.
 - [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
       set (both already natively bound).
 - [ ] Command enum: `LOAD_PROFILE, INTEGRATE, INTEGRATE_AT,
       FIND_ZERO_ANGLE, FIND_APEX, FIND_MAX_RANGE, RESET, IDENT,
       STREAM_START, STREAM_END, ABORT, ACK/NAK/ERROR`. `SET_BLE_PASS` is
       deferred to the BLE transport epic (see Epic 8) — not part of v1.
+      **Proposed, not confirmed:** fold `ACK/NAK/ERROR` into the header's
+      `status` (`OK` / `MORE` / `INTERRUPTED` / `ERR_*`) instead of
+      commands, and drop `STREAM_START` — `INTEGRATE` itself streams
+      (`MORE` frames `row_idx:u16, count:u8, rsvd:u8, rows[count]`, then a
+      final `OK` with `total:u32, reason:i32`). `IDENT` must report
+      `real_size` / `traj_row_size` (64 B float vs 124 B double) since the
+      payload layout is effectively the ABI.
 - [ ] Response frame: same shape, status code distinguishes
       `OK` / `ERR` / `INTERRUPTED`.
+- [ ] **Open:** does a cheap command (`IDENT`) preempt a running
+      computation too, or does core0 answer it without touching the
+      worker? Lean: the latter, otherwise `IDENT` mid-`INTEGRATE` kills it.
 
 ## Epic 4 — Transport: USB CDC1
 
