@@ -26,11 +26,12 @@
  * no byte-offset interleaving to manage regardless of which order
  * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
  *
- * Only IDENT, LOAD_CONFIG and LOAD_PROFILE are implemented so far — see
- * BACKLOG.md Epic 3/8 for the rest of the command table; unimplemented
- * commands raise NotImplementedError (a development-time signal, not a
- * wire status — production dispatch will route every BCP_CMD_* to a
- * real handler before this ships).
+ * Every BCP_CMD_* is now routed to a real handler (LOAD_PROFILE,
+ * LOAD_CONFIG, LOAD_CONDITIONS, INTEGRATE, INTEGRATE_FAST, INTEGRATE_AT,
+ * RESET, IDENT, ABORT) -- see BACKLOG.md Epic 3/8 for each one's own
+ * design notes and PROTOCOL.md for the wire-level reference. An unknown
+ * `type_` outside that set still raises NotImplementedError (a
+ * development-time signal, not a wire status).
  */
 #ifndef BCP_DISPATCH_MP_H
 #define BCP_DISPATCH_MP_H
@@ -204,6 +205,16 @@ static void bcp_state_ensure_init(void)
     bcp_state.ready = true;
 }
 
+/* ── Shared ShotProps builder ─────────────────────────────────────────────
+ * Every command that runs the engine against the current cached state
+ * (bcp_resolve_zero() below, INTEGRATE_AT) needs a fresh TINY_BCLIBC_ShotProps
+ * built from bcp_state.shot -- same call, same curve_buf scratch, so it's
+ * factored out once instead of repeated at each call site. */
+static int32_t bcp_build_props(TINY_BCLIBC_ShotProps *out)
+{
+    return tiny_bclibc_build_shot_props(&bcp_state.shot, bcp_state.curve_buf, out);
+}
+
 /* ── Shared zero re-solve ──────────────────────────────────────────────────
  * LOAD_PROFILE/LOAD_CONFIG/LOAD_CONDITIONS all re-trigger this exact same
  * solve (PROTOCOL.md §4.2/§4.2a/§4.3): builds a ShotProps from whatever's
@@ -217,7 +228,7 @@ static void bcp_state_ensure_init(void)
 static int32_t bcp_resolve_zero(real_t *angle_out)
 {
     TINY_BCLIBC_ShotProps props;
-    int32_t rc = tiny_bclibc_build_shot_props(&bcp_state.shot, bcp_state.curve_buf, &props);
+    int32_t rc = bcp_build_props(&props);
     if (rc != TINY_BCLIBC_OK)
     {
         return rc;
@@ -458,6 +469,360 @@ static int bcp_handle_load_profile(const uint8_t *payload, size_t payload_len, u
     return 1;
 }
 
+/* ── LOAD_CONDITIONS (PROTOCOL.md §4.3) ───────────────────────────────────
+ * Request: 40 B fixed (temp_c, pressure_hpa, altitude_ft, humidity,
+ * look_angle_rad, barrel_azimuth_rad, cant_angle_rad, latitude_deg,
+ * azimuth_deg, wind_count:u8, rsvd:u8[3]) + wind_count x 16 B winds
+ * {velocity_fps:f32, direction_from_rad:f32, until_distance_ft:f32,
+ * max_distance_ft:f32}, wind_count <= BCP_MAX_WINDS (5). Field names match
+ * TINY_BCLIBC_Shot's/TINY_BCLIBC_Wind's own field names exactly -- direct
+ * passthrough, no relabeling.
+ *
+ * Response: barrel_elevation_rad, via the shared bcp_resolve_zero() (same
+ * as LOAD_PROFILE/LOAD_CONFIG). ERR_NOT_LOADED if no profile is cached yet
+ * (no zero_distance_ft to solve against). ERR_INTERNAL on a zero-solve
+ * failure.
+ */
+#define BCP_LOAD_CONDITIONS_FIXED_SIZE 40u
+
+static int bcp_handle_load_conditions(const uint8_t *payload, size_t payload_len, uint8_t status_out[1])
+{
+    if (payload_len < BCP_LOAD_CONDITIONS_FIXED_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    uint8_t wind_count = payload[36];
+    if (wind_count > (uint8_t)BCP_MAX_WINDS)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_ARG;
+        return 0;
+    }
+    size_t expected = BCP_LOAD_CONDITIONS_FIXED_SIZE + (size_t)wind_count * 16u;
+    if (payload_len != expected)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+
+    bcp_state.shot.temp_c = (real_t)bcp_rdf32(payload, 0);
+    bcp_state.shot.pressure_hpa = (real_t)bcp_rdf32(payload, 4);
+    bcp_state.shot.altitude_ft = (real_t)bcp_rdf32(payload, 8);
+    bcp_state.shot.humidity = (real_t)bcp_rdf32(payload, 12);
+    bcp_state.shot.look_angle_rad = (real_t)bcp_rdf32(payload, 16);
+    bcp_state.shot.barrel_azimuth_rad = (real_t)bcp_rdf32(payload, 20);
+    bcp_state.shot.cant_angle_rad = (real_t)bcp_rdf32(payload, 24);
+    bcp_state.shot.latitude_deg = (real_t)bcp_rdf32(payload, 28);
+    bcp_state.shot.azimuth_deg = (real_t)bcp_rdf32(payload, 32);
+
+    const uint8_t *wind_points = payload + BCP_LOAD_CONDITIONS_FIXED_SIZE;
+    for (uint8_t i = 0; i < wind_count; i++)
+    {
+        size_t off = (size_t)i * 16u;
+        bcp_state.winds[i].velocity_fps = (real_t)bcp_rdf32(wind_points, off);
+        bcp_state.winds[i].direction_from_rad = (real_t)bcp_rdf32(wind_points, off + 4u);
+        bcp_state.winds[i].until_distance_ft = (real_t)bcp_rdf32(wind_points, off + 8u);
+        bcp_state.winds[i].max_distance_ft = (real_t)bcp_rdf32(wind_points, off + 12u);
+    }
+    /* winds points at bcp_state's own backing array -- valid regardless of
+     * wind_count (0 winds just means the pointer is never dereferenced). */
+    bcp_state.shot.winds = bcp_state.winds;
+    bcp_state.shot.wind_count = (int32_t)wind_count;
+    bcp_state.has_conditions = true;
+
+    if (!bcp_state.has_profile)
+    {
+        /* Nothing cached to solve a zero against yet -- see the comment
+         * above. Conditions are stored regardless. */
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+    real_t angle;
+    if (bcp_resolve_zero(&angle) != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return 1;
+}
+
+/* ── INTEGRATE_AT (PROTOCOL.md §4/§4.5) ───────────────────────────────────
+ * Request: 8 B fixed -- `key:u8, rsvd:u8[3], target:f32`. `key` selects
+ * which TINY_BCLIBC_BaseTrajData field `target` is interpolated against
+ * (TINY_BCLIBC_KEY_TIME..TINY_BCLIBC_KEY_VEL_Z, 0..7, traj_data.h). No
+ * variable-length part, so (§4.1) reduces to an exact size match, same as
+ * LOAD_CONFIG.
+ *
+ * Response, on success: raw `TINY_BCLIBC_BaseTrajData` immediately followed
+ * by raw `TINY_BCLIBC_TrajectoryData` -- a straight memcpy of both native
+ * structs, *not* the always-f32 field-by-field encoding LOAD_PROFILE/
+ * LOAD_CONFIG/LOAD_CONDITIONS use. This matches PROTOCOL.md §4.5's own
+ * documented contract (row size depends on the build's real_t precision;
+ * a host decodes it using IDENT's own real_size/base_traj_size/
+ * traj_row_size, not a fixed assumption) and is safe on every BCP target
+ * in scope -- all little-endian, same rationale bcp_wu16()'s own comment
+ * above gives for the explicit-byte-order helpers being unnecessary here
+ * (there is no cross-field byte-order concern with a same-endianness
+ * memcpy either).
+ *
+ * `ERR_BAD_ARG` if `key` is out of `TINY_BCLIBC_InterpKey`'s range.
+ * `ERR_NOT_LOADED` if no profile is cached yet. `ERR_INTERNAL` if the
+ * underlying `tiny_bclibc_integrate_at()` fails (most commonly: no
+ * bracketing crossing found for `target`, TINY_BCLIBC_ERR_INTERCEPTION) --
+ * same mapping bcp_resolve_zero()'s callers already use for the engine's
+ * other failure modes, there's no more specific wire status for it.
+ */
+#define BCP_INTEGRATE_AT_REQ_SIZE 8u
+
+static size_t bcp_handle_integrate_at(const uint8_t *payload, size_t payload_len,
+                                       uint8_t out[sizeof(TINY_BCLIBC_BaseTrajData) + sizeof(TINY_BCLIBC_TrajectoryData)],
+                                       uint8_t status_out[1])
+{
+    if (payload_len != BCP_INTEGRATE_AT_REQ_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    uint8_t key = payload[0];
+    if (key > (uint8_t)TINY_BCLIBC_KEY_VEL_Z)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_ARG;
+        return 0;
+    }
+    if (!bcp_state.has_profile)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+    real_t target = (real_t)bcp_rdf32(payload, 4);
+
+    TINY_BCLIBC_ShotProps props;
+    TINY_BCLIBC_BaseTrajData raw;
+    TINY_BCLIBC_TrajectoryData full;
+    int32_t rc = bcp_build_props(&props);
+    if (rc == TINY_BCLIBC_OK)
+    {
+        rc = tiny_bclibc_integrate_at(&props, (int32_t)key, target, &raw, &full);
+    }
+    if (rc != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    memcpy(out, &raw, sizeof(raw));
+    memcpy(out + sizeof(raw), &full, sizeof(full));
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return sizeof(raw) + sizeof(full);
+}
+
+/* ── INTEGRATE / INTEGRATE_FAST (PROTOCOL.md §4.4/§4.4a) ──────────────────
+ * Request (`Request`, 16 B fixed, shared by both commands): `range_limit_ft:
+ * f32, range_step_ft:f32, time_step:f32, filter_flags:i32`.
+ *
+ * Response shape is fundamentally different from every other command: zero
+ * or more `status=MORE` frames (each carrying a batch of trajectory rows),
+ * followed by one final `status=OK` frame (`total:u32, reason:i32`) --
+ * PROTOCOL.md §4.4. `dispatch()` can only return one (status, payload)
+ * tuple per call, so streaming needs a second channel: `dispatch()` grows
+ * an **optional 4th argument, `emit`** -- a Python callable invoked as
+ * `emit(status, payload_bytes)` once per `MORE` frame, mirroring the
+ * existing non-BCP `integrate_stream(shot, holder, req, cb)` binding's own
+ * callback shape (`mp_stream_cb` above). `dispatch()`'s return value is
+ * still the single definitive result for the call, same contract as every
+ * other command -- here that's the final `OK`/error tuple, not a row.
+ * Only INTEGRATE/INTEGRATE_FAST look at `emit`; every other command
+ * ignores a 4th argument if one is passed.
+ *
+ * Both commands run the identical `tiny_bclibc_integrate_stream()` call;
+ * INTEGRATE_FAST only differs in what a row looks like on the wire (see
+ * bcp_stream_row_cb() below), matching PROTOCOL.md's "not a cheaper
+ * computation, a thinner projection" framing.
+ *
+ * `ERR_BAD_SIZE`/`ERR_NOT_LOADED` before any row is ever produced (checked
+ * up front, same as every other handler). `ERR_INTERNAL` if the engine
+ * call itself fails -- note rows may already have been emitted via `emit`
+ * before that happens; PROTOCOL.md's `INTERRUPTED` status (Epic 6) is the
+ * eventual "the stream so far is not meaningful" signal, not modeled yet
+ * since it needs the not-yet-built C read/write loop's own cooperative
+ * preemption checkpoint (BACKLOG.md Epic 6).
+ */
+#define BCP_INTEGRATE_REQ_SIZE 16u
+
+/* Rows batched into one MORE frame before bcp_stream_flush() emits it.
+ * Sized so the worst case -- full TINY_BCLIBC_TrajectoryData on a
+ * double-precision build, 124 B/row -- stays comfortably under the
+ * existing 2048 B RX-buffer precedent (Epic 3) once the 4 B row_idx/
+ * count/rsvd sub-header is added: 8*124+4 = 996 B, leaving plenty of
+ * margin for CRC/COBS overhead on top. INTEGRATE_FAST's fixed 16 B rows
+ * batch far more thinly than this cap would allow (8*16+4 = 132 B) --
+ * one constant for both rather than a premature per-command tune, since
+ * PROTOCOL.md's `count` field is chosen per frame at runtime regardless
+ * and nothing about the wire format pins this number. Revisit once Epic
+ * 5's still-open ack-scheme work has real per-transport RTT numbers to
+ * balance against (see BACKLOG.md). */
+#define BCP_STREAM_ROWS_PER_FRAME 8u
+#define BCP_FAST_ROW_SIZE 16u /* distance_ft, drop_angle_rad, windage_angle_rad, velocity_fps -- always f32 (PROTOCOL.md §4.5a) */
+
+typedef struct
+{
+    mp_obj_t emit; /* Python callable: emit(status, payload_bytes) */
+    int fast;      /* 1 => FastTrajData rows on the wire, 0 => full TrajectoryData */
+    uint8_t buf[4u + BCP_STREAM_ROWS_PER_FRAME * sizeof(TINY_BCLIBC_TrajectoryData)];
+    uint32_t buf_count;
+    uint32_t next_row_idx;
+} BcpStreamCtx;
+
+/* Emits whatever rows are currently buffered as one MORE frame (a no-op if
+ * the buffer is empty, so callers can call this unconditionally after the
+ * engine call returns to flush a trailing partial batch). */
+static void bcp_stream_flush(BcpStreamCtx *ctx)
+{
+    if (ctx->buf_count == 0)
+    {
+        return;
+    }
+    size_t row_size = ctx->fast ? BCP_FAST_ROW_SIZE : sizeof(TINY_BCLIBC_TrajectoryData);
+    bcp_wu16(ctx->buf, 0, (uint16_t)ctx->next_row_idx);
+    ctx->buf[2] = (uint8_t)ctx->buf_count;
+    ctx->buf[3] = 0;
+    mp_obj_t payload = mp_obj_new_bytes(ctx->buf, 4u + (size_t)ctx->buf_count * row_size);
+    mp_obj_t args[2] = {MP_OBJ_NEW_SMALL_INT(BCP_STATUS_MORE), payload};
+    mp_call_function_n_kw(ctx->emit, 2, 0, args);
+    ctx->next_row_idx += ctx->buf_count;
+    ctx->buf_count = 0;
+}
+
+/* tiny_bclibc_integrate_stream()'s row callback -- called once per emitted
+ * row (already filtered/interpolated by the engine, PROTOCOL.md §4.4's
+ * `filter_flags`). Buffers the row and flushes a MORE frame once the batch
+ * cap is reached; the trailing partial batch is flushed separately by the
+ * caller once the engine call returns (there's no way to know "this is the
+ * last row" from inside the callback itself). */
+static int32_t bcp_stream_row_cb(const TINY_BCLIBC_TrajectoryData *pt, void *ctx_)
+{
+    BcpStreamCtx *ctx = (BcpStreamCtx *)ctx_;
+    size_t row_size = ctx->fast ? BCP_FAST_ROW_SIZE : sizeof(TINY_BCLIBC_TrajectoryData);
+    uint8_t *dst = ctx->buf + 4u + (size_t)ctx->buf_count * row_size;
+    if (ctx->fast)
+    {
+        bcp_wf32(dst, 0, (float)pt->distance_ft);
+        bcp_wf32(dst, 4, (float)pt->drop_angle_rad);
+        bcp_wf32(dst, 8, (float)pt->windage_angle_rad);
+        bcp_wf32(dst, 12, (float)pt->velocity_fps);
+    }
+    else
+    {
+        memcpy(dst, pt, sizeof(TINY_BCLIBC_TrajectoryData));
+    }
+    ctx->buf_count++;
+    if (ctx->buf_count >= BCP_STREAM_ROWS_PER_FRAME)
+    {
+        bcp_stream_flush(ctx);
+    }
+    /* Cooperative-abort checkpoint (BACKLOG.md Epic 6) isn't wired up yet --
+     * there's no C read/write loop or transport object to poll for a
+     * preempting frame yet (Epic 4). Always continue for now. */
+    return 0;
+}
+
+static size_t bcp_handle_integrate(const uint8_t *payload, size_t payload_len, int fast, mp_obj_t emit,
+                                    uint8_t out[8], uint8_t status_out[1])
+{
+    if (payload_len != BCP_INTEGRATE_REQ_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    if (!bcp_state.has_profile)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+
+    TINY_BCLIBC_TrajectoryRequest req;
+    req.range_limit_ft = (real_t)bcp_rdf32(payload, 0);
+    req.range_step_ft = (real_t)bcp_rdf32(payload, 4);
+    req.time_step = (real_t)bcp_rdf32(payload, 8);
+    req.filter_flags = bcp_rdi32(payload, 12);
+
+    TINY_BCLIBC_ShotProps props;
+    if (bcp_build_props(&props) != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    BcpStreamCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.emit = emit;
+    ctx.fast = fast;
+
+    int32_t total = 0, reason = 0;
+    int32_t rc = tiny_bclibc_integrate_stream(&props, &req, bcp_stream_row_cb, &ctx, &total, &reason, NULL);
+    bcp_stream_flush(&ctx); /* trailing partial batch, if any */
+
+    if (rc != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    bcp_wu32(out, 0, (uint32_t)total);
+    bcp_wu32(out, 4, (uint32_t)reason); /* i32 -> u32 bit pattern, sign bits pass through untouched */
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return 8u;
+}
+
+/* ── RESET (PROTOCOL.md §4.7) ─────────────────────────────────────────────
+ * No request/response payload beyond OK. An **application soft-reset**,
+ * not a targeted per-LOAD_* clearer (redundant -- every LOAD_PROFILE/
+ * LOAD_CONFIG/LOAD_CONDITIONS already fully overwrites its own fields) and
+ * not an MCU reboot (out of BCP's scope -- that's a CDC0 REPL/firmware-
+ * update concern). Collapses the whole dispatcher back to exactly the
+ * power-on-equivalent state `bcp_state_ensure_init()` would produce on a
+ * fresh boot: clears cached profile, config, conditions/zero (`bcp_state`
+ * zeroed then re-initialized, not hand-copied field by field, so this
+ * can't drift from what "fresh boot" actually means) and dispatcher
+ * bookkeeping (`bcp_frame_drop_count_`, from `bcp_frame_mp.h` -- same
+ * translation unit, see its own header comment on `dispatch()`'s
+ * ordering).
+ *
+ * PROTOCOL.md notes RESET implies the same preemption ABORT does (Epic 6):
+ * if something is running, stop it first, then clear state. With no C
+ * read/write loop or persisted in-flight state yet (Epic 4) and every
+ * dispatch() call running synchronously to completion, there is nothing
+ * actually in flight by the time a RESET call runs -- see ABORT's own
+ * comment below for the same reasoning. Revisit once that transport work
+ * lands.
+ */
+static void bcp_handle_reset(void)
+{
+    memset(&bcp_state, 0, sizeof(bcp_state));
+    bcp_state_ensure_init();
+    bcp_frame_drop_count_ = 0;
+}
+
+/* ── ABORT (PROTOCOL.md §4.8) ─────────────────────────────────────────────
+ * No payload. Per the no-queue preemption rule (Epic 6, superseded to
+ * cooperative-only -- see BACKLOG.md): any new valid frame already
+ * preempts whatever command is currently running; ABORT is just the case
+ * where nothing replaces it. PROTOCOL.md describes two responses in that
+ * case: the preempted command's own `INTERRUPTED` (under *its* seq) and
+ * ABORT's own plain `OK` (under ABORT's seq).
+ *
+ * Nothing to actually preempt yet, for the same reason RESET's comment
+ * above gives: dispatch() calls run synchronously to completion (no C
+ * read/write loop, no persisted in-flight state -- Epic 4), so by the
+ * time an ABORT call runs, any previous command has already returned.
+ * Accepted and answered OK regardless, matching the wire contract; there
+ * is no `INTERRUPTED` to emit here yet either. Revisit once Epic 4's
+ * transport loop and Epic 6's cooperative checkpoint (already wired into
+ * `bcp_stream_row_cb` as a no-op "always continue," see its own comment)
+ * give ABORT something real to interrupt.
+ */
+
 /* ── IDENT (PROTOCOL.md §4.6) ─────────────────────────────────────────────
  * No request payload (ignored). Response, fixed part matches struct format
  * "<BBHHBHBIB" (15 B) followed by the version string:
@@ -510,15 +875,22 @@ static size_t bcp_handle_ident(uint8_t *out, size_t out_cap)
     return total;
 }
 
-/* ── dispatch(type_, seq, payload) -> (status, response_payload) ─────────
+/* ── dispatch(type_, seq, payload[, emit]) -> (status, response_payload) ──
  * `seq` is accepted but not yet used by any handler (no handler needs to
  * echo/branch on it yet -- IDENT doesn't care who's asking). Kept in the
  * signature now so the call shape matches PROTOCOL.md's per-command
  * table from the start, instead of changing it once a command that does
- * need `seq` lands. */
-static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t payload_obj)
+ * need `seq` lands.
+ *
+ * `emit` is optional (3-4 args) and only meaningful for INTEGRATE/
+ * INTEGRATE_FAST -- see the streaming handlers' own doc comment above for
+ * why a single (status, payload) return can't carry a whole trajectory
+ * stream. Every other command ignores it. */
+static mp_obj_t mp_bcp_dispatch(size_t n_args, const mp_obj_t *args)
 {
-    (void)seq_obj;
+    mp_obj_t type_obj = args[0];
+    mp_obj_t payload_obj = args[2];
+    mp_obj_t emit_obj = (n_args > 3) ? args[3] : mp_const_none;
     bcp_state_ensure_init();
     uint8_t type_ = (uint8_t)mp_obj_get_int(type_obj);
 
@@ -552,6 +924,46 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         int ok = bcp_handle_load_profile((const uint8_t *)pbi.buf, pbi.len, &status);
         return bcp_zero_response(status, ok);
     }
+    case BCP_CMD_LOAD_CONDITIONS:
+    {
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t status;
+        int ok = bcp_handle_load_conditions((const uint8_t *)pbi.buf, pbi.len, &status);
+        return bcp_zero_response(status, ok);
+    }
+    case BCP_CMD_INTEGRATE_AT:
+    {
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t out[sizeof(TINY_BCLIBC_BaseTrajData) + sizeof(TINY_BCLIBC_TrajectoryData)];
+        uint8_t status;
+        size_t n = bcp_handle_integrate_at((const uint8_t *)pbi.buf, pbi.len, out, &status);
+        mp_obj_t resp_payload = (n > 0) ? mp_obj_new_bytes(out, n) : mp_const_empty_bytes;
+        mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
+        return mp_obj_new_tuple(2, items);
+    }
+    case BCP_CMD_INTEGRATE:
+    case BCP_CMD_INTEGRATE_FAST:
+    {
+        if (emit_obj == mp_const_none)
+        {
+            mp_raise_TypeError(MP_ERROR_TEXT("INTEGRATE(_FAST) requires dispatch()'s optional 4th arg, emit(status, payload)"));
+        }
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t out[8];
+        uint8_t status;
+        size_t n = bcp_handle_integrate((const uint8_t *)pbi.buf, pbi.len, type_ == BCP_CMD_INTEGRATE_FAST, emit_obj, out, &status);
+        mp_obj_t resp_payload = (n > 0) ? mp_obj_new_bytes(out, n) : mp_const_empty_bytes;
+        mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
+        return mp_obj_new_tuple(2, items);
+    }
+    case BCP_CMD_RESET:
+        bcp_handle_reset();
+        return bcp_zero_response((uint8_t)BCP_STATUS_OK, 0);
+    case BCP_CMD_ABORT:
+        return bcp_zero_response((uint8_t)BCP_STATUS_OK, 0);
     default:
         /* mp_raise_NotImplementedError() is a natmod-only (dynruntime.h)
          * macro; mp_type_NotImplementedError itself is declared directly
@@ -559,7 +971,7 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         mp_raise_msg(&mp_type_NotImplementedError, MP_ERROR_TEXT("BCP command not implemented yet"));
     }
 }
-static MP_DEFINE_CONST_FUN_OBJ_3(mp_bcp_dispatch_obj, mp_bcp_dispatch);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bcp_dispatch_obj, 3, 4, mp_bcp_dispatch);
 
 /* No module table / MP_REGISTER_MODULE here either -- see bcp_frame_mp.h's
  * own note just above its equivalent spot. */
