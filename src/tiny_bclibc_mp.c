@@ -148,11 +148,14 @@ static void _wrf(uint8_t *p, uint32_t off, float v)
  * the nearest endpoint's value), matching py-ballisticcalc's
  * linear_interpolation() boundary behavior.
  *
- * Not static: reused by bcp_dispatch_mp.c's LOAD_PROFILE *_MULTIBC
- * handling (same interpolate-against-a-reference-table math Epic 2's
- * MultiBC()/build_multibc() already does) -- extern-declared there
- * rather than duplicated, same reasoning as bcp_frame_drop_count(). */
-real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
+ * Kept `static` (not exported) despite the descriptive
+ * `tiny_bclibc_mp_`-prefixed name: bcp_dispatch_mp.h reuses this exact
+ * interpolate-against-a-reference-table math for LOAD_PROFILE's
+ * *_MULTIBC handling (same as Epic 2's MultiBC()/build_multibc()), but
+ * that header is `#include`d into this same translation unit (see its
+ * own top comment for why), not compiled separately -- no `extern`
+ * needed, just a function defined earlier in the same file. */
+static real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
 {
     if (mach <= bc_mach[0])
         return bc_val[0];
@@ -172,9 +175,9 @@ real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int
 }
 
 /* Insertion sort by mach ascending; n is small (<= MAX_BC_POINTS), so O(n^2)
- * is fine and this avoids pulling in qsort(). Not static -- see
+ * is fine and this avoids pulling in qsort(). Kept `static` -- see
  * tiny_bclibc_mp_interp_bc()'s own comment just above. */
-void tiny_bclibc_mp_sort_bc_points(real_t *mach, real_t *val, int32_t n)
+static void tiny_bclibc_mp_sort_bc_points(real_t *mach, real_t *val, int32_t n)
 {
     for (int32_t i = 1; i < n; i++)
     {
@@ -639,6 +642,30 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
 
 #else /* usermod — static ROM dict registered via MP_REGISTER_MODULE */
 
+/* ── BCP: co-processor wire codec/dispatch (BCLIBC_BCP=1 only) ────────────
+ * `#include`d here, not compiled/registered as their own separate usermod
+ * source files or Python modules -- everything BCP adds lives in this
+ * same `_tiny_bclibc` native module (bclibc_module_globals_table below),
+ * behind #ifdef BCLIBC_BCP, exactly like the existing `BCP` marker just
+ * below. `_tiny_bclibc` (native) + `tiny_bclibc.py` (thin Python wrapper)
+ * is this project's one established pattern for exposing C to Python;
+ * BCP doesn't get a second one (`_bcp` or similar) just because its code
+ * happens to live in separate source files -- bcp_frame_mp.h/
+ * bcp_dispatch_mp.h are `#include`d for the same reason as before (see
+ * bcp_frame_mp.h's own top comment: keeps their internal helpers
+ * `static`, one line here instead of touching usermod/micropython.mk +
+ * .cmake for every new BCP source file). Order matters: bcp_dispatch_mp.h
+ * uses bcp_frame_mp.h's BCP_STATUS_* enum and reuses
+ * tiny_bclibc_mp_interp_bc()/tiny_bclibc_mp_sort_bc_points() defined
+ * earlier in this same file (both `static`, already in scope here).
+ * BCLIBC_BCP can never reach a natmod build (only usermod/
+ * micropython.mk/.cmake define it), so this is inert there regardless of
+ * already being inside the usermod-only branch. */
+#ifdef BCLIBC_BCP
+#include "bcp/bcp_frame_mp.h"
+#include "bcp/bcp_dispatch_mp.h"
+#endif
+
 static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__tiny_bclibc)},
     /* size constants */
@@ -648,6 +675,37 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     /* coprocessor build marker -- BCLIBC_BCP=1 build, see usermod/manifest.py;
      * absent from plain usermod and natmod builds */
     {MP_ROM_QSTR(MP_QSTR_BCP), MP_ROM_TRUE},
+    /* bcp_frame_mp.h -- wire framing (PROTOCOL.md §1-§2) */
+    {MP_ROM_QSTR(MP_QSTR_crc16), MP_ROM_PTR(&mp_bcp_crc16_obj)},
+    {MP_ROM_QSTR(MP_QSTR_cobs_encode), MP_ROM_PTR(&mp_bcp_cobs_encode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_cobs_decode), MP_ROM_PTR(&mp_bcp_cobs_decode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_build_frame), MP_ROM_PTR(&mp_bcp_build_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_parse_frame), MP_ROM_PTR(&mp_bcp_parse_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_drop_count), MP_ROM_PTR(&mp_bcp_drop_count_obj)},
+    {MP_ROM_QSTR(MP_QSTR_HEADER_SIZE), MP_ROM_INT(BCP_HEADER_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_CRC_SIZE), MP_ROM_INT(BCP_CRC_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_MIN_PACKET_SIZE), MP_ROM_INT(BCP_MIN_PACKET_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_OK), MP_ROM_INT(BCP_STATUS_OK)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_MORE), MP_ROM_INT(BCP_STATUS_MORE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_INTERRUPTED), MP_ROM_INT(BCP_STATUS_INTERRUPTED)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_SIZE), MP_ROM_INT(BCP_STATUS_ERR_BAD_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_ARG), MP_ROM_INT(BCP_STATUS_ERR_BAD_ARG)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_NOT_LOADED), MP_ROM_INT(BCP_STATUS_ERR_NOT_LOADED)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_INTERNAL), MP_ROM_INT(BCP_STATUS_ERR_INTERNAL)},
+    /* bcp_dispatch_mp.h -- command dispatch (PROTOCOL.md §4) */
+    {MP_ROM_QSTR(MP_QSTR_dispatch), MP_ROM_PTR(&mp_bcp_dispatch_obj)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_PROFILE), MP_ROM_INT(BCP_CMD_LOAD_PROFILE)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONFIG), MP_ROM_INT(BCP_CMD_LOAD_CONFIG)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONDITIONS), MP_ROM_INT(BCP_CMD_LOAD_CONDITIONS)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE), MP_ROM_INT(BCP_CMD_INTEGRATE)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_FAST), MP_ROM_INT(BCP_CMD_INTEGRATE_FAST)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_AT), MP_ROM_INT(BCP_CMD_INTEGRATE_AT)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_RESET), MP_ROM_INT(BCP_CMD_RESET)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_IDENT), MP_ROM_INT(BCP_CMD_IDENT)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_ABORT), MP_ROM_INT(BCP_CMD_ABORT)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_WINDS), MP_ROM_INT(BCP_MAX_WINDS)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_DRAG_PTS), MP_ROM_INT(BCP_MAX_DRAG_PTS)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_BC_POINTS), MP_ROM_INT(BCP_MAX_BC_POINTS)},
 #endif
     /* functions */
     {MP_ROM_QSTR(MP_QSTR_version), MP_ROM_PTR(&mp_bclibc_version_obj)},

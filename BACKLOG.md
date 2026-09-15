@@ -25,6 +25,79 @@ being used purely as a library from Python application code.
 
 ---
 
+## Status at a glance (for picking this up cold)
+
+This section is a compressed pointer into the epics below, not a
+replacement for them — when a decision's *reasoning* matters, the epic's
+own "Resolved"/"Superseded" bullets are the real record (why, what was
+tried first, what broke, how it was verified). Read this section first,
+then jump into the relevant epic for depth.
+
+**Architecture (settled, Epic 3):** MicroPython is transport plumbing
+only — it constructs/configures the CDC1 (or later UART) stream object
+and hands it to C; it does not parse frames, compute CRC, or run
+dispatch logic itself (a real-time target has no business converting
+through Python to call C). All of that is C, living in the *one*
+existing native module, `_tiny_bclibc` (+ `tiny_bclibc.py`'s thin Python
+wrapper for the non-BCP engine API) — there is no separate `_bcp`/
+`_bcp_frame`/`_bcp_dispatch` module. Source layout:
+`src/tiny_bclibc_mp.c` (engine binding, always compiled) `#include`s
+`src/bcp/bcp_frame_mp.h` (wire codec) and `src/bcp/bcp_dispatch_mp.h`
+(command dispatch) under `#ifdef BCLIBC_BCP` — both are genuine `.h`
+files (full function bodies, not just declarations; see
+`bcp_frame_mp.h`'s own top comment for why), never compiled or
+registered separately. Full byte-level wire spec: `PROTOCOL.md`.
+
+**Implemented and hardware-verified** (unix usermod build +
+`tests/test_bcp_frame_native.py`/`test_bcp_dispatch_native.py`, and
+re-flashed to a real RP2040-Zero over `mpremote` at every step — not
+just compiled):
+- Wire framing: COBS + CRC16/CCITT-FALSE (`crc16`, `cobs_encode`/
+  `cobs_decode`, `build_frame`/`parse_frame`), silent-drop + live
+  `drop_count` on bad frames.
+- Command dispatch skeleton: `dispatch(type, seq, payload) ->
+  (status, response_payload)`; unimplemented commands raise
+  `NotImplementedError` (a dev-time signal, not a wire status).
+- `IDENT`, `LOAD_CONFIG`, `LOAD_PROFILE` (full `drag_type` tagged union:
+  G1/G7/CUSTOM/G1_MULTIBC/G7_MULTIBC) — all call straight into the C
+  engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
+  via the shared `bcp_resolve_zero()`), no Python involved.
+
+**Not implemented yet** (raise `NotImplementedError` from `dispatch()`
+today) — in roughly the order it makes sense to tackle them, per the
+dependency notes in Epic 8: `LOAD_CONDITIONS` (same shape as
+`LOAD_PROFILE`/`LOAD_CONFIG` — parse atmosphere + wind array into
+`bcp_state.shot`, call `bcp_resolve_zero()`) → `INTEGRATE_AT` (single-row
+response, no streaming machinery needed) → `INTEGRATE`/`INTEGRATE_FAST`
+(need the `MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need
+real cached state/a real stream in flight to be worth building against).
+
+**Building/testing, concretely:**
+```sh
+# unix usermod (fast iteration, no hardware needed)
+make -C <micropython>/ports/unix VARIANT=standard BCLIBC_BCP=1 \
+    USER_C_MODULES=<this repo> \
+    FROZEN_MANIFEST=<this repo>/usermod/manifest.py
+# then: import _tiny_bclibc as bc; bc.dispatch(bc.CMD_IDENT, 1, b"")
+# run tests/test_bcp_frame_native.py / test_bcp_dispatch_native.py the
+# same way tests/test_bclibc.py already documents at its own top.
+
+# rp2 hardware
+BCLIBC_BCP=1 make -C <micropython>/ports/rp2 BOARD=<board> \
+    USER_C_MODULES=<this repo>/usermod/micropython.cmake \
+    FROZEN_MANIFEST=<this repo>/usermod/manifest.py
+```
+**Gotcha, hit twice this epic:** an *incremental* build directory can
+silently link against a stale generated `moduledefs`/QSTR collection
+after changing `BCLIBC_BCP`, or after changing *which* C symbols get
+registered as Python-visible names (as opposed to just editing a
+function body) — seen so far only on rp2's CMake build, not unix's Make
+build. If a rebuild fails with `undefined reference to <something that
+was just renamed/removed>`, `rm -rf` that one build directory before
+assuming it's a real code problem.
+
+---
+
 ## Epic 1 — Build: usermod gated behind a flag
 
 - [x] **Resolved — name: BCP (Ballistic Co-Processor), flag
@@ -253,7 +326,7 @@ being used purely as a library from Python application code.
           cases matter mostly for the later UART/BLE transports.
 - [x] **Resolved and implemented, not just proposed — packet header (4 B,
       keeps the payload 4-aligned for `uctypes.struct` over the RX
-      buffer):** matches `src/bcp_frame_mp.c`'s `build_frame`/
+      buffer):** matches `src/bcp/bcp_frame_mp.h`'s `build_frame`/
       `parse_frame` exactly, real-hardware-verified (see the C-port
       confirmation above).
       `type:u8 | seq:u8 | status:u8 | rsvd:u8 | payload | crc16:u16`,
@@ -364,7 +437,7 @@ being used purely as a library from Python application code.
           CRC, RP2040 vs. RP2350 economics) — kept for the numbers, not as
           a proposal to actually ship any of these Python-level tricks.
     - **Confirmed for real, on real hardware, not just argued for.**
-          Wrote the actual C port (`src/bcp_frame_mp.c`: `crc16`,
+          Wrote the actual C port (`src/bcp/bcp_frame_mp.h`: `crc16`,
           `cobs_encode`/`cobs_decode`, `build_frame`/`parse_frame`,
           registered as a new `_bcp_frame` usermod module, gated
           `BCLIBC_BCP=1` only — see `usermod/micropython.mk`/
@@ -405,7 +478,7 @@ being used purely as a library from Python application code.
           pursuing for framing at all — plain, unaccelerated C already
           has a wide enough margin everywhere.
     - **One real implementation detail worth flagging, not yet a
-          problem:** `bcp_frame_mp.c`'s `cobs_encode`/`cobs_decode`/
+          problem:** `bcp_frame_mp.h`'s `cobs_encode`/`cobs_decode`/
           `build_frame`/`parse_frame` currently `m_new`/`m_del` a fresh
           buffer on every call — fine given the ~43× margin above, but a
           production dispatch loop should reuse a static/caller-owned
@@ -427,6 +500,110 @@ being used purely as a library from Python application code.
           separated out, but `_bcp_frame` dominates either way. Under
           0.25% of RP2040's 640 KB flash and 0.2% of its 256 KB RAM —
           not a design constraint at this size.
+- [x] **Superseded — one native module (`_tiny_bclibc`), not three.**
+      `src/bcp/bcp_frame_mp.h`/`src/bcp/bcp_dispatch_mp.h` were first written as
+      separate `.c` files, each independently compiled
+      (`SRC_USERMOD_C +=`/`target_sources`) and each registering its own
+      Python-importable module (`_bcp_frame`, `_bcp_dispatch`), alongside
+      `_tiny_bclibc`. Reconsidered on two points raised directly:
+    - **Why keep three native modules/three separate compiled files,
+          when the whole point is one coherent BCP subsystem?** Every
+          time a helper needed to be shared between "files" (`_interp_bc`/
+          `_sort_bc_points` for `LOAD_PROFILE`'s `*_MULTIBC` handling,
+          `bcp_frame_drop_count()` for `IDENT`), it had to stop being
+          `static` and grow an `extern` declaration across translation
+          units — real friction for what is conceptually one thing, not
+          three.
+    - **Fix: `#include` the `.c` content into `tiny_bclibc_mp.c` instead
+          of compiling it separately** (a `.c` file textually included
+          rather than being its own translation unit — the "unity build" /
+          "amalgamation" pattern, same idea as SQLite's single-file
+          build). Renamed both files to `.h` to say so honestly instead of
+          leaving a `.c` extension that implies "compile this
+          standalone" when it no longer can be (a `.h` here still holds
+          full function bodies, not just declarations — a deliberate,
+          named pattern, not an abuse of the extension); added defensive
+          include guards even though each is only ever included once.
+          `tiny_bclibc_mp.c`'s own `#ifdef BCLIBC_BCP #include
+          "bcp_frame_mp.h" #include "bcp_dispatch_mp.h" #endif` replaces
+          both build files' separate source-list entries entirely — a
+          new BCP source file from here needs one line in
+          `tiny_bclibc_mp.c`, not also `usermod/micropython.mk` +
+          `.cmake`. `tiny_bclibc_mp_interp_bc()`/
+          `tiny_bclibc_mp_sort_bc_points()`/`bcp_frame_drop_count()` all
+          went back to plain `static`, no `extern` anywhere.
+    - **Real collision caught before merging, not after:** both files
+          independently defined the identical `enum { BCP_STATUS_OK = 0,
+          ... }` — harmless as separate translation units, a hard
+          duplicate-enumerator compile error once merged into one. Kept
+          the one definition in `bcp_frame_mp.h` (`#include`d first),
+          removed `bcp_dispatch_mp.h`'s copy.
+    - **Second point raised: why two (or three) Python-importable module
+          names at all, once the C is one thing?** `MP_REGISTER_MODULE`
+          turned out to be a build-time text-scan mechanism, not a real
+          C construct — confirmed by reading both `py/obj.h` (the macro
+          expands to nothing at compile time) and
+          `py/makemoduledefs.py` (its `find_module_registrations()`
+          greps the *preprocessed* per-source output, the same
+          `qstr.i.last`-style pass QSTR collection already uses), then
+          confirmed for real by actually building both ways rather than
+          trusting the reasoning alone. This meant two independent
+          simplifications were available, both taken:
+        - Registering `_bcp_frame`/`_bcp_dispatch` from one umbrella
+              spot (`tiny_bclibc_mp.c`, right after its own
+              `MP_REGISTER_MODULE(MP_QSTR__tiny_bclibc, ...)`) instead of
+              one `MP_REGISTER_MODULE` call per header — verified
+              working via a real build (both still importable).
+        - Going further: **no separate `_bcp_frame`/`_bcp_dispatch`
+              modules at all** — this project already has exactly one
+              established pattern for exposing C to Python
+              (`_tiny_bclibc` native + `tiny_bclibc.py` thin wrapper);
+              BCP doesn't need a second one just because its code
+              happens to live in separate source files. All of
+              `bcp_frame_mp.h`/`bcp_dispatch_mp.h`'s functions/constants
+              were folded directly into `_tiny_bclibc`'s own
+              `bclibc_module_globals_table[]`, behind `#ifdef
+              BCLIBC_BCP` — the exact same pattern the `BCP` marker
+              constant already used, just extended. No module table, no
+              `MP_REGISTER_MODULE`, left in either header at all now.
+    - **Verified for real at every step, not assumed:** unix usermod
+          rebuild after the `#include` merge — 30+/30+ PASS across both
+          test files unchanged, `_bcp_frame`/`_bcp_dispatch` still
+          separately importable (confirming the umbrella-registration
+          claim); after folding into `_tiny_bclibc` — same tests updated
+          to `import _tiny_bclibc` (skip check changed from "module
+          missing" to `hasattr(mod, "crc16")`/`hasattr(mod, "dispatch")`,
+          since `_tiny_bclibc` always exists, BCP or not) — all still
+          PASS; a plain (non-BCP) usermod build confirmed `crc16`/
+          `dispatch`/`BCP` all absent from `_tiny_bclibc`. Rebuilt and
+          reflashed the same RP2040-Zero — `_tiny_bclibc.dispatch(...)`
+          over `mpremote` gives the identical `LOAD_PROFILE` result as
+          before, and `tiny_bclibc.py`'s own `Shot()`/`integrate()`
+          (the non-BCP Python API) still works unchanged.
+    - **Gotcha caught along the way:** the rp2 (CMake) incremental build
+          directory from before this change failed to link
+          (`undefined reference to bcp_dispatch_module`) — a stale
+          `moduledefs`/QSTR collection from the old three-module scheme,
+          not a real code problem; `rm -rf` of that one build directory
+          and rebuilding from scratch fixed it immediately. The unix
+          (Make) incremental build didn't hit this. Same family of issue
+          as the already-documented "switching `BCLIBC_BCP` needs a
+          fresh build directory" — changing *which symbols get
+          registered as Python modules* is now known to need one too,
+          at least for CMake ports.
+    - **Moved to `src/bcp/` right after**, on the same "why keep this
+          flat" logic once more — `bcp_frame_mp.h` (332 lines) +
+          `bcp_dispatch_mp.h` (567 lines, growing: `LOAD_CONDITIONS`/
+          `INTEGRATE`/`INTEGRATE_AT`/`RESET`/`ABORT` still to come) are
+          clearly a subsystem, not two loose files in `src/` alongside
+          the engine bindings — matches the existing (if undocumented)
+          `src/math_shadow/` subdirectory precedent. Only real snag: a
+          quoted `#include "drag_tables.h"` inside
+          `bcp_dispatch_mp.h` resolved against *its own* directory
+          (`src/bcp/`, where the file isn't), not `tiny_bclibc_mp.c`'s --
+          fixed as `#include "../drag_tables.h"`. Rebuilt/reflashed the
+          same RP2040-Zero again after the move to confirm, not assumed
+          safe just because the unix build passed.
 - [x] **Corrected — `src/bcp_frame.py` is not kept on as a permanent
       "oracle."** The earlier framing (a maintained parallel Python
       implementation, kept around specifically to diff the C
@@ -447,7 +624,7 @@ being used purely as a library from Python application code.
       `bcp_frame.py`/`tests/test_bcp_frame.py` actually were: a fast
       design-iteration tool for nailing down the wire format this
       session (now settled in `PROTOCOL.md`) — that job is done. **Done,
-      not just planned:** the C port landed (`src/bcp_frame_mp.c`, see the
+      not just planned:** the C port landed (`src/bcp/bcp_frame_mp.h`, see the
       "implementation language is C" resolution above) and
       `tests/test_bcp_frame_native.py` targets it directly via the unix
       port, reusing `test_bcp_frame.py`'s known-answer vectors and
@@ -543,9 +720,12 @@ being used purely as a library from Python application code.
       vs. paying a now-quantified, C-eliminable cost today. **Left open
       on purpose** rather than re-resolved — revisit if CDC1 stays the
       only transport for a long time and the UART/BLE epic keeps slipping.
-- [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
-      so there is nothing to reply to); host relies on a timeout. Optional
-      drop counter reported via `IDENT`.
+- [x] **Resolved and implemented** — bad-CRC/malformed/under-length frames
+      are dropped silently (`src/bcp/bcp_frame_mp.h`'s `parse_frame()`,
+      their `seq` cannot be trusted so there is nothing to reply to; host
+      relies on a timeout), and the drop counter is real, not just
+      optional: `bcp_frame_drop_count()`, reported live via `IDENT`
+      (§4.6) — see the C-port confirmation above.
 - [x] **Superseded — `FIND_APEX` and `FIND_MAX_RANGE` dropped from the
       wire command set entirely.** Corrects the earlier "in the v1
       command set" resolution. Both are trajectory-shape analysis
@@ -563,7 +743,7 @@ being used purely as a library from Python application code.
       in v1. Revisit only if a real diagnostics/analysis use case for the
       co-processor specifically shows up.
 - [x] **Resolved — final command enum, implemented in
-      `src/bcp_dispatch_mp.c` (`BCP_CMD_*`), not just a placeholder
+      `src/bcp/bcp_dispatch_mp.h` (`BCP_CMD_*`), not just a placeholder
       anymore:** `LOAD_PROFILE=1, LOAD_CONFIG=2, LOAD_CONDITIONS=3,
       INTEGRATE=4, INTEGRATE_FAST=5, INTEGRATE_AT=6, RESET=7, IDENT=8,
       ABORT=9`. `ACK/NAK/ERROR` are `status` codes
@@ -611,7 +791,7 @@ being used purely as a library from Python application code.
       full table.
 - [x] **Resolved — no, `IDENT` does not preempt.** Settled by
       implementation, not just argument: `dispatch()`'s `IDENT` case in
-      `src/bcp_dispatch_mp.c` is a pure, synchronous, side-effect-free
+      `src/bcp/bcp_dispatch_mp.h` is a pure, synchronous, side-effect-free
       read (fixed fields + a `sizeof()`/version-string build + reading
       `bcp_frame_drop_count()`) — there is no worker, lock, or cached
       state it touches, so the question of "does it interrupt whatever's
@@ -937,7 +1117,7 @@ being used purely as a library from Python application code.
           numbers — see below), applied on-device before the first
           `LOAD_CONFIG`, same pattern as `LOAD_CONDITIONS`'s fallback.
           **Implemented and hardware-verified**
-          (`src/bcp_dispatch_mp.c`'s `BCP_CMD_LOAD_CONFIG` case): config
+          (`src/bcp/bcp_dispatch_mp.h`'s `BCP_CMD_LOAD_CONFIG` case): config
           is validated and stored for real; the "re-solve the zero and
           answer with `barrel_elevation_rad`" half is honestly reported
           as `ERR_NOT_LOADED` rather than faked, since that needs
@@ -951,7 +1131,7 @@ being used purely as a library from Python application code.
           struct, not a `_SHOT_DESC`-shaped byte buffer.** The first draft
           of this (above) introduced `src/bcp_shot_layout.h` as a shared
           byte-offset header for both `tiny_bclibc_mp.c` and
-          `bcp_dispatch_mp.c`, on the assumption that the cached profile
+          `bcp_dispatch_mp.h`, on the assumption that the cached profile
           had to stay wire-compatible bytes because it would eventually
           be handed to `tiny_bclibc_mp.c`'s own Python-facing
           `integrate()`/`find_zero_angle()` functions. That assumption
@@ -976,7 +1156,7 @@ being used purely as a library from Python application code.
           Python-facing `Shot()` binding still needs byte offsets for
           parsing buffer-protocol objects from non-BCP callers — that
           usage is unaffected and unrelated). New `BcpState` in
-          `bcp_dispatch_mp.c`: `TINY_BCLIBC_Shot shot` plus backing
+          `bcp_dispatch_mp.h`: `TINY_BCLIBC_Shot shot` plus backing
           arrays for the drag curve/winds/PCHIP scratch space (sized to
           the BCP caps above) and `has_profile`/`has_config`/
           `has_conditions`/`ready` flags. `LOAD_CONFIG` rewritten to
@@ -997,7 +1177,7 @@ being used purely as a library from Python application code.
           allocated for real, where the byte-buffer draft would have
           paid a similar cost anyway once `LOAD_PROFILE`/
           `LOAD_CONDITIONS` needed the same worst-case sizing.
-    - **Resolved and implemented — `LOAD_PROFILE`** (`src/bcp_dispatch_mp.c`'s
+    - **Resolved and implemented — `LOAD_PROFILE`** (`src/bcp/bcp_dispatch_mp.h`'s
           `BCP_CMD_LOAD_PROFILE` case): the tagged-union `drag_type`
           described earlier in this epic, now real code. Parses the 36 B
           fixed header + `drag_count`-shaped drag points straight into
@@ -1119,7 +1299,7 @@ being used purely as a library from Python application code.
 - [x] **Resolved:** `SET_BLE_PASS` is deferred entirely until the BLE
       transport epic — no stub in v1, to avoid dead code in the meantime.
 - [x] **Resolved and implemented — `IDENT`.** First real command handler,
-      in `src/bcp_dispatch_mp.c`'s `dispatch()` (PROTOCOL.md §4.6): fixed
+      in `src/bcp/bcp_dispatch_mp.h`'s `dispatch()` (PROTOCOL.md §4.6): fixed
       15 B header (`proto_ver, real_size, traj_row_size, base_traj_size,
       max_winds, max_drag_pts, max_bc_points, drop_count`) + a
       length-prefixed version string built from `MP_BCLIBC_VERSION` +
@@ -1127,7 +1307,7 @@ being used purely as a library from Python application code.
       `version()` already uses) — not a hardcoded passthrough call,
       since `dispatch()` is its own usermod module with no dependency on
       `tiny_bclibc_mp.c`'s internals beyond the shared `tiny_bclibc.h`
-      types. `drop_count` reads `bcp_frame_mp.c`'s new
+      types. `drop_count` reads `bcp_frame_mp.h`'s new
       `bcp_frame_drop_count()` (a counter bumped on every frame
       `parse_frame()` drops — malformed COBS, under-length, bad CRC),
       wiring up the "optional telemetry" `IDENT` was always meant to

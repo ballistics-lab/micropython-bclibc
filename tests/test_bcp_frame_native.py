@@ -1,29 +1,35 @@
 # ruff: noqa
 
 """
-_bcp_frame native (C) module test -- BCLIBC_BCP=1 usermod builds only.
+BCP wire-framing (COBS+CRC16) native (C) test -- BCLIBC_BCP=1 usermod
+builds only. The codec lives directly in `_tiny_bclibc` (see
+src/bcp_frame_mp.h and tiny_bclibc_mp.c's umbrella comment: BCP doesn't
+get its own separate native module, it's `_tiny_bclibc` + `#ifdef
+BCLIBC_BCP`, same one-native-module pattern as the rest of this project).
 Run with:
     micropython test_bcp_frame_native.py
 or from repo root:
     /path/to/micropython test_bcp_frame_native.py
 
 Mirrors tests/test_bcp_frame.py's known-answer vectors and failure
-scenarios against the real on-device C module instead of the pure-Python
+scenarios against the real on-device C code instead of the pure-Python
 design-iteration reference (see BACKLOG.md Epic 3: "implementation
 language is C, not Python" / "bcp_frame.py is not kept on as a permanent
-oracle"). `_bcp_frame.parse_frame()` takes one already delimiter-split
-COBS segment rather than accumulating a byte stream itself -- that
-accumulation is expected to live in the C dispatch loop (not yet written),
-so this test does the 0x00-splitting itself, same as that loop eventually
-will.
+oracle"). `parse_frame()` takes one already delimiter-split COBS segment
+rather than accumulating a byte stream itself -- that accumulation is
+expected to live in the C dispatch loop (not yet written), so this test
+does the 0x00-splitting itself, same as that loop eventually will.
 """
 
 import sys
 
 try:
-    import _bcp_frame as f
+    import _tiny_bclibc as f
 except ImportError as ex:
-    print("SKIP: _bcp_frame not built into this firmware (BCLIBC_BCP=1 required):", ex)
+    print("SKIP: _tiny_bclibc not built into this firmware:", ex)
+    sys.exit(0)
+if not hasattr(f, "crc16"):
+    print("SKIP: _tiny_bclibc built without BCLIBC_BCP=1 (no BCP codec)")
     sys.exit(0)
 
 _failures = 0
@@ -51,7 +57,7 @@ def _split_frames(stream):
     return [seg for seg in stream.split(b"\x00") if seg]
 
 
-print("=== _bcp_frame native module test ===")
+print("=== BCP frame codec native (_tiny_bclibc) test ===")
 
 # -- CRC16/CCITT-FALSE known-answer vector ------------------------------------
 print("\n--- CRC16 ---")

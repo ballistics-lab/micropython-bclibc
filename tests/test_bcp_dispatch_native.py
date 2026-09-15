@@ -1,7 +1,10 @@
 # ruff: noqa
 
 """
-_bcp_dispatch native (C) module test -- BCLIBC_BCP=1 usermod builds only.
+BCP command dispatch native (C) test -- BCLIBC_BCP=1 usermod builds only.
+Dispatch lives directly in `_tiny_bclibc` (see src/bcp_dispatch_mp.h and
+tiny_bclibc_mp.c's umbrella comment: BCP doesn't get its own separate
+native module, it's `_tiny_bclibc` + `#ifdef BCLIBC_BCP`).
 Run with:
     micropython test_bcp_dispatch_native.py
 or from repo root:
@@ -9,17 +12,17 @@ or from repo root:
 
 IDENT, LOAD_CONFIG and LOAD_PROFILE are implemented so far (see
 BACKLOG.md Epic 3/8) -- this test covers IDENT itself, the drop_count
-telemetry it reports (from _bcp_frame.parse_frame's own failure
-counter), LOAD_CONFIG's size validation and its ERR_NOT_LOADED response,
-the unknown-command NotImplementedError, one full
-parse_frame -> dispatch -> build_frame round trip tying _bcp_frame and
-_bcp_dispatch together, and LOAD_PROFILE's drag_type tagged union
-(G1/G7/CUSTOM/*_MULTIBC) plus its array-count validation.
+telemetry it reports (from parse_frame's own failure counter),
+LOAD_CONFIG's size validation and its ERR_NOT_LOADED response, the
+unknown-command NotImplementedError, one full
+parse_frame -> dispatch -> build_frame round trip, and LOAD_PROFILE's
+drag_type tagged union (G1/G7/CUSTOM/*_MULTIBC) plus its array-count
+validation.
 
-_bcp_dispatch's state is real persistent C state across dispatch() calls
-in this one process (RESET isn't implemented yet to clear it) -- so test
-order matters here more than in most test files: the LOAD_CONFIG section
-below runs *before* any LOAD_PROFILE call and depends on no profile being
+BCP state is real persistent C state across dispatch() calls in this one
+process (RESET isn't implemented yet to clear it) -- so test order
+matters here more than in most test files: the LOAD_CONFIG section below
+runs *before* any LOAD_PROFILE call and depends on no profile being
 cached yet (ERR_NOT_LOADED); the LOAD_PROFILE section loads a real
 profile, and the final section re-checks LOAD_CONFIG now succeeds once
 one is cached. Don't reorder sections without checking this.
@@ -29,10 +32,13 @@ import struct
 import sys
 
 try:
-    import _bcp_dispatch as d
-    import _bcp_frame as f
+    import _tiny_bclibc as d
+    import _tiny_bclibc as f
 except ImportError as ex:
-    print("SKIP: _bcp_dispatch/_bcp_frame not built into this firmware (BCLIBC_BCP=1 required):", ex)
+    print("SKIP: _tiny_bclibc not built into this firmware:", ex)
+    sys.exit(0)
+if not hasattr(d, "dispatch"):
+    print("SKIP: _tiny_bclibc built without BCLIBC_BCP=1 (no BCP dispatch)")
     sys.exit(0)
 
 _failures = 0
@@ -48,7 +54,7 @@ def _fail(name, msg=""):
     print("  FAIL  " + name + (" — " + str(msg) if msg else ""))
 
 
-print("=== _bcp_dispatch native module test ===")
+print("=== BCP dispatch native (_tiny_bclibc) test ===")
 
 # -- IDENT ---------------------------------------------------------------------
 print("\n--- IDENT ---")
