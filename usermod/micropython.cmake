@@ -89,6 +89,11 @@ target_compile_definitions(usermod_tiny_bclibc INTERFACE
 if("$ENV{BCLIBC_BCP}" STREQUAL "1")
     target_compile_definitions(usermod_tiny_bclibc INTERFACE BCLIBC_BCP=1)
     list(APPEND MICROPY_CPP_DEF_EXTRA BCLIBC_BCP=1)
+    # bcp_frame_mp.c (COBS+CRC16 wire codec, PROTOCOL.md) is BCP-only -- unlike
+    # tiny_bclibc_mp.c, not part of a plain usermod build at all.
+    target_sources(usermod_tiny_bclibc INTERFACE
+        "${_MOD_DIR}/src/bcp_frame_mp.c"
+    )
 endif()
 
 target_link_libraries(usermod INTERFACE usermod_tiny_bclibc)
