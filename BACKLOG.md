@@ -338,10 +338,7 @@ being used purely as a library from Python application code.
       job is transport plumbing only (open/configure UART or CDC1, feed
       bytes to/from the parser) — **not** COBS, CRC, frame validation, or
       dispatch. All of that belongs in C next to `tiny_bclibc_mp.c`, same
-      as the engine itself. `src/bcp_frame.py`/`tests/test_bcp_frame.py`
-      (this epic's earlier work) stay on as the **reference/oracle**
-      implementation for protocol-conformance tests, not the on-device
-      path. Reasons, in order of weight:
+      as the engine itself. Reasons, in order of weight:
     - **C already builds on all three targets today** (Epic 2's real
           cross-builds), closing the one open portability question the
           Python-side exploration below kept running into: whether
@@ -359,6 +356,30 @@ being used purely as a library from Python application code.
     - Below is the full exploration that led here (viper, DMA-hardware
           CRC, RP2040 vs. RP2350 economics) — kept for the numbers, not as
           a proposal to actually ship any of these Python-level tricks.
+- [x] **Corrected — `src/bcp_frame.py` is not kept on as a permanent
+      "oracle."** The earlier framing (a maintained parallel Python
+      implementation, kept around specifically to diff the C
+      implementation's output against) doesn't hold up: nothing here
+      actually needs a second maintained implementation to test against.
+      What the C implementation should be verified against is the same
+      external ground truth `bcp_frame.py` was itself checked against —
+      catalogue known-answer vectors (`crc16(b"123456789") == 0x29B1`,
+      the COBS paper's small vectors), round-trip properties tested
+      against the one real implementation, the real RP2040 DMA-sniffer
+      comparison (already independent hardware, done above), and the
+      framing-failure-scenario tests (behavior against the spec, not
+      against a second encoder). Two implementations kept in sync purely
+      so they can diff each other is an unneeded extra mechanism, not a
+      safety net -- check the plain option (test the one real
+      implementation against known-answer vectors) before reaching for a
+      parallel one. What
+      `bcp_frame.py`/`tests/test_bcp_frame.py` actually were: a fast
+      design-iteration tool for nailing down the wire format this
+      session (now settled in `PROTOCOL.md`) — that job is done. Once the
+      C port lands, tests target the C module directly (via the unix
+      port, same pattern as `tests/test_bclibc.py`), reusing this
+      session's known-answer vectors and failure-scenario cases as the
+      actual test content, not diffing against a kept-alive Python twin.
 - [x] **Explored, not adopted — `@micropython.native`/`@micropython.viper`
       for `crc16`, on real RP2040-Zero hardware, `mpremote run`:**
 
@@ -447,11 +468,25 @@ being used purely as a library from Python application code.
 - [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
       so there is nothing to reply to); host relies on a timeout. Optional
       drop counter reported via `IDENT`.
-- [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
-      set (both already natively bound).
-- [ ] Command enum: `LOAD_PROFILE, LOAD_CONDITIONS, INTEGRATE,
-      INTEGRATE_AT, FIND_APEX, FIND_MAX_RANGE, RESET, IDENT, STREAM_START,
-      STREAM_END, ABORT, ACK/NAK/ERROR`. **`FIND_ZERO_ANGLE` dropped from
+- [x] **Superseded — `FIND_APEX` and `FIND_MAX_RANGE` dropped from the
+      wire command set entirely.** Corrects the earlier "in the v1
+      command set" resolution. Both are trajectory-shape analysis
+      questions (max ordinate, max achievable range), not part of the
+      live-shot holdover workflow this protocol targets
+      (`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` once, then
+      `INTEGRATE_AT`/`INTEGRATE(_FAST)` per actual range) —
+      `find_zero_angle` was already made internal-only for a related
+      reason (Epic 8), and neither of these is even auto-triggered by
+      anything, so there's no equivalent internal role for them either.
+      `FIND_APEX` is redundant with `INTEGRATE` besides: a host already
+      streaming full rows can find the max-height row itself. Both stay
+      ordinary `tiny_bclibc`/`tiny_bclibc.py` library functions outside
+      BCP — not removed from the engine, just not exposed over the wire
+      in v1. Revisit only if a real diagnostics/analysis use case for the
+      co-processor specifically shows up.
+- [ ] Command enum: `LOAD_PROFILE, LOAD_CONFIG, LOAD_CONDITIONS, INTEGRATE,
+      INTEGRATE_FAST, INTEGRATE_AT, RESET, IDENT, ABORT, ACK/NAK/ERROR`.
+      **`FIND_ZERO_ANGLE`, `FIND_APEX`, `FIND_MAX_RANGE` dropped from
       the wire command set** — see Epic 8 (now internal-only,
       auto-triggered by `LOAD_PROFILE`/`LOAD_CONDITIONS`). **`RESET`
       redefined, not dropped** — see Epic 8: an application soft-reset,

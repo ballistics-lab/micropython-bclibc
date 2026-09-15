@@ -112,11 +112,9 @@ only cover frames that passed framing but failed at the command layer.
 | 4 | `INTEGRATE` | `Request` (§4.4) | stream of `MORE` rows (full `TrajectoryData`), then `total:u32, reason:i32` |
 | 5 | `INTEGRATE_FAST` | `Request` (§4.4, same struct) | stream of `MORE` rows (compact `FastTrajData`, §4.5a), then `total:u32, reason:i32` |
 | 6 | `INTEGRATE_AT` | `key:u8, rsvd:u8[3], target:f32` | `BaseTrajData` + `TrajectoryData` (§4.5) |
-| 7 | `FIND_APEX` | *(none)* | one `TrajectoryData` row (§4.5) |
-| 8 | `FIND_MAX_RANGE` | `lo:f32, hi:f32` | `range_ft:f32, angle_rad:f32` |
-| 9 | `RESET` | *(none)* | `OK` |
-| 10 | `IDENT` | *(none)* | §4.6 |
-| 11 | `ABORT` | *(none)* | `OK` (see note below) |
+| 7 | `RESET` | *(none)* | `OK` |
+| 8 | `IDENT` | *(none)* | §4.6 |
+| 9 | `ABORT` | *(none)* | `OK` (see note below) |
 
 Numeric ids above are provisional -- not yet cross-checked against an
 actual enum in code; treat the **names** as fixed, the **numbers** as
@@ -125,7 +123,16 @@ placeholders until `bcp_frame`/`bclibc_bcp` defines the real enum.
 `FIND_ZERO_ANGLE` and `STREAM_START`/`STREAM_END` are **not** wire
 commands -- see `BACKLOG.md` Epic 3/8: zero-solving is internal and
 auto-triggered by `LOAD_PROFILE`/`LOAD_CONDITIONS` (§4.2/§4.3), and
-`INTEGRATE` streams on its own via `MORE` frames.
+`INTEGRATE` streams on its own via `MORE` frames. **`FIND_APEX` and
+`FIND_MAX_RANGE` are not wire commands either** -- both are
+trajectory-shape analysis (max ordinate, max achievable range), not part
+of the live-shot holdover workflow this protocol targets
+(`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` once, then
+`INTEGRATE_AT`/`INTEGRATE(_FAST)` per actual range). `FIND_APEX` is
+redundant with `INTEGRATE` besides -- a host already streaming full rows
+can find the max-height row itself, no dedicated command needed. Both
+remain ordinary `tiny_bclibc`/`tiny_bclibc.py` library functions outside
+BCP; revisit only if a real diagnostics/analysis use case shows up.
 
 ### 4.1 Array-count rule
 
@@ -334,7 +341,7 @@ worry about). A host does not need `IDENT`'s `real_size` to decode it.
 
 ### 4.5 Trajectory row structs
 
-`TrajectoryData` (full row -- `FIND_APEX`, `INTEGRATE_AT`, `INTEGRATE`'s
+`TrajectoryData` (full row -- `INTEGRATE_AT`, `INTEGRATE`'s
 `MORE` frames), 15 `real_t` fields + 1 `i32`, in this order: `time,
 distance_ft, velocity_fps, mach, height_ft, slant_height_ft,
 drop_angle_rad, windage_ft, windage_angle_rad, slant_distance_ft,
