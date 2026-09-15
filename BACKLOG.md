@@ -67,9 +67,11 @@ just compiled):
   engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
   via the shared `bcp_resolve_zero()`), no Python involved.
 
-**Implemented, unix-verified only (not yet hardware-verified — no
-RP2040/RP2350/ESP32-S3 available in this session, unlike the bullet
-above)**:
+**Implemented, unix-verified only (not yet hardware-verified — RP2040-Zero
+and an ESP32-S3 board are now available as of Epic 4's USB-transport
+bring-up below, but re-running `test_bcp_dispatch_native.py`'s equivalent
+against real hardware for these specific commands hasn't happened yet;
+RP2350 still has no board at all)**:
 - `LOAD_CONDITIONS` (`src/bcp/bcp_dispatch_mp.h`'s
   `bcp_handle_load_conditions()`, PROTOCOL.md §4.3): parses atmosphere
   (`temp_c`/`pressure_hpa`/`altitude_ft`/`humidity`), shot geometry
@@ -209,10 +211,14 @@ Epic 4 (USB CDC1 transport, the actual read/decode/dispatch/write loop)
 and, once that exists, wiring Epic 6's cooperative-abort checkpoint and
 `INTERRUPTED` status into it for real.
 
-**Not yet exercised, any command above**: actually running on real
-RP2040/RP2350/ESP32-S3 hardware (no board available in this session) --
-only the unix build was executed; RPI_PICO was compiled and linked, not
-flashed/run.
+**Not yet exercised, any command above**: actually running the
+`LOAD_CONDITIONS`/`INTEGRATE`/`INTEGRATE_FAST`/`INTEGRATE_AT`/`RESET`/
+`ABORT` dispatch handlers themselves on real hardware -- RP2040-Zero and
+an ESP32-S3 board are now available (see Epic 4's USB-transport
+bring-up), but this pass only re-verified the USB CDC1 transport coming
+up, not these commands; RPI_PICO/ESP32-S3 were compiled and linked for
+this session's dispatch work, not flashed/run against it. RP2350 has no
+board available at all yet.
 
 **Building/testing, concretely:**
 ```sh
@@ -237,6 +243,18 @@ function body) — seen so far only on rp2's CMake build, not unix's Make
 build. If a rebuild fails with `undefined reference to <something that
 was just renamed/removed>`, `rm -rf` that one build directory before
 assuming it's a real code problem.
+
+**Another gotcha, hit during Epic 4's hardware bring-up:** the local
+`micropython` checkout's `lib/pico-sdk` submodule can be checked out to a
+commit that doesn't match what the checkout's own `git ls-tree` pins (a
+stale/manually-fiddled submodule state, not something this repo controls)
+-- symptom was `CMake Error ... Unknown CMake command
+"pico_add_linker_script_override_path"` failing configure outright on a
+from-scratch rp2 build, since that function didn't exist yet in the
+checked-out (older) pico-sdk. Fixed with `git submodule update --init
+lib/pico-sdk` inside the `micropython` checkout. Worth checking first
+(`git -C <micropython> diff --stat -- lib/pico-sdk lib/tinyusb`) before
+assuming a real MicroPython/pico-sdk incompatibility.
 
 ---
 
@@ -772,8 +790,21 @@ assuming it's a real code problem.
       port, reusing `test_bcp_frame.py`'s known-answer vectors and
       failure-scenario cases almost verbatim — not diffing against a
       kept-alive Python twin. `bcp_frame.py`/`test_bcp_frame.py` themselves
-      are left in place, untouched, as the historical record of that
-      design-iteration phase.
+      were left in place, untouched, as the historical record of that
+      design-iteration phase for a while.
+    - **Superseded — actually deleted, not just left inert.** Once Epic 4's
+          hardware bring-up confirmed the C port end-to-end and PROTOCOL.md
+          had long since settled, keeping the pure-Python files around
+          stopped earning their place: everything they ever did (nail down
+          the wire format, provide known-answer vectors) is now done by
+          `PROTOCOL.md` + `bcp_frame_mp.h` + `test_bcp_frame_native.py`.
+          Removed `src/bcp_frame.py`/`tests/test_bcp_frame.py` outright;
+          `PROTOCOL.md`'s "Reference implementation"/"Encoding a packet"
+          pointers repointed at `bcp_frame_mp.h`'s `parse_frame`/
+          `build_frame`, and its top warning banner's mention of a
+          pure-Python reference reworded to say it was removed. Nothing
+          else referenced these two files for real (not frozen by any
+          manifest, not built by either `usermod/micropython.mk`/`.cmake`).
 - [x] **Explored, not adopted — `@micropython.native`/`@micropython.viper`
       for `crc16`, on real RP2040-Zero hardware, `mpremote run`:**
 
@@ -958,9 +989,81 @@ assuming it's a real code problem.
       blocks the CDC0 REPL" (below) is therefore about **which core** that
       C loop runs on (Epic 7's now-optional core-placement choice), not
       about keeping the loop itself in non-blocking Python.
-- [ ] Verify `usb.device` CDC-composite support/parity across the actual
-      MicroPython port versions targeted for RP2040, RP2350, and ESP32-S3
-      — confirm per-port before relying on it uniformly across all three.
+- [x] **Verified for real on RP2040 — no C-side change needed, only a
+      manifest freeze.** `CFG_TUD_CDC` (`shared/tinyusb/tusb_config.h`) is a
+      boolean, not a count -- it only gates the one *built-in, static*
+      TinyUSB CDC class driver (CDC0/REPL). The dynamic runtime stack
+      (`machine.USBDevice`, on by default on both rp2 and esp32:
+      `MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE` in both ports'
+      `mpconfigport.h`) builds CDC1 as a plain generic interface
+      (`usb.device.cdc.CDCInterface`, from micropython-lib's
+      `usb-device`/`usb-device-cdc` packages) that constructs its own
+      descriptor/endpoints and never touches `tud_cdc_n_*` at all -- it
+      doesn't consume a `CFG_TUD_CDC` slot, so **`CFG_TUD_CDC` stays `1`**
+      (unchanged). The only real gap was that neither package is frozen by
+      any stock manifest (`ports/rp2/boards/manifest.py` only freezes
+      `asyncio`/`onewire`/`ds18x20`/`dht`/`neopixel`) -- fixed by adding
+      `require("usb-device")` / `require("usb-device-cdc")` to
+      `usermod/manifest.py`, gated the same as `bclibc_bcp.py` under
+      `BCLIBC_BCP=1`.
+      **Built and flashed for real** onto the same RP2040-Zero used
+      throughout this backlog (`BOARD=WAVESHARE_RP2040_ZERO`,
+      `BCLIBC_BCP=1`) -- FLASH 365064→371876 B (+6812 B for both frozen
+      packages), RAM 30388 B (unchanged from the last Epic 8 measurement).
+      Confirmed over `mpremote`: constructing a `CDCInterface`, then
+      `usb.device.get().init(cdc1, builtin_driver=True)` re-enumerates the
+      device as a genuine 2-CDC composite (`/dev/ttyACM0` + a new
+      `/dev/ttyACM1` on the host) with **`builtin_driver=True` keeping
+      CDC0/REPL alive and unchanged** -- a plain host-side echo test on
+      the new `/dev/ttyACM1` (open, write `b"hello-bcp-cdc1"`, read back)
+      round-tripped the exact bytes, and a fresh `mpremote` connection to
+      `/dev/ttyACM0` immediately after confirmed the REPL still answers
+      normally.
+      **Repeated for real on ESP32-S3 too** (LilyGO T3-S3,
+      `BOARD=ESP32_GENERIC_S3 BOARD_VARIANT=SPIRAM_OCT` -- no dedicated
+      board file for this exact product exists in `ports/esp32/boards`,
+      but the generic S3 board is what the device was already running and
+      is all BCP needs; matches `SOC_USB_OTG_SUPPORTED`/
+      `MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE=1` defaulting the same way as
+      rp2 in `ports/esp32/mpconfigport.h`). Built against the
+      already-cached ESP-IDF v5.5.2 toolchain
+      (`IDF_TOOLS_PATH=.../tools/esp32s3`, `source idf/export.sh`) --
+      clean build first try, none of README's documented ESP-IDF gotchas
+      (stale `idf_py_stderr_output` log, wrong IDF version) actually hit
+      this time. Flashed with plain `esptool --chip esp32s3 write_flash`
+      using the exact args `idf.py`'s own build output printed; **no
+      manual BOOT/RESET button dance needed** -- `esptool`'s default
+      `--before default_reset`/`--after hard_reset` over this board's
+      native USB-CDC successfully drove the auto-reset-into-bootloader
+      sequence on its own (a real concern going in, since boards with no
+      separate USB-UART bridge chip sometimes can't do this over native
+      USB -- not the case here). Identical result to RP2040: `BCP=True`
+      marker present, `usb.device`/`CDCInterface` import fine, constructing
+      `CDCInterface` + `usb.device.get().init(cdc1, builtin_driver=True)`
+      re-enumerated a genuine `/dev/ttyACM1` alongside the still-alive
+      REPL on `/dev/ttyACM0`, and the same raw host-side echo test
+      round-tripped its bytes exactly. **RP2350 still not yet repeated**
+      (no board available at time of writing) -- same
+      `MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE=1` default applies there too
+      (`ports/rp2/mpconfigport.h`, arch-independent within the port), so
+      expected to carry over, but not yet verified on real RP2350
+      hardware.
+      **Tooling gotcha hit while verifying, worth recording:** `mpremote`
+      defaults to soft-resetting the board before `exec`/`run` (sends
+      Ctrl-D, `_auto_soft_reset` in `mpremote/main.py`) -- for this
+      specific test that soft reset itself causes a benign but confusing
+      USB detach/reattach blip that races with `mpremote`'s own already-open
+      file descriptor for the old `/dev/ttyACM0` and throws a spurious
+      `OSError: [Errno 5] Input/output error` right as the script finishes
+      (the on-device script had already run to completion by then -- this
+      is `mpremote`'s host-side transport losing its handle across the
+      re-enumeration, not a target-side failure). Passing `mpremote
+      connect <port> resume <cmd>` (skips the auto soft-reset) avoids the
+      double reset and made the run clean end-to-end. Also note:
+      `CDCInterface` is an `io.IOBase`, not a `machine.UART` lookalike --
+      it has no `.any()`; poll for pending data with `cdc.read(-1)`
+      (returns `None` if nothing is ready when `timeout=0`, per
+      `usb-device-cdc`'s own `_readinto`), not an `any()`/`read()` pair.
 - [ ] Non-blocking (or second-core) operation of the CDC1 dispatch loop, so
       CDC1 traffic never blocks the CDC0 REPL.
 - [ ] UART and BLE NUS transports: explicitly deferred to a later epic

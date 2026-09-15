@@ -11,11 +11,11 @@ Run with:
 or from repo root:
     /path/to/micropython test_bcp_frame_native.py
 
-Mirrors tests/test_bcp_frame.py's known-answer vectors and failure
-scenarios against the real on-device C code instead of the pure-Python
-design-iteration reference (see BACKLOG.md Epic 3: "implementation
-language is C, not Python" / "bcp_frame.py is not kept on as a permanent
-oracle"). `parse_frame()` takes one already delimiter-split COBS segment
+Mirrors the known-answer vectors and failure scenarios from the original
+pure-Python design-iteration reference (`bcp_frame.py`/`test_bcp_frame.py`,
+since removed -- see BACKLOG.md Epic 3: "implementation language is C, not
+Python" / "bcp_frame.py is not kept on as a permanent oracle") against the
+real on-device C code. `parse_frame()` takes one already delimiter-split COBS segment
 rather than accumulating a byte stream itself -- that accumulation is
 expected to live in the C dispatch loop (not yet written), so this test
 does the 0x00-splitting itself, same as that loop eventually will.

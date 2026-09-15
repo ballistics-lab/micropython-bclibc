@@ -13,10 +13,13 @@
 > loop) and, once that exists, wiring Epic 6's cooperative-abort/
 > `INTERRUPTED` handling into it for real -- see `BACKLOG.md`'s "Status at
 > a glance" section for the up-to-date picture. The framing layer (COBS +
-> CRC16) has its own from-scratch pure-Python reference/test-vector
-> implementation in `src/bcp_frame.py` / `tests/test_bcp_frame.py`,
-> separate from the native `src/bcp/bcp_frame_mp.h` the dispatcher
-> actually runs on-device.
+> CRC16) is implemented in C (`src/bcp/bcp_frame_mp.h`) and exercised by
+> `tests/test_bcp_frame_native.py`'s known-answer vectors and framing
+> failure scenarios; the earlier pure-Python design-iteration
+> implementation this was ported from (`src/bcp_frame.py` /
+> `tests/test_bcp_frame.py`) has been removed now that the C port is the
+> only implementation and the wire format itself is settled -- see
+> `BACKLOG.md` Epic 3.
 
 All multi-byte integers and floats are **little-endian**. All floats are
 **IEEE-754 binary32** (`f32`) on the wire regardless of the on-device build's
@@ -63,9 +66,9 @@ for byte in incoming_bytes:
             buf = bytearray()           # drop, resync on the next 0x00
 ```
 
-Reference implementation: `bcp_frame.FrameDecoder.feed()`.
+Reference implementation: `src/bcp/bcp_frame_mp.h`'s `parse_frame()`.
 
-Encoding a packet for the wire: `bcp_frame.build_frame(type_, seq, status, payload)`.
+Encoding a packet for the wire: `src/bcp/bcp_frame_mp.h`'s `build_frame(type_, seq, status, payload)`.
 
 ## 2. Packet header (4 bytes)
 

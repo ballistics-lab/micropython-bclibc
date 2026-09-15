@@ -23,3 +23,5 @@ import os
 
 if os.environ.get("BCLIBC_BCP") == "1":
     freeze("../src", "bclibc_bcp.py")
+    require("usb-device")
+    require("usb-device-cdc")
