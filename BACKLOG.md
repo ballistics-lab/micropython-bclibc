@@ -1,7 +1,7 @@
-# Ballistic Coprocessor — Implementation Backlog
+# Ballistic Co-Processor (BCP) — Implementation Backlog
 
 Working backlog for turning `micropython-bclibc` into a standalone "ballistic
-coprocessor" firmware application: a stateless-except-cached-profile module
+co-processor" (BCP) firmware application: a stateless-except-cached-profile module
 that answers `LOAD_PROFILE` / `INTEGRATE` / `INTEGRATE_AT` / `FIND_ZERO_ANGLE`
 / etc. requests over a framed command protocol, instead of being used purely
 as a library from Python application code.
@@ -27,20 +27,86 @@ as a library from Python application code.
 
 ## Epic 1 — Build: usermod gated behind a flag
 
-- [x] **Resolved — flag name: `BCLIBC_RT`** (mirrors the existing
-      `BCLIBC_BUILD_NATMOD` switch in `src/tiny_bclibc_mp.c`).
-- [ ] Default: **off** — a plain usermod build for non-coprocessor firmware
-      should not carry the extra ROM/RAM footprint.
+- [x] **Resolved — name: BCP (Ballistic Co-Processor), flag
+      `BCLIBC_BCP`** (mirrors the existing `BCLIBC_BUILD_NATMOD` switch in
+      `src/tiny_bclibc_mp.c`). Renamed from the earlier `BCLIBC_RT`: "RT"
+      was meant as "runtime", but in embedded it reads as real-time (this
+      backlog itself says "real-time-safe" in Epic 3), and "runtime" in
+      MicroPython already means the interpreter (`py/runtime.c`). "Co-
+      processor" is the established term for exactly this shape — a
+      separate MCU serving a host over a framed protocol, as with
+      OpenThread/Zigbee's NCP/RCP. BCE/BPE were rejected because "engine"
+      already means the integrator in py-ballisticcalc
+      (`RK4IntegrationEngine` etc.), BCM because it is Broadcom's chip
+      prefix (Raspberry Pi SoCs).
+- [x] Default: **off** — a plain usermod build for non-BCP firmware carries
+      neither the C marker nor the frozen application.
 - [x] **Resolved:** the application lives in `src/`, alongside
       `tiny_bclibc.py`/`tiny_bclibc_mp.c` — no new top-level directory, no
       separate repo. Its `.py` files are only **frozen** into the firmware
-      image when `BCLIBC_RT` is set.
-- [ ] `BCLIBC_RT` needs plumbing through two independent MicroPython build
-      mechanisms that both need to key off the same flag: a CMake/Make
-      option controlling whether the C usermod sources are compiled in,
-      and a `usermod/manifest.py` conditional (via a `--var` passed to
-      `makemanifest.py`) controlling whether the app's `.py` files get
-      frozen.
+      image when `BCLIBC_BCP=1`. Placeholder `src/bclibc_bcp.py` for now
+      (imports the C marker, nothing else).
+- [x] **Implemented — one environment variable, `BCLIBC_BCP=1`, keys both
+      halves.** `make BCLIBC_BCP=1 ...` or `BCLIBC_BCP=1` in the
+      environment:
+    - **Frozen `.py`:** `usermod/manifest.py` reads
+          `os.environ["BCLIBC_BCP"]` and conditionally
+          `freeze()`s `bclibc_bcp.py`. Not a `--var` as first planned:
+          `makemanifest.py`'s `-v` variables are path substitutions only, a
+          manifest cannot branch on one. GNU make exports command-line
+          variables to recipe environments itself, so `make BCLIBC_BCP=1`
+          reaches `makemanifest.py` with no extra plumbing.
+    - **C:** `usermod/micropython.mk` adds `-DBCLIBC_BCP=1` to
+          `CFLAGS_USERMOD`; `usermod/micropython.cmake` reads
+          `$ENV{BCLIBC_BCP}` and adds it as an INTERFACE definition **and**
+          to `MICROPY_CPP_DEF_EXTRA` — `py/mkrules.cmake`'s QSTR
+          preprocessing does not see usermod INTERFACE definitions, so
+          without the second line any qstr under `#ifdef BCLIBC_BCP` is
+          undeclared (live-caught on RPI_PICO2: `MP_QSTR_RT undeclared`).
+    - **Marker:** `_tiny_bclibc.BCP = True` (usermod table only, under
+          `#ifdef BCLIBC_BCP`); `bclibc_bcp.py` imports it, so a firmware
+          with the `.py` half but not the C half fails at import instead of
+          running half-built.
+    - **Rejected alternative:** a separate `manifest_bcp.py` pulling in the
+          C half via `c_module()`. Works on CMake, but on Make ports
+          `py/manifest.mk` (v1.29.0) merges `c_module()` paths with a plain
+          `USER_C_MODULES := ...`, which GNU make ignores whenever
+          `USER_C_MODULES` is on the command line — as README documents and
+          cibuildmp invokes it — so the C half was silently dropped.
+    - **Switching the flag needs a fresh build directory:** Make does not
+          rebuild objects on a `CFLAGS` change, CMake reads the environment
+          at configure time only. A stale Make object is exactly what the
+          marker import caught during bring-up.
+    - **Verified:** unix (Make) with and without the flag —
+          `_tiny_bclibc.BCP`/`import bclibc_bcp` present only with it,
+          `tests/test_bclibc.py` 18/18 PASS both ways; rp2 RPI_PICO2 (CMake)
+          with the flag both from the environment and from the make command
+          line — `BCLIBC_BCP=1` in `flags.make`, `MP_QSTR_BCP` generated,
+          `bclibc_bcp` in `frozen_content.c`.
+- [x] **cibuildmp (v0.7.3):** no generic environment passthrough into its
+      Docker containers, but `extra-make-args` rides the make command line
+      for every usermod port (rp2/esp32 included), so
+      `CIBMP_EXTRA_MAKE_ARGS="BCLIBC_BCP=1"` works with no cibuildmp change.
+      Verified in Docker: `v1.29.0-qemu-MPS2_AN385` —
+      `bclibc_module_globals_table` 360 B (352 without the `BCP` entry) and
+      `bclibc_bcp` frozen; `v1.29.0-rp2-RPI_PICO2` — `bclibc_bcp` frozen
+      (no symbols in a `.uf2` to check the C half; same make-command-line
+      path as the local rp2 check above).
+- [ ] CI job for BCP builds (`usermod.yml`). Two things to handle: the
+      environment form `CIBMP_EXTRA_MAKE_ARGS` **replaces** the config's
+      `extra-make-args` including `[override]`s (armhf would lose
+      `LDFLAGS_EXTRA=-static`), and a BCP build has the same identifier
+      and `mpyhouse/` file name as the plain one — separate job, distinct
+      artifact name. Whether a multi-token `CIBMP_EXTRA_MAKE_ARGS` is split
+      correctly is not verified yet.
+- [ ] Entry point: a frozen `main.py` does auto-run on rp2/esp32
+      (`pyexec_file_if_exists()` checks frozen modules first), but it then
+      **shadows** any filesystem `main.py`, and the REPL only starts after
+      `main.py` returns — so it must start the dispatcher in the background
+      and return (Epic 4's "CDC1 never blocks the CDC0 REPL"). Plan: keep
+      the app importable (`bclibc_bcp`) and add a thin frozen
+      `main.py` (`import bclibc_bcp; bclibc_bcp.start()`) under the same
+      flag once Epic 4 has something to start.
 
 ## Epic 2 — Multi-BC native binding
 
@@ -156,7 +222,7 @@ as a library from Python application code.
       with `start_byte`.
 - [x] **Resolved:** CRC16, scope = `cmd+len+data`. Exact polynomial not
       fixed yet — pick a well-known table-driven variant (e.g. CRC16-CCITT
-      or CRC16/MODBUS) for O(1)-per-byte, RT-safe cost; the specific
+      or CRC16/MODBUS) for O(1)-per-byte, real-time-safe cost; the specific
       choice matters less than "fast and table-driven."
 - [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
       set (both already natively bound).
@@ -224,7 +290,7 @@ as a library from Python application code.
 
 ## Epic 6 — Abort / interrupt
 
-- [x] **Resolved — no command queue.** The coprocessor never queues work:
+- [x] **Resolved — no command queue.** The co-processor never queues work:
       receiving any new valid (CRC-passing) command frame implicitly
       **preempts** whatever computation is currently running (matches
       "don't wait for the previous calculation when input just changed").

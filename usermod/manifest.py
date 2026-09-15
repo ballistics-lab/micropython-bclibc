@@ -12,3 +12,14 @@ except Exception:
     pass
 
 freeze("../src", "tiny_bclibc.py")
+
+# BCLIBC_BCP=1 (environment): also freeze the ballistic co-processor (BCP)
+# application. The same variable switches the C half on in
+# micropython.mk/.cmake -- see their own BCLIBC_BCP blocks. Read from the
+# environment because makemanifest.py's -v variables are path substitutions
+# only; a make command-line BCLIBC_BCP=1 is exported to recipes (and so to
+# makemanifest.py) by GNU make itself.
+import os
+
+if os.environ.get("BCLIBC_BCP") == "1":
+    freeze("../src", "bclibc_bcp.py")

@@ -28,6 +28,7 @@ and all flag / index constants.
 ├── src/                        # Shared C + Python source
 │   ├── tiny_bclibc_mp.c        # MicroPython C extension (natmod + usermod)
 │   ├── tiny_bclibc.py          # Python API wrapper (frozen into firmware)
+│   ├── bclibc_bcp.py           # Ballistic Co-Processor app (frozen only with BCLIBC_BCP=1)
 │   ├── drag_tables.h           # Built-in G1/G7 drag curve tables
 │   └── math_shim.c             # math shim for x64/x86 natmod builds
 │
@@ -40,7 +41,8 @@ and all flag / index constants.
 ├── usermod/                    # Usermod (baked-into-firmware) build
 │   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES (Make ports)
 │   ├── micropython.cmake       # Picked up by CMake via USER_C_MODULES (RP2040 / pico-sdk)
-│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release + CI)
+│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release + CI),
+│                               # plus bclibc_bcp.py when BCLIBC_BCP=1
 │   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │                               # No usermod/Makefile — build directly against the
 │                               # port's own Makefile/CMakeLists, same as a7p's usermod.
@@ -314,6 +316,46 @@ ports like RP2040). `usermod/micropython.mk` / `usermod/micropython.cmake` are t
 Always single precision here too — `usermod/micropython.mk` and `usermod/micropython.cmake`
 both build `tiny_bclibc` single-precision unconditionally, with no knob to override it
 (see `natmod/Makefile`'s own "Precision" header for why).
+
+### BCP build (`BCLIBC_BCP=1`, work in progress)
+
+`BCLIBC_BCP=1` builds the **Ballistic Co-Processor** firmware: the same usermod plus a
+frozen application (`src/bclibc_bcp.py`) that will serve `tiny_bclibc` calls to a host
+over a framed command protocol — see [BACKLOG.md](BACKLOG.md). Today it is a placeholder
+that only proves the build plumbing. Off by default; a plain build is unchanged.
+
+One variable switches both halves: `usermod/manifest.py` freezes `bclibc_bcp.py`, and
+`usermod/micropython.mk` / `usermod/micropython.cmake` compile the native module with
+`BCLIBC_BCP` defined (which adds the `_tiny_bclibc.BCP` marker). Pass it on the make
+command line or in the environment — GNU make exports command-line variables to the
+recipes that run `makemanifest.py` and, on rp2/esp32, `cmake`:
+
+```bash
+# Make port
+make -C ports/unix BCLIBC_BCP=1 \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+
+# CMake port (rp2 Makefile wraps cmake)
+make -C ports/rp2 BOARD=RPI_PICO2 BCLIBC_BCP=1 \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+
+# cibuildmp (no generic env passthrough into its containers; extra-make-args is it).
+# Replaces the config's extra-make-args, [override]s included.
+CIBMP_EXTRA_MAKE_ARGS="BCLIBC_BCP=1" cibuildmp --build "v1.29.0-rp2-RPI_PICO2"
+```
+
+```python
+>>> import bclibc_bcp
+>>> bclibc_bcp.BCP
+True
+```
+
+Use a **fresh build directory** when switching the flag: Make does not rebuild objects on
+a `CFLAGS` change, and CMake reads the environment at configure time only. A build that
+froze `bclibc_bcp.py` without the C half fails loudly at `import bclibc_bcp`
+(`can't import name BCP`) rather than running half-built.
 
 ### AArch64 / ARMhf / MIPS LE (unix binary)
 

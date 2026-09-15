@@ -638,6 +638,11 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     /* size constants */
     {MP_ROM_QSTR(MP_QSTR_SHOT_HOLDER_SIZE), MP_ROM_INT(sizeof(ShotHolder))},
     {MP_ROM_QSTR(MP_QSTR_TRAJ_DATA_SIZE), MP_ROM_INT(sizeof(TINY_BCLIBC_TrajectoryData))},
+#ifdef BCLIBC_BCP
+    /* coprocessor build marker -- BCLIBC_BCP=1 build, see usermod/manifest.py;
+     * absent from plain usermod and natmod builds */
+    {MP_ROM_QSTR(MP_QSTR_BCP), MP_ROM_TRUE},
+#endif
     /* functions */
     {MP_ROM_QSTR(MP_QSTR_version), MP_ROM_PTR(&mp_bclibc_version_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate), MP_ROM_PTR(&mp_bclibc_integrate_obj)},
