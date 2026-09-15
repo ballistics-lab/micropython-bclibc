@@ -1476,3 +1476,47 @@ assuming it's a real code problem.
       nothing else was wired up yet. (No longer true by the end of this
       backlog -- see the "Status at a glance" section up top for the
       current, complete picture.)
+
+## Epic 9 — Final validation: py-ballisticcalc's own test suite, over CDC, on real hardware
+
+- [x] **Already covered — in-process path, nothing to add.** bclibc's math
+      is already exercised against py-ballisticcalc's own test suite
+      in-process, twice over: (1) `py_ballisticcalc.exts`'s Cython/C++
+      extension (`bind.pyx`, built on the vendored `external/bclibc`
+      submodule) is the package's normal accelerated engine, already run
+      by the existing pytest suite as a matter of course, not something
+      needing new wiring; (2) `examples/tiny_bclibc/` (added upstream in
+      `cea7a0e`, "Tiny bclibc engine example (#348)": `__init__.py`/
+      `_common.py`/`run_example.py`/`CMakeLists.txt`) additionally drives
+      `tiny_bclibc` via ctypes against two separately-built
+      single-/double-precision `libtiny_bclibc.so`s, as
+      `TinyBclibcSingleIntegrationEngine`/`TinyBclibcDoubleIntegrationEngine`
+      (`BaseIntegrationEngine` subclasses overriding `_integrate`), run
+      against the full suite via `--engine=tiny_bclibc:...`. Neither path
+      touches COBS/CRC/framing/dispatch — no wire protocol or real device
+      in the loop.
+- [ ] **The real acceptance bar for the BCP effort itself is a third
+      engine, `bcp.py`, added as a sibling module in that same
+      `examples/tiny_bclibc/` directory** (next to `_common.py`) — same
+      `BaseIntegrationEngine`-subclass/`_integrate`-override shape the two
+      ctypes engines already use, but instead of calling into a
+      locally-built `.so`, it talks to a real flashed board over USB CDC1
+      using the actual wire protocol (`PROTOCOL.md`): `LOAD_PROFILE`/
+      `LOAD_CONDITIONS`/`LOAD_CONFIG` to push the same fixture a
+      py-ballisticcalc test case builds, `INTEGRATE`/`INTEGRATE_AT` to
+      pull results back and translate them into whatever shape
+      py-ballisticcalc's test fixtures compare against. This is the one
+      that actually proves Epic 3's frame code, Epic 4's transport loop,
+      and Epic 6/8's dispatch handlers all work together on real silicon
+      — not reasoning from the unix build plus a hardware smoke test,
+      which is as far as verification has gone so far. Should run against
+      the **same** py-ballisticcalc test suite the two ctypes engines
+      already use (`--engine=tiny_bclibc:BcpIntegrationEngine` or
+      similar), not a bespoke parallel one written just for this project
+      — pass/fail is judged by the library's own existing correctness bar
+      (trajectories, zero-solve, drag tables, etc.), the same bar every
+      other engine in py-ballisticcalc is held to. Needs Epic 4 (a real,
+      running CDC1 dispatch loop) to exist first — this is the acceptance
+      gate *after* that lands, not a prerequisite for it. Needs
+      Epic 4 (a real, running CDC1 dispatch loop) to exist first — this is
+      the acceptance gate *after* that lands, not a prerequisite for it.
