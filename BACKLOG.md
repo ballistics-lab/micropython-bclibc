@@ -106,10 +106,16 @@ being used purely as a library from Python application code.
       (`pyexec_file_if_exists()` checks frozen modules first), but it then
       **shadows** any filesystem `main.py`, and the REPL only starts after
       `main.py` returns — so it must start the dispatcher in the background
-      and return (Epic 4's "CDC1 never blocks the CDC0 REPL"). Plan: keep
-      the app importable (`bclibc_bcp`) and add a thin frozen
-      `main.py` (`import bclibc_bcp; bclibc_bcp.start()`) under the same
-      flag once Epic 4 has something to start.
+      and return (Epic 4's "CDC1 never blocks the CDC0 REPL"). **Shape,
+      per Epic 3/6/7's C-dispatcher resolution:** `bclibc_bcp.py` stays
+      thin plumbing, not the dispatcher itself — it constructs/configures
+      the transport object (CDC1 or UART), optionally picks which core to
+      run on (Epic 7), and hands the transport object to one C entry point
+      that owns the whole read/decode/dispatch/write loop from there.
+      Something like `import bclibc_bcp; bclibc_bcp.start(cdc1)` where
+      `start()` is a thin Python function whose entire body is
+      constructing the transport and calling into the native module —
+      no per-frame Python code in the running loop at all.
 
 ## Epic 2 — Multi-BC native binding
 
@@ -251,13 +257,14 @@ being used purely as a library from Python application code.
       little-endian. `type` = command, `cmd | 0x80` in a response; `seq`
       set by the host and echoed back (response matching, Epic 6
       generation for `INTERRUPTED`, Epic 5 option (c) `RESEND`); `status`
-      0 in requests. **`LOAD_PROFILE`/`LOAD_CONDITIONS` now have their own
-      wire layouts, distinct from the internal `_SHOT_DESC` buffer** (see
-      the split above and Epic 8) — the dispatcher unpacks each into the
-      persistent internal `Shot` buffer's existing (non-contiguous)
-      offsets rather than writing it in place. Max packet
-      ≈ 1.1 KB (`LOAD_PROFILE`'s drag table, up to 128 pts: 64 B fixed +
-      128·8 = 1088 B + header + CRC) → fixed 1536 B RX buffer still covers
+      0 in requests. **`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` now
+      have their own wire layouts, distinct from the internal
+      `_SHOT_DESC` buffer** (see the split above and Epic 8) — the
+      dispatcher unpacks each into the persistent internal `Shot`
+      buffer's existing (non-contiguous) offsets rather than writing it
+      in place. Max packet
+      ≈ 1.0 KB (`LOAD_PROFILE`'s drag table, up to 128 pts: 36 B fixed +
+      128·8 = 1060 B + header + CRC) → fixed 1536 B RX buffer still covers
       it with margin.
 - [x] **Resolved — array element counts:** every variable-length part is
       preceded by its count at a fixed position in the payload; the
@@ -273,6 +280,8 @@ being used purely as a library from Python application code.
     - **`LOAD_CONDITIONS`** (own wire layout — see Epic 8): `wind_count:u8`
           (≤ 16) precedes the wind array. Expected size = fixed
           atmosphere/geometry fields + `wind_count·16`.
+    - **`LOAD_CONFIG`** (own wire layout — see Epic 8): no variable-length
+          part, no count field — expected size is just its fixed 28 B.
     - **Stream `MORE` frames:** `row_idx:u16, count:u8, rsvd:u8,
           rows[count]`, size exactly `4 + count·traj_row_size` (explicit
           `count` as the cross-check, even though it is derivable).
@@ -304,7 +313,7 @@ being used purely as a library from Python application code.
       minimizing is the table's **RAM** footprint (not ROM/flash — the
       table is computed once at import, not a frozen constant, so it
       lives on the heap either way; see the follow-up below). Worst-case
-      framing cost (`LOAD_PROFILE`, ~1.4 KB, COBS + CRC together) ≈ 40 ms
+      framing cost (`LOAD_PROFILE`, ~1.0 KB, COBS + CRC together) ≈ 30 ms
       — fine since that frame is sent once per rifle/ammo setup, not per
       shot; small frames (`Request`, 16 B) cost well under 1 ms,
       negligible next to the actual integration compute time.
@@ -325,6 +334,116 @@ being used purely as a library from Python application code.
       session already hit exactly that mistake once, with the COBS test
       vectors) for savings that don't matter yet at this scale. Revisit
       only if on-device RAM actually gets tight.
+- [x] **Resolved — implementation language is C, not Python.** MicroPython's
+      job is transport plumbing only (open/configure UART or CDC1, feed
+      bytes to/from the parser) — **not** COBS, CRC, frame validation, or
+      dispatch. All of that belongs in C next to `tiny_bclibc_mp.c`, same
+      as the engine itself. `src/bcp_frame.py`/`tests/test_bcp_frame.py`
+      (this epic's earlier work) stay on as the **reference/oracle**
+      implementation for protocol-conformance tests, not the on-device
+      path. Reasons, in order of weight:
+    - **C already builds on all three targets today** (Epic 2's real
+          cross-builds), closing the one open portability question the
+          Python-side exploration below kept running into: whether
+          `@micropython.viper` is even available/mature on ESP32-S3's
+          Xtensa port (only ever tested here on rp2/ARM) — moot in C.
+    - **The numbers justify it, not just the principle.** `benches.md`
+          (RP2350, `armv7emsp` hardware-FPU build): `integrate()` 1 km/10 m
+          steps = 101 rows in 15.99 ms ⇒ ~158 µs/row. Packed 4-to-a-frame
+          (`INTEGRATE_FAST`'s `MORE` frame, 68 B), the solver produces
+          those 4 rows in ~633 µs. Plain-Python `build_frame` (COBS+CRC)
+          on that same 68 B costs **~2253 µs** — ~3.6× *slower* than the
+          solver that's supposedly the bottleneck. On the production tier
+          this backlog is actually targeting, naive Python framing is the
+          bottleneck, not the engine.
+    - Below is the full exploration that led here (viper, DMA-hardware
+          CRC, RP2040 vs. RP2350 economics) — kept for the numbers, not as
+          a proposal to actually ship any of these Python-level tricks.
+- [x] **Explored, not adopted — `@micropython.native`/`@micropython.viper`
+      for `crc16`, on real RP2040-Zero hardware, `mpremote run`:**
+
+      | impl | µs/byte (1400 B) |
+      |---|---|
+      | plain (current) | ~13.1 |
+      | `@micropython.native` | ~9.0 (1.46×) |
+      | `@micropython.viper` (typed `ptr8`/`ptr16`) | **~0.50 (~26×)** |
+
+      All three verified byte-identical (`crc16(b"123456789") == 0x29B1`).
+      Not adopted: `viper`'s typed pointer signature is MicroPython-only
+      (no CPython fallback without a second code path), doesn't help COBS
+      unless COBS gets the same treatment, and — per the resolution above
+      — C makes the whole question moot rather than needing a
+      viper/plain split.
+- [x] **Explored, not adopted — RP2040/RP2350 DMA "sniff" hardware CRC.**
+      RP2040 (and RP2350, same register layout confirmed in
+      `pico-sdk`'s `rp2350/hardware_regs/dma.h`) has a DMA-channel sniffer
+      that computes a checksum on the fly during a memory-to-memory
+      transfer, config'd via `DMA_SNIFF_CTRL`/`DMA_SNIFF_DATA`
+      (`dma_sniffer_enable()` etc. in `hardware/dma.h`). Mode `0x2` =
+      "CRC-16-CCITT" (non-bit-reversed), mode `0x3` = same, bit-reversed;
+      **no configurable arbitrary polynomial and no CRC-16/IBM (`0x8005`)
+      mode** — only `0x1021`, in either bit order. **Verified for real**
+      on RP2040-Zero via `mpremote` + `rp2.DMA()` + raw register pokes:
+      seeded `DMA_SNIFF_DATA=0xFFFF`, mode `0x2`, output byte-identical to
+      software `CCITT-FALSE` across every tested size (1–1400 B) including
+      the `0x29B1` known-answer vector — **confirms the CCITT-FALSE choice
+      needed no change to get hardware acceleration on RP2040/RP2350**
+      (mode `0x3` would have matched a reflected/KERMIT choice just as
+      well — this was a lucky-neutral pick, not a reason either variant
+      was better). **Why not adopted:** the Python-level `rp2.DMA` API has
+      a **large fixed per-call overhead (~100 µs)** — channel config +
+      `dma.config()` + busy-poll `dma.active()` — that dominates at the
+      protocol's typical small frame sizes and makes it *slower* than
+      `viper` below ~300 B:
+
+      | size | crc `viper` | crc DMA (incl. Python-level setup) |
+      |---|---|---|
+      | 16 B (`Request`) | 35.7 µs | 106.0 µs |
+      | 68 B (`MORE` frame, 4 rows) | 60.1 µs | 102.3 µs |
+      | 296 B (`LOAD_CONDITIONS` max) | 167.7 µs | 102.1 µs |
+      | 1060 B (`LOAD_PROFILE` max) | 527.5 µs | **109.8 µs** |
+
+      Only wins for the rare large `LOAD_PROFILE` frame, loses for every
+      frequent small one — the opposite of "DMA is just strictly faster
+      hardware," which is what the earlier exploration assumed before
+      actually measuring it. A lower-level implementation (raw
+      `READ_ADDR`/`WRITE_ADDR`/`CTRL_TRIG` register pokes + IRQ completion
+      instead of the busy-poll Python API) would likely cut that fixed
+      cost, but wasn't tried — moot given the C resolution above; a C
+      dispatcher can reach these same registers directly with none of the
+      Python-call overhead, if this specific trick is ever revisited.
+      RP2350's ARMv8-M core (Cortex-M33) additionally has native
+      `CRC32B`/`CRC32H`/`CRC32W` instructions (confirmed present in the
+      ISA; **no ready-made pico-sdk wrapper found**, would need hand-written
+      intrinsics/inline-asm) — but those compute **CRC-32**, not CRC-16,
+      so using them would mean widening the wire CRC field to 4 bytes;
+      not pursued, same "C makes this moot for now" reasoning.
+- [x] **Resolved — RP2040 is not this project's real-time target;
+      RP2350 (`armv7emsp`, hardware FPU) and ESP32-S3 are.** Per
+      `benchmarks/benches.md`: RP2040 `integrate()` 1 km = 353.75 ms —
+      **22× slower** than RP2350 hw-FPU's 15.99 ms (ESP32-S3 hw-FPU:
+      14.85 ms, essentially tied with RP2350). Notably, RP2350 *without*
+      the hardware-FPU build (`armv7m` soft-float) is still 140.88 ms —
+      **8.8× slower than the same silicon's own `armv7emsp` build** —
+      the natmod's float ABI (Epic 2's `armv7emsp`-vs-softfp fix) matters
+      far more than anything CRC/COBS-related. No framing optimization
+      changes this: RP2040's bottleneck is the solver itself, 22× too
+      slow regardless of wire format. This directly informs Epic 6/7
+      below.
+- [ ] **Open, deliberately deferred — COBS vs. plain `start_byte + len +
+      CRC`.** Raised directly: COBS is a full second O(n) pass on top of
+      CRC (roughly doubling total framing cost — measured ~17.7 µs/byte
+      COBS vs. ~13.1 µs/byte CRC, plain Python, RP2040), where a bare
+      length field would need none. COBS's actual justification was never
+      CDC1 (USB bulk transfers already have their own link-layer CRC +
+      retry, per the byte-loss note above) — it's the **already-planned**
+      UART/BLE transport epic, where raw corruption is real and
+      `start_byte` re-sync is false-sync-prone (the original reason
+      `len` and `start_byte` were dropped, see above). Reversing this
+      would mean redesigning framing again once UART/BLE actually lands,
+      vs. paying a now-quantified, C-eliminable cost today. **Left open
+      on purpose** rather than re-resolved — revisit if CDC1 stays the
+      only transport for a long time and the UART/BLE epic keeps slipping.
 - [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
       so there is nothing to reply to); host relies on a timeout. Optional
       drop counter reported via `IDENT`.
@@ -347,8 +466,10 @@ being used purely as a library from Python application code.
       wind/atmosphere/shot-geometry (`LOAD_CONDITIONS`) can be updated
       every few shots as the field environment changes. Bundling them
       meant resending ~1.4 KB just to push a new wind reading. Split max
-      sizes: `LOAD_PROFILE` ≈ 1.1 KB (dominated by the drag table, up to
-      128 pts), `LOAD_CONDITIONS` ≈ 300 B (dominated by winds, up to 16).
+      sizes at the time: `LOAD_PROFILE` ≈ 1.1 KB (dominated by the drag
+      table, up to 128 pts), `LOAD_CONDITIONS` ≈ 300 B (dominated by
+      winds, up to 16) — `LOAD_PROFILE` shrank further to ≈ 1.0 KB once
+      solver tuning also split out into its own `LOAD_CONFIG` (below).
       `INTEGRATE`'s own request frame was already thin (`_REQ_DESC`, 16 B:
       `range_limit_ft/range_step_ft/time_step/filter_flags`) and needs no
       change — it already carries only per-call parameters, not shot
@@ -372,13 +493,25 @@ being used purely as a library from Python application code.
       the second CDC interface at runtime from `boot.py` using
       MicroPython's dynamic USB device API (`usb.device`). CDC0 stays
       REPL/debug/firmware update, unchanged.
+- [x] **Resolved — MicroPython's role is transport construction only, not
+      I/O.** Per Epic 3's "implementation language is C" resolution:
+      Python builds/configures the CDC1 (or later, UART) stream object and
+      passes it once into a C entry point (`mp_stream_read`/`mp_stream_write`
+      from `py/stream.h`, the standard way to drive a Python stream object
+      from C) — the read/decode/dispatch/write loop then runs entirely in
+      C, with no per-frame trip back into the Python interpreter. "Never
+      blocks the CDC0 REPL" (below) is therefore about **which core** that
+      C loop runs on (Epic 7's now-optional core-placement choice), not
+      about keeping the loop itself in non-blocking Python.
 - [ ] Verify `usb.device` CDC-composite support/parity across the actual
       MicroPython port versions targeted for RP2040, RP2350, and ESP32-S3
       — confirm per-port before relying on it uniformly across all three.
-- [ ] Non-blocking read of CDC1 into the frame dispatcher, so CDC1 traffic
-      never blocks the CDC0 REPL.
+- [ ] Non-blocking (or second-core) operation of the CDC1 dispatch loop, so
+      CDC1 traffic never blocks the CDC0 REPL.
 - [ ] UART and BLE NUS transports: explicitly deferred to a later epic
-      (same frame parser, different byte source).
+      (same frame parser, different byte source — and per the above, that
+      parser is C, so "same" now literally means the same compiled code,
+      not just the same design).
 
 ## Epic 5 — Streaming (Y-modem-like)
 
@@ -453,107 +586,119 @@ being used purely as a library from Python application code.
       "don't wait for the previous calculation when input just changed").
       Explicit `ABORT` is just the case where nothing replaces the
       interrupted work.
-- [x] **Resolved — mechanism chosen conditionally on core availability,**
-      rather than one mechanism everywhere:
-  - **Dual-core (the primary path — all three current targets are
-        multi-core: RP2040, RP2350, ESP32-S3):** interrupt = **kill and
-        relaunch the worker core/task**, not `setjmp`/`longjmp`. The
-        entire execution context is discarded rather than partially
-        unwound, so there's no unwind-safety question to verify per
-        platform — this **demotes** the earlier "verify `longjmp`-from-ISR
-        on ESP32-S3" risk, since it's no longer on the primary path for
-        any of the three targets in scope.
-    - RP2040/RP2350: pico-sdk `multicore_reset_core1()` +
-          `multicore_launch_core1()`. **Open:** go through MicroPython's
-          `_thread` module (portable across ports, but doesn't expose a
-          documented kill/reset call) vs. drop to the raw SDK calls from a
-          small helper in `tiny_bclibc_mp.c` for reliable kill semantics.
-    - ESP32-S3: FreeRTOS `vTaskDelete()` + `xTaskCreatePinnedToCore()`.
-    - ⚠️ **New risk, replacing the longjmp-safety question:** killing the
-          worker core/task while it holds a shared lock (MicroPython's
-          GIL-equivalent / GC lock on a shared-heap dual-core port) can
-          deadlock the other core — FreeRTOS's `vTaskDelete()` does **not**
-          release mutexes held by the deleted task, and the same class of
-          problem likely applies to RP2040's shared-heap threading model.
-          Mitigation: the "killable window" must be exactly the pure-C
-          `tiny_bclibc` call (already no-heap/no-lock by design — see
-          `ShotHolder`, caller-owned buffers, confirmed earlier) — needs
-          verifying per port whether calling a native/usermod C function
-          from the worker core already releases the shared interpreter
-          lock for the call's duration, or whether that needs doing
-          explicitly before the call.
-    - The dispatcher (core0) is responsible for emitting the
-          `INTERRUPTED` response for whatever generation it just killed —
-          the killed worker never gets to respond itself, so core0 must
-          track which command generation was in flight and reply on its
-          behalf.
-  - **Single-core (not needed for any of the three current targets, kept
-        as documented fallback for a hypothetical future single-core
-        target):** `setjmp`/`longjmp` contained in
-        `micropython-bclibc`'s binding layer — wrap each blocking call
-        (`find_zero_angle`, `find_apex`, `find_max_range`, `integrate`,
-        `integrate_at`) with `setjmp()`, trigger `longjmp()` from the
-        CDC1 RX ISR on a preempting frame; single global `jmp_buf` given
-        the no-queue rule. Contract: once `setjmp()` returns nonzero, the
-        wrapper treats any output buffer as garbage and returns
-        `INTERRUPTED` without touching it. (Full detail preserved from
-        the earlier draft of this epic — revisit only if a single-core
-        target is actually added to scope.)
-  - **Unix port** (relevant — it's the "virtual module" deliverable named
-        in the original project idea, not just a test convenience): no
-        real cores, `_thread` there wraps POSIX pthreads.
-        `pthread_cancel()` is **not** a good fit as-is — its default
-        deferred cancellation type only fires at cancellation points
-        (mostly blocking syscalls), and `tiny_bclibc`'s RK4 loop is pure
-        computation with none, so deferred cancel would simply never
-        interrupt it without inserted `pthread_testcancel()` checkpoints
-        — the same cooperative-checkpoint problem this epic is avoiding
-        for the embedded targets, resurfacing here.
-        `PTHREAD_CANCEL_ASYNCHRONOUS` avoids that but carries the same
-        risk class as killing an embedded worker mid-lock, plus it can
-        land mid-libc-call. **Recommended default:** `pthread_kill(tid,
-        SIGUSR1)` from the dispatcher thread, worker's signal handler
-        calls `siglongjmp` (the async-signal-safe pair — plain
-        `setjmp`/`longjmp` is not safe to use from a signal handler) —
-        functionally the same shape as the single-core fallback above,
-        using the correct POSIX primitives instead of an MCU ISR.
-        **Alternative worth checking:** if the unix port's `os` module
-        exposes `fork()` (not confirmed), a forked worker process +
-        `SIGKILL` sidesteps the shared-lock risk entirely (separate
-        address space, no shared MicroPython heap/GIL to corrupt) — at
-        the cost of needing IPC (socket/pipe) instead of shared buffers
-        for the `Shot`/result data. Bigger change; only worth it if fork
-        turns out to be available and the isolation is wanted for other
-        reasons too.
+- [x] **Superseded — no async kill/relaunch needed at all, on any target.**
+      Replaces the earlier "dual-core kill/relaunch is the primary
+      mechanism" resolution below (kept, struck through in spirit, for the
+      reasoning trail). Once the whole read → decode → dispatch → write
+      loop lives in C (see Epic 3's "implementation language is C"
+      resolution) with MicroPython only handing it a transport object and
+      picking which core it runs on (Epic 7), every blocking call this
+      protocol makes turns out to already be either cooperatively
+      interruptible or provably bounded — an async kill was solving a
+      problem that doesn't actually exist here:
+    - **`INTEGRATE`/`INTEGRATE_FAST` (the only unbounded-length
+          operation):** **asynchronous-feeling interruption is still there
+          for the host** — an `ABORT` (or any new frame, per the no-queue
+          rule) still stops a running trajectory promptly, it's just
+          implemented cooperatively rather than by killing anything.
+          Already has the checkpoint for it — `mp_stream_cb`'s
+          `TINY_BCLIBC_TERM_HANDLER_STOP`, returned between rows. With the
+          dispatch loop in C, "is a new frame waiting" is a cheap
+          non-blocking check on the transport object at that same per-row
+          boundary — no different in kind from the Python-level version,
+          just cheaper and now the *only* preemption primitive this
+          protocol needs. Responsiveness is bounded by one row's compute
+          time, not by the whole trajectory's: `benches.md` gives ~158 µs/
+          row on RP2350 hw-FPU, ~3.5 ms/row even on RP2040 — either way
+          well under what the host would perceive as latency, so nothing
+          is actually given up by dropping the hard kill.
+    - **Every other command is bounded, not open-ended** — `find_zero_angle`
+          /`find_apex`/`find_max_range`/`integrate_at` all terminate on
+          their own via `Config.max_iterations` (default 50) or a fixed
+          step count; there is no pathological input that loops forever.
+          A preempting command just waits for the current bounded call to
+          return, then gets serviced — slower on a slow platform, never
+          stuck. `benches.md` gives the actual worst case per target
+          (RP2350 hw-FPU: `find_zero_angle` ~4 ms, `find_apex` ~1 ms; even
+          RP2040's worst row, `find_zero_angle` ~119 ms, is a documented
+          latency bound, not a hang).
+    - **Consequence:** the killable-window/shared-lock deadlock risk below
+          (FreeRTOS `vTaskDelete()` not releasing mutexes, RP2040's
+          shared-heap threading model) never arises, because nothing ever
+          gets killed mid-call. Demotes the same way the earlier
+          `longjmp`-from-ISR risk was demoted when kill/relaunch first
+          replaced it — one fewer failure mode to verify per platform.
+    - Second core (Epic 7) is therefore **not** required for correctness
+          on any target, phase-1 RP2040 included — it becomes a pure
+          concurrency/responsiveness choice (does the solver block the
+          REPL's core), decided by MicroPython at startup, decoupled from
+          this epic entirely.
+  - **Superseded material below, kept for the reasoning trail (dual-core
+        kill/relaunch, single-core `setjmp`/`longjmp`, unix
+        `pthread_kill`/`siglongjmp`/`fork`+`SIGKILL`):** all three were
+        answers to "how do we forcibly stop a call already in flight,"
+        which turned out to be the wrong question once every call is
+        either cooperative (`INTEGRATE`) or bounded (everything else).
+        None of this machinery needs building. Left in place, not deleted,
+        in case a future command genuinely needs unbounded/unstructured
+        blocking (e.g. an operation with no natural per-iteration
+        checkpoint and no iteration cap) — revisit only if one shows up:
+    <details>
+    <summary>Original dual-core / single-core / unix mechanism drafts</summary>
+
+    - **Dual-core (RP2040/RP2350: pico-sdk `multicore_reset_core1()` +
+          `multicore_launch_core1()`; ESP32-S3: FreeRTOS `vTaskDelete()` +
+          `xTaskCreatePinnedToCore()`):** kill and relaunch the worker
+          core/task, discarding its entire execution context rather than
+          unwinding it. Risk: killing a worker holding a shared lock
+          (MicroPython's GC lock on a shared-heap dual-core port) can
+          deadlock the other core — needs the killable window to be
+          exactly a lock-free pure-C call.
+    - **Single-core:** `setjmp`/`longjmp` in the binding layer, wrapping
+          each blocking call, triggered from the CDC1 RX ISR on a
+          preempting frame; single global `jmp_buf` given the no-queue
+          rule; once `setjmp()` returns nonzero, any output buffer is
+          garbage and the wrapper returns `INTERRUPTED` without touching
+          it.
+    - **Unix port:** `_thread` wraps POSIX pthreads; `pthread_cancel()`'s
+          deferred cancellation never fires inside `tiny_bclibc`'s
+          checkpoint-free RK4 loop; recommended `pthread_kill(tid,
+          SIGUSR1)` + `siglongjmp` in the signal handler (the
+          async-signal-safe pair); a forked worker + `SIGKILL` sidesteps
+          the shared-lock risk entirely if `fork()` turns out to be
+          available, at the cost of IPC instead of shared buffers.
+
+    </details>
 - [ ] `INTERRUPTED` response status for whatever got preempted (distinct
-      from the normal response to the command that preempted it).
-- [ ] `INTEGRATE` (streamed) keeps its independent cooperative hook
-      regardless of which mechanism above is used: `mp_stream_cb` returns
-      `TINY_BCLIBC_TERM_HANDLER_STOP` when the Python callback returns
-      truthy — a cheap early-exit check worth keeping even inside a
-      dual-core worker, before falling back to a hard kill.
+      from the normal response to the command that preempted it) — still
+      needed: it is the response to whatever bounded call was still
+      running when a fresher command arrived, even without a kill.
+- [ ] `INTEGRATE` (streamed) cooperative hook: `mp_stream_cb` (its C-level
+      equivalent) returns `TINY_BCLIBC_TERM_HANDLER_STOP` when a new frame
+      is waiting on the transport — the one preemption mechanism this
+      epic actually needs.
 
 ## Epic 7 — Second core (where supported)
 
-- [x] **Status update:** no longer just a latency optimization — per
-      Epic 6, dual-core kill/relaunch is now the *primary* abort
-      mechanism for all three current targets (RP2040, RP2350, ESP32-S3
-      are all multi-core), so this epic is load-bearing, not optional.
-      Sequence it together with Epic 6, not after it.
-- [ ] Move command execution (the calls into `tiny_bclibc`) to a second
-      core/task. There's existing precedent in-repo to build from:
-      `natmod/examples/tiny_bclibc_natmod_test_2core.py` and
+- [x] **Superseded — not an abort mechanism, just a core-placement
+      choice.** Per Epic 6, no target needs kill/relaunch, so this epic is
+      no longer load-bearing scaffolding for anything. What survives:
+      **MicroPython decides which core the C dispatch-loop-plus-solver
+      runs on** (e.g. `_thread.start_new_thread()` onto core1 on
+      RP2040/RP2350, `xTaskCreatePinnedToCore()` on ESP32-S3), purely so a
+      long `INTEGRATE` stream doesn't block the CDC0 REPL on the other
+      core — a responsiveness nicety, not a correctness requirement.
+      Genuinely optional per-target, and not blocking anything else in
+      this backlog.
+- [ ] If pursued: launch the C dispatcher loop (transport object handed
+      in from Python, per Epic 3/4) on a second core/task. Precedent in
+      repo: `natmod/examples/tiny_bclibc_natmod_test_2core.py` and
       `..._bench_2core.py`.
-- [ ] Inter-core channel: core0 tracks the current command generation and
-      the worker's handle (core1 launch state on RP2040/RP2350, task
-      handle on ESP32-S3) so it can kill + relaunch on a preempting frame
-      (Epic 6), plus (for streaming) a ring buffer of completed rows from
-      the worker back to core0.
-- [ ] Single-core fallback (Epic 6's `setjmp`/`longjmp` model) documented
-      but **not currently needed** — no target in the phase-1 list lacks a
-      second core. Keep the protocol layer from *requiring* dual-core in
-      principle, but don't over-invest in the single-core path until an
-      actual single-core target shows up.
+- [ ] No inter-core kill/generation-tracking channel needed anymore (that
+      was Epic 6's now-superseded requirement) — if a ring buffer or
+      similar is still wanted between the solver core and the transport
+      core for streaming rows, it's a throughput/simplicity choice, not a
+      correctness one.
 
 ## Epic 8 — Commands on top of existing structures (no a7p)
 

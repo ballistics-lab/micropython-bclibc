@@ -81,8 +81,8 @@ ROM: stored as `array('H', ...)` rather than a plain `list` (a list of
 256 ints is really a 256-pointer object array) -- measured **528 B**
 versus **1040 B** for the same 256 values, ~5% slower, noise next to the
 table-size choice itself. See `BACKLOG.md` Epic 3 for the full comparison
-table. Worst-case framing cost (COBS + CRC16 together, the ~1.4 KB
-`LOAD_PROFILE` frame) ≈ 40 ms -- negligible next to how rarely that frame
+table. Worst-case framing cost (COBS + CRC16 together, the ~1.0 KB
+`LOAD_PROFILE` frame) ≈ 30 ms -- negligible next to how rarely that frame
 is sent (once per rifle/ammo setup) and to actual integration compute
 time for everything
 else.
@@ -107,15 +107,16 @@ only cover frames that passed framing but failed at the command layer.
 | id | name | request payload | response payload |
 |---|---|---|---|
 | 1 | `LOAD_PROFILE` | §4.2 | `barrel_elevation_rad:f32` |
-| 2 | `LOAD_CONDITIONS` | §4.3 | `barrel_elevation_rad:f32` |
-| 3 | `INTEGRATE` | `Request` (§4.4) | stream of `MORE` rows (full `TrajectoryData`), then `total:u32, reason:i32` |
-| 4 | `INTEGRATE_FAST` | `Request` (§4.4, same struct) | stream of `MORE` rows (compact `FastTrajData`, §4.5a), then `total:u32, reason:i32` |
-| 5 | `INTEGRATE_AT` | `key:u8, rsvd:u8[3], target:f32` | `BaseTrajData` + `TrajectoryData` (§4.5) |
-| 6 | `FIND_APEX` | *(none)* | one `TrajectoryData` row (§4.5) |
-| 7 | `FIND_MAX_RANGE` | `lo:f32, hi:f32` | `range_ft:f32, angle_rad:f32` |
-| 8 | `RESET` | *(none)* | `OK` |
-| 9 | `IDENT` | *(none)* | §4.6 |
-| 10 | `ABORT` | *(none)* | `OK` (see note below) |
+| 2 | `LOAD_CONFIG` | §4.2a | `barrel_elevation_rad:f32` |
+| 3 | `LOAD_CONDITIONS` | §4.3 | `barrel_elevation_rad:f32` |
+| 4 | `INTEGRATE` | `Request` (§4.4) | stream of `MORE` rows (full `TrajectoryData`), then `total:u32, reason:i32` |
+| 5 | `INTEGRATE_FAST` | `Request` (§4.4, same struct) | stream of `MORE` rows (compact `FastTrajData`, §4.5a), then `total:u32, reason:i32` |
+| 6 | `INTEGRATE_AT` | `key:u8, rsvd:u8[3], target:f32` | `BaseTrajData` + `TrajectoryData` (§4.5) |
+| 7 | `FIND_APEX` | *(none)* | one `TrajectoryData` row (§4.5) |
+| 8 | `FIND_MAX_RANGE` | `lo:f32, hi:f32` | `range_ft:f32, angle_rad:f32` |
+| 9 | `RESET` | *(none)* | `OK` |
+| 10 | `IDENT` | *(none)* | §4.6 |
+| 11 | `ABORT` | *(none)* | `OK` (see note below) |
 
 Numeric ids above are provisional -- not yet cross-checked against an
 actual enum in code; treat the **names** as fixed, the **numbers** as
@@ -142,8 +143,11 @@ merged/truncated frame that happened to pass CRC16 (~1/65536 chance).
 
 ### 4.2 `LOAD_PROFILE`
 
-Rifle + ammo + solver tuning + the zero **distance** (not a pre-solved
-angle -- see below). Cached until the next `LOAD_PROFILE` or `RESET`.
+Rifle + ammo + the zero **distance** (not a pre-solved angle -- see
+below). Solver tuning lives in the separate `LOAD_CONFIG` (§4.2a) --
+split out because it changes even less often than the rifle/ammo data,
+essentially never in normal use (see below). Cached until the next
+`LOAD_PROFILE` or `RESET`.
 
 | offset | field | type |
 |---|---|---|
@@ -155,32 +159,58 @@ angle -- see below). Cached until the next `LOAD_PROFILE` or `RESET`.
 | 20 | `sight_height_ft` | `f32` |
 | 24 | `twist_inch` | `f32` |
 | 28 | `zero_distance_ft` | `f32` |
-| 32 | `step_multiplier` | `f32` |
-| 36 | `zero_finding_accuracy` | `f32` |
-| 40 | `minimum_velocity` | `f32` |
-| 44 | `maximum_drop` | `f32` |
-| 48 | `gravity_constant` | `f32` |
-| 52 | `minimum_altitude` | `f32` |
-| 56 | `max_iterations` | `i32` |
-| 60 | `drag_type` | `u8` (`0`=G1, `1`=G7, `2`=custom) |
-| 61 | `rsvd` | `u8` |
-| 62 | `drag_count` | `u16` (≤ 128; ignored unless `drag_type`=custom) |
-| 64 | `drag_points` | `drag_count × {mach:f32, cd:f32}` |
+| 32 | `drag_type` | `u8` (`0`=G1, `1`=G7, `2`=custom) |
+| 33 | `rsvd` | `u8` |
+| 34 | `drag_count` | `u16` (≤ 128; ignored unless `drag_type`=custom) |
+| 36 | `drag_points` | `drag_count × {mach:f32, cd:f32}` |
 
-Fixed part: 64 B. Max payload (128-point custom table): 64 + 128·8 = 1088 B.
+Fixed part: 36 B. Max payload (128-point custom table): 36 + 128·8 = 1060 B.
 
 **Zero handling (resolved, see `BACKLOG.md` Epic 8):** the client supplies
 a *distance*, not an angle -- the elevation needed to hit that distance
-depends on the current atmosphere, so it can't be supplied once and cached
-verbatim. The dispatcher internally solves for `barrel_elevation_rad`
-against whatever conditions are cached (or the §4.3 defaults, if
-`LOAD_CONDITIONS` hasn't arrived yet) and stores it before replying. A
-zero-solve failure (no bracket, no convergence) is reported as
-`ERR_INTERNAL` on **this** response -- there is no separate
-`FIND_ZERO_ANGLE` response to carry it.
+depends on the current atmosphere and solver tuning, so it can't be
+supplied once and cached verbatim. The dispatcher internally solves for
+`barrel_elevation_rad` against whatever conditions and config are cached
+(or the §4.2a/§4.3 defaults, for whichever hasn't been loaded yet) and
+stores it before replying. A zero-solve failure (no bracket, no
+convergence) is reported as `ERR_INTERNAL` on **this** response -- there
+is no separate `FIND_ZERO_ANGLE` response to carry it.
 
 Response payload: `barrel_elevation_rad:f32` -- the solved zero, echoed
 back as telemetry so the host doesn't need a separate query round-trip.
+
+### 4.2a `LOAD_CONFIG`
+
+Solver tuning -- RK4 step size, zero-finding tolerance, integration
+cutoffs. Split from `LOAD_PROFILE` (not bundled with rifle/ammo data, and
+**not** reset by a new `LOAD_PROFILE`): these values are essentially
+never touched in normal use, most clients will never send this command
+at all and just run on the built-in defaults below. Cached until the
+next `LOAD_CONFIG` or `RESET`; orthogonal to whichever profile happens
+to be loaded.
+
+| offset | field | type | default |
+|---|---|---|---|
+| 0 | `step_multiplier` | `f32` | `0.5` |
+| 4 | `zero_finding_accuracy` | `f32` | `0.001` |
+| 8 | `minimum_velocity` | `f32` | `50.0` |
+| 12 | `maximum_drop` | `f32` | `-15000.0` |
+| 16 | `gravity_constant` | `f32` | `-32.17405` |
+| 20 | `minimum_altitude` | `f32` | `-1500.0` |
+| 24 | `max_iterations` | `i32` | `50` |
+
+Fixed part: 28 B, no variable-length part -- matches `tiny_bclibc.py`'s
+internal `_CFG_DESC`/`_CFG_SIZE` exactly, this is a direct passthrough.
+Defaults are `Config()`'s existing Python-side defaults, same pattern as
+`LOAD_CONDITIONS`'s fallback (§4.3): applied on-device before the first
+`LOAD_CONFIG`, not a new set of numbers invented for the wire protocol.
+
+Response payload: `barrel_elevation_rad:f32`, same as `LOAD_PROFILE`/
+`LOAD_CONDITIONS` -- solver tuning affects the zero-angle solve too (step
+size, convergence tolerance, cutoffs), so `LOAD_CONFIG` re-triggers it
+against the cached profile/conditions exactly like the other two.
+`ERR_NOT_LOADED` if no profile is cached yet (nothing to solve a zero
+for). `ERR_INTERNAL` on a zero-solve failure.
 
 ### 4.3 `LOAD_CONDITIONS`
 
@@ -209,10 +239,10 @@ Python-side defaults: ICAO standard atmosphere, no wind, zero cant/look
 angle -- same defaults, just applied on-device.
 
 Response payload: `barrel_elevation_rad:f32` -- `LOAD_CONDITIONS`
-re-solves the cached profile's zero against the new conditions (§4.2), so
-it echoes the same field. `ERR_NOT_LOADED` if no profile is cached yet
-(there is no `zero_distance_ft` to solve against). `ERR_INTERNAL` on a
-zero-solve failure.
+re-solves the cached profile's zero against the new conditions (and
+cached config, §4.2a), so it echoes the same field. `ERR_NOT_LOADED` if
+no profile is cached yet (there is no `zero_distance_ft` to solve
+against). `ERR_INTERNAL` on a zero-solve failure.
 
 ### 4.4 `INTEGRATE`
 
@@ -342,13 +372,14 @@ No request payload. Response (fixed part, `struct` format `<BBHHBHIB`):
 
 No request/response payload beyond `OK`. Per `BACKLOG.md` Epic 8: an
 **application soft-reset**, not a targeted data-clearer (every
-`LOAD_PROFILE`/`LOAD_CONDITIONS` already fully overwrites, so that's
-redundant) and not an MCU reboot (out of scope -- that's a CDC0
-REPL/firmware-update concern). Clears cached profile, cached
-conditions/zero, and dispatcher bookkeeping (command generation/seq
-tracking, stream state, drop counters). Implies the same preemption
-`ABORT` does: if something is running, kill/relaunch the worker first
-(Epic 6), then clear state.
+`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` already fully overwrites,
+so that's redundant) and not an MCU reboot (out of scope -- that's a
+CDC0 REPL/firmware-update concern). Clears cached profile, cached
+config, cached conditions/zero, and dispatcher bookkeeping (command
+generation/seq tracking, stream state, drop counters) -- all three
+`LOAD_*` caches together, not just profile/conditions. Implies the same
+preemption `ABORT` does: if something is running, kill/relaunch the
+worker first (Epic 6), then clear state.
 
 ### 4.8 `ABORT`
 
