@@ -55,9 +55,13 @@ just compiled):
 - Wire framing: COBS + CRC16/CCITT-FALSE (`crc16`, `cobs_encode`/
   `cobs_decode`, `build_frame`/`parse_frame`), silent-drop + live
   `drop_count` on bad frames.
-- Command dispatch skeleton: `dispatch(type, seq, payload) ->
-  (status, response_payload)`; unimplemented commands raise
-  `NotImplementedError` (a dev-time signal, not a wire status).
+- Command dispatch: `dispatch(type, seq, payload[, emit]) ->
+  (status, response_payload)` -- the optional 4th arg, `emit`, was added
+  later (see the `INTEGRATE`/`INTEGRATE_FAST` entry below) for streaming
+  commands only; every other command ignores it. An unrecognized `type`
+  still raises `NotImplementedError` (a dev-time signal, not a wire
+  status) -- every id PROTOCOL.md's command table lists now has a real
+  handler, see below.
 - `IDENT`, `LOAD_CONFIG`, `LOAD_PROFILE` (full `drag_type` tagged union:
   G1/G7/CUSTOM/G1_MULTIBC/G7_MULTIBC) — all call straight into the C
   engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
@@ -1466,6 +1470,9 @@ assuming it's a real code problem.
       `mpremote` returns the identical, correct payload
       (`proto_ver=1, real_size=4, traj_row_size=64, base_traj_size=32,
       max_winds=5, max_drag_pts=200, max_bc_points=5`) on real hardware,
-      not just the host build. Every other command id currently raises
-      `NotImplementedError` — a deliberate development-time signal, not
-      a wire status, so it's obvious nothing else is wired up yet.
+      not just the host build. At this point in the epic, every other
+      command id still raised `NotImplementedError` — a deliberate
+      development-time signal, not a wire status, so it was obvious
+      nothing else was wired up yet. (No longer true by the end of this
+      backlog -- see the "Status at a glance" section up top for the
+      current, complete picture.)
