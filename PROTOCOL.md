@@ -4,16 +4,33 @@
 > **Draft, work in progress.** This documents the design decisions recorded
 > in `BACKLOG.md` (Epics 3 and 8) as a single reference instead of scattered
 > backlog bullets. Anything not marked "Resolved" in `BACKLOG.md` is still
-> open and may change. The framing layer (COBS + CRC16) is implemented and
-> tested in `src/bcp_frame.py` / `tests/test_bcp_frame.py`; the per-command
-> dispatch table is not written yet.
+> open and may change. Every command in §4's table has a real dispatch
+> handler now (`src/bcp/bcp_dispatch_mp.h`) and is exercised by
+> `tests/test_bcp_dispatch_native.py` on a unix usermod build -- see that
+> file's own header comment for exactly which commands are additionally
+> hardware-verified versus unix-only so far. What's still missing is the
+> transport itself (Epic 4: USB CDC1, the real read/decode/dispatch/write
+> loop) and, once that exists, wiring Epic 6's cooperative-abort/
+> `INTERRUPTED` handling into it for real -- see `BACKLOG.md`'s "Status at
+> a glance" section for the up-to-date picture. The framing layer (COBS +
+> CRC16) has its own from-scratch pure-Python reference/test-vector
+> implementation in `src/bcp_frame.py` / `tests/test_bcp_frame.py`,
+> separate from the native `src/bcp/bcp_frame_mp.h` the dispatcher
+> actually runs on-device.
 
 All multi-byte integers and floats are **little-endian**. All floats are
 **IEEE-754 binary32** (`f32`) on the wire regardless of the on-device build's
-own `real_t` (single or double precision) -- the dispatcher converts. `real_t`
-size only matters for the trajectory-row fields reported by `IDENT` (see
-below), so a host never needs to know the device's build precision to decode
-a request/response.
+own `real_t` (single or double precision) -- the dispatcher converts, and a
+host never needs to know the device's build precision to decode a
+request/response. **Exception:** `INTEGRATE`/`INTEGRATE_FAST`'s trajectory
+rows and `INTEGRATE_AT`'s response (§4.4/§4.4a/§4.5) are the one place this
+doesn't hold -- `TrajectoryData`/`BaseTrajData` are a raw copy of the
+on-device struct in its native `real_t`, sized per the build's actual
+precision, *not* converted to `f32`. A host decodes those specifically using
+`IDENT`'s own `real_size`/`traj_row_size`/`base_traj_size` (§4.6) rather than
+assuming `f32`; `FastTrajData` (§4.5a, `INTEGRATE_FAST` only) is the
+exception to the exception -- it's fixed `f32` on every build, since it has
+no double-precision-only fields to lose by converting.
 
 ## 1. Framing
 
@@ -117,8 +134,14 @@ only cover frames that passed framing but failed at the command layer.
 | 9 | `ABORT` | *(none)* | `OK` (see note below) |
 
 Numeric ids above are final, matching `src/bcp/bcp_dispatch_mp.h`'s `BCP_CMD_*`
-enum exactly (`IDENT` implemented and hardware-verified; the rest raise
-`NotImplementedError` for now, see BACKLOG.md Epic 3/8).
+enum exactly. Every one of them now has a real handler (an unrecognized
+`type_` outside this table still raises `NotImplementedError`, a
+development-time signal, not a gap in this table) -- `IDENT`, `LOAD_CONFIG`
+and `LOAD_PROFILE` are hardware-verified on real RP2040 hardware;
+`LOAD_CONDITIONS`, `INTEGRATE`/`INTEGRATE_FAST`, `INTEGRATE_AT`, `RESET`
+and `ABORT` are verified on a unix usermod build only so far, not yet run
+on real RP2040/RP2350/ESP32-S3 hardware. See `BACKLOG.md`'s "Status at a
+glance" section for the exact verification detail per command.
 
 `FIND_ZERO_ANGLE` and `STREAM_START`/`STREAM_END` are **not** wire
 commands -- see `BACKLOG.md` Epic 3/8: zero-solving is internal and
@@ -429,17 +452,32 @@ No request/response payload beyond `OK`. Per `BACKLOG.md` Epic 8: an
 `LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` already fully overwrites,
 so that's redundant) and not an MCU reboot (out of scope -- that's a
 CDC0 REPL/firmware-update concern). Clears cached profile, cached
-config, cached conditions/zero, and dispatcher bookkeeping (command
-generation/seq tracking, stream state, drop counters) -- all three
-`LOAD_*` caches together, not just profile/conditions. Implies the same
-preemption `ABORT` does: if something is running, kill/relaunch the
-worker first (Epic 6), then clear state.
+config, cached conditions/zero, and dispatcher bookkeeping (drop
+counters; command-generation/stream-state tracking once Epic 4/6's
+transport loop actually has any to track) -- all three `LOAD_*` caches
+together, not just profile/conditions. Implies the same preemption
+`ABORT` does: per Epic 6's now-cooperative (not kill/relaunch -- see
+that epic's own "Superseded" note) model, stop whatever's running at its
+next checkpoint first, then clear state.
+
+Implemented: `src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_reset()`
+`memset`s the whole persistent `bcp_state` and re-runs
+`bcp_state_ensure_init()` on it, plus resets `drop_count`.
 
 ### 4.8 `ABORT`
 
 No payload. Per the no-queue preemption rule (Epic 6), any new valid
 frame already preempts whatever is running -- `ABORT` is just the case
 where nothing replaces it. **Two responses may be in flight for two
-different `seq` values:** the killed command's original request gets a
-`status=INTERRUPTED` response (under *its own* `seq`), and the `ABORT`
-command itself gets a plain `status=OK` response (under `ABORT`'s `seq`).
+different `seq` values:** the preempted command's original request gets
+a `status=INTERRUPTED` response (under *its own* `seq`), and the
+`ABORT` command itself gets a plain `status=OK` response (under
+`ABORT`'s `seq`).
+
+Implemented: `dispatch()` answers `OK` unconditionally today. With no
+C read/write loop or persisted in-flight state yet (Epic 4), nothing is
+ever actually in flight for `ABORT` to preempt -- the two-response
+behavior above needs that transport work first, plus wiring Epic 6's
+cooperative checkpoint (already a no-op "always continue" inside
+`INTEGRATE`/`INTEGRATE_FAST`'s row callback, `bcp_stream_row_cb`) into
+that loop for real.

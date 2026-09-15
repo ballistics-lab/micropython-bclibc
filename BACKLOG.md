@@ -55,22 +55,164 @@ just compiled):
 - Wire framing: COBS + CRC16/CCITT-FALSE (`crc16`, `cobs_encode`/
   `cobs_decode`, `build_frame`/`parse_frame`), silent-drop + live
   `drop_count` on bad frames.
-- Command dispatch skeleton: `dispatch(type, seq, payload) ->
-  (status, response_payload)`; unimplemented commands raise
-  `NotImplementedError` (a dev-time signal, not a wire status).
+- Command dispatch: `dispatch(type, seq, payload[, emit]) ->
+  (status, response_payload)` -- the optional 4th arg, `emit`, was added
+  later (see the `INTEGRATE`/`INTEGRATE_FAST` entry below) for streaming
+  commands only; every other command ignores it. An unrecognized `type`
+  still raises `NotImplementedError` (a dev-time signal, not a wire
+  status) -- every id PROTOCOL.md's command table lists now has a real
+  handler, see below.
 - `IDENT`, `LOAD_CONFIG`, `LOAD_PROFILE` (full `drag_type` tagged union:
   G1/G7/CUSTOM/G1_MULTIBC/G7_MULTIBC) — all call straight into the C
   engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
   via the shared `bcp_resolve_zero()`), no Python involved.
 
-**Not implemented yet** (raise `NotImplementedError` from `dispatch()`
-today) — in roughly the order it makes sense to tackle them, per the
-dependency notes in Epic 8: `LOAD_CONDITIONS` (same shape as
-`LOAD_PROFILE`/`LOAD_CONFIG` — parse atmosphere + wind array into
-`bcp_state.shot`, call `bcp_resolve_zero()`) → `INTEGRATE_AT` (single-row
-response, no streaming machinery needed) → `INTEGRATE`/`INTEGRATE_FAST`
-(need the `MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need
-real cached state/a real stream in flight to be worth building against).
+**Implemented, unix-verified only (not yet hardware-verified — no
+RP2040/RP2350/ESP32-S3 available in this session, unlike the bullet
+above)**:
+- `LOAD_CONDITIONS` (`src/bcp/bcp_dispatch_mp.h`'s
+  `bcp_handle_load_conditions()`, PROTOCOL.md §4.3): parses atmosphere
+  (`temp_c`/`pressure_hpa`/`altitude_ft`/`humidity`), shot geometry
+  (`look_angle_rad`/`barrel_azimuth_rad`/`cant_angle_rad`), Coriolis
+  (`latitude_deg`/`azimuth_deg`) and the `wind_count`-prefixed wind array
+  (≤ `BCP_MAX_WINDS`=5) straight into `bcp_state.shot`/`bcp_state.winds`,
+  then re-triggers `bcp_resolve_zero()` exactly like `LOAD_PROFILE`/
+  `LOAD_CONFIG`. `ERR_BAD_ARG` on `wind_count` over the cap, `ERR_BAD_SIZE`
+  on any other payload-length mismatch (§4.1's array-count rule),
+  `ERR_NOT_LOADED` with no profile cached yet. Built and actually run
+  against `tests/test_bcp_dispatch_native.py`'s new `LOAD_CONDITIONS`
+  sections on a freshly built x64 unix usermod (`BCLIBC_BCP=1`,
+  MicroPython v1.29.0) this session — all 30 checks in the file pass,
+  including the ICAO-defaults/no-profile-yet case, a 5-wind (cap) and a
+  6-wind (over-cap → `ERR_BAD_ARG`) case, a `wind_count`/payload-length
+  mismatch (→ `ERR_BAD_SIZE`), and a cold/thin-vs-hot/dense atmosphere
+  regression check (angles differ, not bit-identical — the same class of
+  "defaults silently zeroed" bug `LOAD_PROFILE`'s own regression test
+  above caught). Also cross-compiled and linked clean for RPI_PICO
+  (RP2040, armv6m, CMake path, fresh `build-RPI_PICO/`) with
+  `BCLIBC_BCP=1` this session -- FLASH 361116→364264 B (+3148 B), RAM
+  24700→30220 B (+5520 B, mostly `BcpState`'s 200-point drag/5-wind
+  backing arrays), no warnings.
+- `INTEGRATE_AT` (`src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_integrate_at()`,
+  PROTOCOL.md §4/§4.5): 8 B fixed request (`key:u8, rsvd:u8[3],
+  target:f32`), calls the shared `bcp_build_props()` (factored out of
+  `bcp_resolve_zero()`, same call both now share) + the engine's own
+  `tiny_bclibc_integrate_at()` unchanged -- no new engine code. Response
+  on success is a **raw memcpy** of `TINY_BCLIBC_BaseTrajData` followed by
+  `TINY_BCLIBC_TrajectoryData` (native `real_t`, not the always-f32
+  encoding `LOAD_*` uses -- matches PROTOCOL.md §4.5's documented
+  contract that row size depends on build precision, decoded via IDENT's
+  own `real_size`/`base_traj_size`/`traj_row_size`). `ERR_BAD_ARG` if
+  `key` is outside `TINY_BCLIBC_InterpKey`'s 0..7 range, `ERR_NOT_LOADED`
+  with no profile cached, `ERR_INTERNAL` if the engine finds no
+  bracketing crossing for `target` (`TINY_BCLIBC_ERR_INTERCEPTION`).
+  Verified this session against a real G7 profile (168 gr/.308/bc=0.305,
+  2750 fps, zeroed at 300 m): querying `KEY_POS_X` at the zero distance
+  itself returns `distance_ft`/`px` matching the target and `height_ft`/
+  `drop_angle_rad` ≈ 0 (a correctly zeroed rifle has no drop *at* its own
+  zero range) -- not just "doesn't crash", the physics checks out.
+  `tests/test_bcp_dispatch_native.py`'s new `INTEGRATE_AT` sections cover
+  this plus the three error paths above; all 37 checks in the file pass
+  on the same unix build. Also cross-compiled and linked clean for
+  RPI_PICO (CMake path) -- FLASH 364264→364408 B (+144 B; small, since
+  `tiny_bclibc_integrate_at()` itself already existed and was already
+  compiled in for the non-BCP Python binding), RAM unchanged (no new
+  persistent state), no warnings.
+- `INTEGRATE`/`INTEGRATE_FAST` (`src/bcp/bcp_dispatch_mp.h`'s
+  `bcp_handle_integrate()`, PROTOCOL.md §4.4/§4.4a): same 16 B `Request`
+  (`range_limit_ft/range_step_ft/time_step:f32, filter_flags:i32`) for
+  both, calls the shared `tiny_bclibc_integrate_stream()` unchanged --
+  again no new engine code, only a wire projection of its existing row
+  callback. **`dispatch()`'s call shape changed** to make streaming
+  possible at all: it now takes an **optional 4th argument, `emit`** (a
+  Python callable invoked once per `MORE` frame as `emit(status,
+  payload)`), since a single `(status, payload)` return can't carry a
+  whole trajectory -- mirrors the existing non-BCP
+  `integrate_stream(shot, holder, req, cb)` binding's own callback shape.
+  `dispatch()`'s return value is still the one definitive result every
+  other command also returns -- here, the final `OK` frame
+  (`total:u32, reason:i32`) or an error tuple; `TypeError` (not a wire
+  status) if a streaming command is dispatched with no `emit`, since rows
+  would otherwise silently vanish. Rows are batched
+  `BCP_STREAM_ROWS_PER_FRAME`=8 to a `MORE` frame (a provisional row-count
+  cap, not yet tuned against real per-transport RTT -- see Epic 5's own
+  still-open ack-scheme discussion) before `emit()` fires; `INTEGRATE`'s
+  rows are a raw memcpy of `TrajectoryData` per row (same native-`real_t`
+  convention `INTEGRATE_AT` uses), `INTEGRATE_FAST`'s are the compact,
+  always-f32 `FastTrajData` (`distance_ft, drop_angle_rad,
+  windage_angle_rad, velocity_fps`) packed field-by-field, matching
+  PROTOCOL.md §4.5a. `ERR_BAD_SIZE`/`ERR_NOT_LOADED` before any row is
+  produced, `ERR_INTERNAL` if the engine call itself fails.
+  Verified this session against the same G7 profile as `INTEGRATE_AT`
+  above: a 0-1000 ft / 100 ft-step request produces exactly 11 rows,
+  split across 2 `MORE` frames (8+3) whose `row_idx`/`count` bookkeeping
+  sums correctly back to the reported `total`, with `reason ==
+  TARGET_RANGE_REACHED`; row 0's fields are physically sane
+  (`velocity_fps` == muzzle velocity, `height_ft` == `-sight_height_ft`,
+  the bore-below-sight-line offset at the muzzle); `INTEGRATE_FAST`
+  against the identical request reports the same `total` with its own
+  compact rows decoding correctly; a short request (3 rows) exercises the
+  single-frame path (no mid-stream flush, only the trailing one).
+  `tests/test_bcp_dispatch_native.py`'s new sections cover all of this
+  plus the no-profile/bad-size/missing-`emit` error paths -- **65 checks**
+  pass in the file now, all on the same unix build described above. Also
+  cross-compiled and linked clean for RPI_PICO (CMake path) -- FLASH
+  364408→365008 B (+600 B), RAM unchanged (the streaming context is
+  stack-allocated per call, not persistent `BcpState`), no warnings.
+  **Not wired up yet**: Epic 6's cooperative-abort checkpoint (the row
+  callback always returns "continue," since there's no C read/write
+  loop or transport object yet to poll for a preempting frame -- Epic 4
+  is still open) and `INTERRUPTED` handling; both need that transport
+  work first, tracked separately.
+- `RESET`/`ABORT` (`src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_reset()` +
+  the `BCP_CMD_ABORT` case, PROTOCOL.md §4.7/§4.8): both no-payload,
+  `OK`-only commands, the simplest two in the table -- no engine call, no
+  wire-format decoding. `RESET` is an **application soft-reset**: `memset`s
+  the whole persistent `bcp_state` (profile, config, conditions/zero, all
+  three `has_*` flags together) then re-runs
+  `bcp_state_ensure_init()` on it, so "after RESET" is bit-for-bit the
+  same state as a fresh boot rather than a hand-maintained list of fields
+  to clear (can't drift as new `LOAD_*` fields get added later) --
+  plus resets `bcp_frame_mp.h`'s `bcp_frame_drop_count_` telemetry
+  counter (same translation unit, no new plumbing needed). `ABORT`
+  answers `OK` unconditionally: per the no-queue preemption rule (Epic
+  6), it's supposed to stop whatever's running and answer `INTERRUPTED`
+  under that command's own `seq` -- but with every `dispatch()` call
+  still running synchronously to completion (no C read/write loop or
+  persisted in-flight state -- Epic 4 not built yet), there is nothing
+  ever actually in flight for either command to preempt yet; both note
+  this explicitly and point at Epic 4/6 as the prerequisite for the real
+  behavior.
+  Verified this session: unix usermod build -- `RESET` after a cached
+  profile+config leaves `LOAD_CONFIG`/`LOAD_CONDITIONS`/`INTEGRATE_AT` all
+  answering `ERR_NOT_LOADED` again (the cache is actually gone, not just
+  nominally), clears `drop_count` back to `0` from a real nonzero value,
+  and a fresh `LOAD_PROFILE` afterward succeeds exactly like on a cold
+  boot (no stale pointer/count left over for it to trip on). `ABORT`
+  verified idle (`OK`, empty payload) both before anything is loaded and
+  after a `RESET`. `tests/test_bcp_dispatch_native.py`'s new `ABORT /
+  RESET` section (run last, since `RESET` wipes every other section's
+  cached state) covers all of this -- **74 checks** pass in the file now,
+  all on the same unix build described above. Also cross-compiled and
+  linked clean for RPI_PICO (CMake path) -- FLASH 365008→365064 B
+  (+56 B; the smallest addition yet, consistent with "no new engine
+  code, no new persistent fields, just a `memset` + one counter reset"),
+  RAM unchanged, no warnings.
+
+**Every `BCP_CMD_*` in PROTOCOL.md's command table now has a real
+handler** (`LOAD_PROFILE`, `LOAD_CONFIG`, `LOAD_CONDITIONS`, `INTEGRATE`,
+`INTEGRATE_FAST`, `INTEGRATE_AT`, `RESET`, `IDENT`, `ABORT`) -- an
+unrecognized `type_` still raises `NotImplementedError`, a development-
+time signal, not a real gap in the command table anymore. What's left
+before this is a real, flashable coprocessor is **not another command**:
+Epic 4 (USB CDC1 transport, the actual read/decode/dispatch/write loop)
+and, once that exists, wiring Epic 6's cooperative-abort checkpoint and
+`INTERRUPTED` status into it for real.
+
+**Not yet exercised, any command above**: actually running on real
+RP2040/RP2350/ESP32-S3 hardware (no board available in this session) --
+only the unix build was executed; RPI_PICO was compiled and linked, not
+flashed/run.
 
 **Building/testing, concretely:**
 ```sh
@@ -887,9 +1029,17 @@ assuming it's a real code problem.
         BLE connection interval) before picking a window size or deciding
         whether (a)'s latency worry is real in practice. Not blocking
         Epic 2/3/4/6 work — can stay open while those proceed.
-- [ ] Wire into `tiny_bclibc_integrate_stream`'s row callback
-      (`mp_stream_cb` in `tiny_bclibc_mp.c`) — write a wire frame per row
-      instead of accumulating a Python list.
+- [x] **Implemented — `bcp_stream_row_cb`/`bcp_stream_flush` in
+      `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
+      row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
+      (currently 8, a provisional count pending the ack-scheme's real RTT
+      numbers above, not the ack scheme itself) into each `MORE` frame,
+      handed out through `dispatch()`'s new optional `emit` callback
+      rather than accumulated into a Python list. See the "Status at a
+      glance" section's `INTEGRATE`/`INTEGRATE_FAST` entry for the full
+      writeup and this session's verification. Plain no-ack streaming for
+      now (Epic 5's option (b)) -- the windowed-ack/`RESEND` question
+      above is still open and not blocking this.
 
 ## Epic 6 — Abort / interrupt
 
@@ -1320,6 +1470,9 @@ assuming it's a real code problem.
       `mpremote` returns the identical, correct payload
       (`proto_ver=1, real_size=4, traj_row_size=64, base_traj_size=32,
       max_winds=5, max_drag_pts=200, max_bc_points=5`) on real hardware,
-      not just the host build. Every other command id currently raises
-      `NotImplementedError` — a deliberate development-time signal, not
-      a wire status, so it's obvious nothing else is wired up yet.
+      not just the host build. At this point in the epic, every other
+      command id still raised `NotImplementedError` — a deliberate
+      development-time signal, not a wire status, so it was obvious
+      nothing else was wired up yet. (No longer true by the end of this
+      backlog -- see the "Status at a glance" section up top for the
+      current, complete picture.)
