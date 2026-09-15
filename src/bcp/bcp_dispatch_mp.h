@@ -26,11 +26,12 @@
  * no byte-offset interleaving to manage regardless of which order
  * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
  *
- * Only IDENT, LOAD_CONFIG, LOAD_PROFILE, LOAD_CONDITIONS and INTEGRATE_AT
- * are implemented so far — see BACKLOG.md Epic 3/8 for the rest of the
- * command table; unimplemented commands raise NotImplementedError (a
- * development-time signal, not a wire status — production dispatch will
- * route every BCP_CMD_* to a real handler before this ships).
+ * Only IDENT, LOAD_CONFIG, LOAD_PROFILE, LOAD_CONDITIONS, INTEGRATE_AT and
+ * INTEGRATE/INTEGRATE_FAST are implemented so far — see BACKLOG.md Epic
+ * 3/8 for the rest of the command table; unimplemented commands raise
+ * NotImplementedError (a development-time signal, not a wire status —
+ * production dispatch will route every BCP_CMD_* to a real handler
+ * before this ships).
  */
 #ifndef BCP_DISPATCH_MP_H
 #define BCP_DISPATCH_MP_H
@@ -616,6 +617,164 @@ static size_t bcp_handle_integrate_at(const uint8_t *payload, size_t payload_len
     return sizeof(raw) + sizeof(full);
 }
 
+/* ── INTEGRATE / INTEGRATE_FAST (PROTOCOL.md §4.4/§4.4a) ──────────────────
+ * Request (`Request`, 16 B fixed, shared by both commands): `range_limit_ft:
+ * f32, range_step_ft:f32, time_step:f32, filter_flags:i32`.
+ *
+ * Response shape is fundamentally different from every other command: zero
+ * or more `status=MORE` frames (each carrying a batch of trajectory rows),
+ * followed by one final `status=OK` frame (`total:u32, reason:i32`) --
+ * PROTOCOL.md §4.4. `dispatch()` can only return one (status, payload)
+ * tuple per call, so streaming needs a second channel: `dispatch()` grows
+ * an **optional 4th argument, `emit`** -- a Python callable invoked as
+ * `emit(status, payload_bytes)` once per `MORE` frame, mirroring the
+ * existing non-BCP `integrate_stream(shot, holder, req, cb)` binding's own
+ * callback shape (`mp_stream_cb` above). `dispatch()`'s return value is
+ * still the single definitive result for the call, same contract as every
+ * other command -- here that's the final `OK`/error tuple, not a row.
+ * Only INTEGRATE/INTEGRATE_FAST look at `emit`; every other command
+ * ignores a 4th argument if one is passed.
+ *
+ * Both commands run the identical `tiny_bclibc_integrate_stream()` call;
+ * INTEGRATE_FAST only differs in what a row looks like on the wire (see
+ * bcp_stream_row_cb() below), matching PROTOCOL.md's "not a cheaper
+ * computation, a thinner projection" framing.
+ *
+ * `ERR_BAD_SIZE`/`ERR_NOT_LOADED` before any row is ever produced (checked
+ * up front, same as every other handler). `ERR_INTERNAL` if the engine
+ * call itself fails -- note rows may already have been emitted via `emit`
+ * before that happens; PROTOCOL.md's `INTERRUPTED` status (Epic 6) is the
+ * eventual "the stream so far is not meaningful" signal, not modeled yet
+ * since it needs the not-yet-built C read/write loop's own cooperative
+ * preemption checkpoint (BACKLOG.md Epic 6).
+ */
+#define BCP_INTEGRATE_REQ_SIZE 16u
+
+/* Rows batched into one MORE frame before bcp_stream_flush() emits it.
+ * Sized so the worst case -- full TINY_BCLIBC_TrajectoryData on a
+ * double-precision build, 124 B/row -- stays comfortably under the
+ * existing 2048 B RX-buffer precedent (Epic 3) once the 4 B row_idx/
+ * count/rsvd sub-header is added: 8*124+4 = 996 B, leaving plenty of
+ * margin for CRC/COBS overhead on top. INTEGRATE_FAST's fixed 16 B rows
+ * batch far more thinly than this cap would allow (8*16+4 = 132 B) --
+ * one constant for both rather than a premature per-command tune, since
+ * PROTOCOL.md's `count` field is chosen per frame at runtime regardless
+ * and nothing about the wire format pins this number. Revisit once Epic
+ * 5's still-open ack-scheme work has real per-transport RTT numbers to
+ * balance against (see BACKLOG.md). */
+#define BCP_STREAM_ROWS_PER_FRAME 8u
+#define BCP_FAST_ROW_SIZE 16u /* distance_ft, drop_angle_rad, windage_angle_rad, velocity_fps -- always f32 (PROTOCOL.md §4.5a) */
+
+typedef struct
+{
+    mp_obj_t emit; /* Python callable: emit(status, payload_bytes) */
+    int fast;      /* 1 => FastTrajData rows on the wire, 0 => full TrajectoryData */
+    uint8_t buf[4u + BCP_STREAM_ROWS_PER_FRAME * sizeof(TINY_BCLIBC_TrajectoryData)];
+    uint32_t buf_count;
+    uint32_t next_row_idx;
+} BcpStreamCtx;
+
+/* Emits whatever rows are currently buffered as one MORE frame (a no-op if
+ * the buffer is empty, so callers can call this unconditionally after the
+ * engine call returns to flush a trailing partial batch). */
+static void bcp_stream_flush(BcpStreamCtx *ctx)
+{
+    if (ctx->buf_count == 0)
+    {
+        return;
+    }
+    size_t row_size = ctx->fast ? BCP_FAST_ROW_SIZE : sizeof(TINY_BCLIBC_TrajectoryData);
+    bcp_wu16(ctx->buf, 0, (uint16_t)ctx->next_row_idx);
+    ctx->buf[2] = (uint8_t)ctx->buf_count;
+    ctx->buf[3] = 0;
+    mp_obj_t payload = mp_obj_new_bytes(ctx->buf, 4u + (size_t)ctx->buf_count * row_size);
+    mp_obj_t args[2] = {MP_OBJ_NEW_SMALL_INT(BCP_STATUS_MORE), payload};
+    mp_call_function_n_kw(ctx->emit, 2, 0, args);
+    ctx->next_row_idx += ctx->buf_count;
+    ctx->buf_count = 0;
+}
+
+/* tiny_bclibc_integrate_stream()'s row callback -- called once per emitted
+ * row (already filtered/interpolated by the engine, PROTOCOL.md §4.4's
+ * `filter_flags`). Buffers the row and flushes a MORE frame once the batch
+ * cap is reached; the trailing partial batch is flushed separately by the
+ * caller once the engine call returns (there's no way to know "this is the
+ * last row" from inside the callback itself). */
+static int32_t bcp_stream_row_cb(const TINY_BCLIBC_TrajectoryData *pt, void *ctx_)
+{
+    BcpStreamCtx *ctx = (BcpStreamCtx *)ctx_;
+    size_t row_size = ctx->fast ? BCP_FAST_ROW_SIZE : sizeof(TINY_BCLIBC_TrajectoryData);
+    uint8_t *dst = ctx->buf + 4u + (size_t)ctx->buf_count * row_size;
+    if (ctx->fast)
+    {
+        bcp_wf32(dst, 0, (float)pt->distance_ft);
+        bcp_wf32(dst, 4, (float)pt->drop_angle_rad);
+        bcp_wf32(dst, 8, (float)pt->windage_angle_rad);
+        bcp_wf32(dst, 12, (float)pt->velocity_fps);
+    }
+    else
+    {
+        memcpy(dst, pt, sizeof(TINY_BCLIBC_TrajectoryData));
+    }
+    ctx->buf_count++;
+    if (ctx->buf_count >= BCP_STREAM_ROWS_PER_FRAME)
+    {
+        bcp_stream_flush(ctx);
+    }
+    /* Cooperative-abort checkpoint (BACKLOG.md Epic 6) isn't wired up yet --
+     * there's no C read/write loop or transport object to poll for a
+     * preempting frame yet (Epic 4). Always continue for now. */
+    return 0;
+}
+
+static size_t bcp_handle_integrate(const uint8_t *payload, size_t payload_len, int fast, mp_obj_t emit,
+                                    uint8_t out[8], uint8_t status_out[1])
+{
+    if (payload_len != BCP_INTEGRATE_REQ_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    if (!bcp_state.has_profile)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+
+    TINY_BCLIBC_TrajectoryRequest req;
+    req.range_limit_ft = (real_t)bcp_rdf32(payload, 0);
+    req.range_step_ft = (real_t)bcp_rdf32(payload, 4);
+    req.time_step = (real_t)bcp_rdf32(payload, 8);
+    req.filter_flags = bcp_rdi32(payload, 12);
+
+    TINY_BCLIBC_ShotProps props;
+    if (bcp_build_props(&props) != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    BcpStreamCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.emit = emit;
+    ctx.fast = fast;
+
+    int32_t total = 0, reason = 0;
+    int32_t rc = tiny_bclibc_integrate_stream(&props, &req, bcp_stream_row_cb, &ctx, &total, &reason, NULL);
+    bcp_stream_flush(&ctx); /* trailing partial batch, if any */
+
+    if (rc != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    bcp_wu32(out, 0, (uint32_t)total);
+    bcp_wu32(out, 4, (uint32_t)reason); /* i32 -> u32 bit pattern, sign bits pass through untouched */
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return 8u;
+}
+
 /* ── IDENT (PROTOCOL.md §4.6) ─────────────────────────────────────────────
  * No request payload (ignored). Response, fixed part matches struct format
  * "<BBHHBHBIB" (15 B) followed by the version string:
@@ -668,15 +827,22 @@ static size_t bcp_handle_ident(uint8_t *out, size_t out_cap)
     return total;
 }
 
-/* ── dispatch(type_, seq, payload) -> (status, response_payload) ─────────
+/* ── dispatch(type_, seq, payload[, emit]) -> (status, response_payload) ──
  * `seq` is accepted but not yet used by any handler (no handler needs to
  * echo/branch on it yet -- IDENT doesn't care who's asking). Kept in the
  * signature now so the call shape matches PROTOCOL.md's per-command
  * table from the start, instead of changing it once a command that does
- * need `seq` lands. */
-static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t payload_obj)
+ * need `seq` lands.
+ *
+ * `emit` is optional (3-4 args) and only meaningful for INTEGRATE/
+ * INTEGRATE_FAST -- see the streaming handlers' own doc comment above for
+ * why a single (status, payload) return can't carry a whole trajectory
+ * stream. Every other command ignores it. */
+static mp_obj_t mp_bcp_dispatch(size_t n_args, const mp_obj_t *args)
 {
-    (void)seq_obj;
+    mp_obj_t type_obj = args[0];
+    mp_obj_t payload_obj = args[2];
+    mp_obj_t emit_obj = (n_args > 3) ? args[3] : mp_const_none;
     bcp_state_ensure_init();
     uint8_t type_ = (uint8_t)mp_obj_get_int(type_obj);
 
@@ -729,6 +895,22 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
         return mp_obj_new_tuple(2, items);
     }
+    case BCP_CMD_INTEGRATE:
+    case BCP_CMD_INTEGRATE_FAST:
+    {
+        if (emit_obj == mp_const_none)
+        {
+            mp_raise_TypeError(MP_ERROR_TEXT("INTEGRATE(_FAST) requires dispatch()'s optional 4th arg, emit(status, payload)"));
+        }
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t out[8];
+        uint8_t status;
+        size_t n = bcp_handle_integrate((const uint8_t *)pbi.buf, pbi.len, type_ == BCP_CMD_INTEGRATE_FAST, emit_obj, out, &status);
+        mp_obj_t resp_payload = (n > 0) ? mp_obj_new_bytes(out, n) : mp_const_empty_bytes;
+        mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
+        return mp_obj_new_tuple(2, items);
+    }
     default:
         /* mp_raise_NotImplementedError() is a natmod-only (dynruntime.h)
          * macro; mp_type_NotImplementedError itself is declared directly
@@ -736,7 +918,7 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         mp_raise_msg(&mp_type_NotImplementedError, MP_ERROR_TEXT("BCP command not implemented yet"));
     }
 }
-static MP_DEFINE_CONST_FUN_OBJ_3(mp_bcp_dispatch_obj, mp_bcp_dispatch);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bcp_dispatch_obj, 3, 4, mp_bcp_dispatch);
 
 /* No module table / MP_REGISTER_MODULE here either -- see bcp_frame_mp.h's
  * own note just above its equivalent spot. */

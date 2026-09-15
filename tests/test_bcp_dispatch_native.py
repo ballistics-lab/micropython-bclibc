@@ -209,6 +209,56 @@ try:
 except Exception as ex:
     _fail("INTEGRATE_AT bad key", ex)
 
+# -- INTEGRATE / INTEGRATE_FAST (no profile yet) -----------------------------------
+print("\n--- INTEGRATE / INTEGRATE_FAST (no profile cached yet) ---")
+
+
+def _pack_integrate_req(range_limit_ft, range_step_ft, time_step, filter_flags):
+    return struct.pack("<3fi", range_limit_ft, range_step_ft, time_step, filter_flags)
+
+
+def _collect_frames():
+    """Returns (emit_fn, frames_list) -- emit_fn appends every (status, payload)
+    dispatch() reports through the MORE callback, so a test can inspect the
+    whole stream after dispatch() returns its own final (status, payload)."""
+    frames = []
+
+    def emit(status, payload):
+        frames.append((status, payload))
+
+    return emit, frames
+
+
+try:
+    emit, _frames = _collect_frames()
+    status, payload = d.dispatch(d.CMD_INTEGRATE, 1, _pack_integrate_req(1000.0, 100.0, 0.0, 0), emit)
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"" and _frames == []:
+        _pass("INTEGRATE with no profile cached -> ERR_NOT_LOADED, empty payload, no MORE frames")
+    else:
+        _fail("INTEGRATE no-profile case", (status, payload, _frames))
+except Exception as ex:
+    _fail("INTEGRATE no-profile case", ex)
+
+try:
+    status, _ = d.dispatch(d.CMD_INTEGRATE, 1, b"short", (lambda s, p: None))
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("INTEGRATE with wrong payload size -> ERR_BAD_SIZE")
+    else:
+        _fail("INTEGRATE bad size", "got status={}".format(status))
+except Exception as ex:
+    _fail("INTEGRATE bad size", ex)
+
+try:
+    # emit is required (dispatch()'s optional 4th arg) -- without it any
+    # rows the engine produces would just vanish, so this is a caller bug,
+    # signaled as a plain TypeError rather than a wire status.
+    d.dispatch(d.CMD_INTEGRATE, 1, _pack_integrate_req(1000.0, 100.0, 0.0, 0))
+    _fail("INTEGRATE without emit", "expected TypeError, got a result")
+except TypeError:
+    _pass("INTEGRATE without an emit callback raises TypeError")
+except Exception as ex:
+    _fail("INTEGRATE without emit", "wrong exception type: " + str(ex))
+
 # -- unknown command -------------------------------------------------------------
 print("\n--- unknown command ---")
 try:
@@ -527,6 +577,109 @@ try:
         _fail("INTEGRATE_AT unreachable target", (status, payload))
 except Exception as ex:
     _fail("INTEGRATE_AT unreachable target", ex)
+
+# -- INTEGRATE / INTEGRATE_FAST (profile cached) --------------------------------
+print("\n--- INTEGRATE / INTEGRATE_FAST (profile cached) ---")
+
+_TERM_TARGET_RANGE_REACHED = 1
+
+
+def _decode_more_frames(frames, row_size):
+    """Validates row_idx/count bookkeeping across a stream's MORE frames and
+    returns the concatenated raw row bytes. Fails loudly (raises) on any
+    inconsistency instead of silently under-checking."""
+    next_idx = 0
+    rows = b""
+    for status, payload in frames:
+        assert status == d.STATUS_MORE, "frame status {} != STATUS_MORE".format(status)
+        row_idx, count, rsvd = struct.unpack_from("<HBB", payload, 0)
+        assert row_idx == next_idx, "row_idx {} != expected {}".format(row_idx, next_idx)
+        assert len(payload) == 4 + count * row_size, "frame payload length mismatch"
+        rows += payload[4:]
+        next_idx += count
+    return rows, next_idx
+
+
+try:
+    p = _pack_profile(0.305, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+    _, ident_payload = d.dispatch(d.CMD_IDENT, 1, b"")
+    traj_row_size, base_traj_size = struct.unpack_from("<HH", ident_payload, 2)
+
+    emit, frames = _collect_frames()
+    status, payload = d.dispatch(d.CMD_INTEGRATE, 1, _pack_integrate_req(1000.0, 100.0, 0.0, 0), emit)
+    total, reason = struct.unpack("<Ii", payload)
+
+    checks = [
+        ("final status is OK", status == d.STATUS_OK),
+        ("total is 11 rows (0..1000 ft step 100)", total == 11),
+        ("reason is TARGET_RANGE_REACHED", reason == _TERM_TARGET_RANGE_REACHED),
+        ("more than one MORE frame was needed (batch cap < total rows)", len(frames) > 1),
+    ]
+    for name, ok in checks:
+        if ok:
+            _pass(name)
+        else:
+            _fail(name, {"status": status, "total": total, "reason": reason, "n_frames": len(frames)})
+
+    rows, counted = _decode_more_frames(frames, traj_row_size)
+    if counted == total:
+        _pass("MORE frames' row_idx/count bookkeeping sums to total ({} rows)".format(total))
+    else:
+        _fail("row_idx/count bookkeeping", "counted {} != total {}".format(counted, total))
+
+    row0 = struct.unpack_from("<15fi", rows, 0)
+    row0_checks = [
+        ("row 0 distance_ft == 0", row0[1] == 0.0),
+        ("row 0 velocity_fps == muzzle velocity (2750 fps)", abs(row0[2] - 2750.0) < 0.01),
+        ("row 0 height_ft == -sight_height_ft (-1.5 ft, bore below the sight line at the muzzle)", abs(row0[4] - (-1.5)) < 0.01),
+    ]
+    for name, ok in row0_checks:
+        if ok:
+            _pass(name)
+        else:
+            _fail(name, row0)
+except Exception as ex:
+    _fail("INTEGRATE (profile cached)", ex)
+
+try:
+    emit, frames = _collect_frames()
+    status, payload = d.dispatch(d.CMD_INTEGRATE_FAST, 1, _pack_integrate_req(1000.0, 100.0, 0.0, 0), emit)
+    total, reason = struct.unpack("<Ii", payload)
+    rows, counted = _decode_more_frames(frames, 16)  # FastTrajData is always 16 B (4 f32 fields)
+
+    checks = [
+        ("final status is OK", status == d.STATUS_OK),
+        ("total matches INTEGRATE's own total for the same request (11 rows)", total == 11),
+        ("row_idx/count bookkeeping sums to total", counted == total),
+    ]
+    for name, ok in checks:
+        if ok:
+            _pass(name)
+        else:
+            _fail(name, {"status": status, "total": total, "counted": counted})
+
+    row0 = struct.unpack_from("<4f", rows, 0)
+    if row0[0] == 0.0 and abs(row0[3] - 2750.0) < 0.01:
+        _pass("FastTrajData row 0: distance_ft=0, velocity_fps=muzzle velocity")
+    else:
+        _fail("FastTrajData row 0", row0)
+except Exception as ex:
+    _fail("INTEGRATE_FAST (profile cached)", ex)
+
+try:
+    # A range_limit well under one batch's worth of rows -- exercises the
+    # single-frame path (no mid-stream flush, only the trailing one).
+    emit, frames = _collect_frames()
+    status, payload = d.dispatch(d.CMD_INTEGRATE, 1, _pack_integrate_req(200.0, 100.0, 0.0, 0), emit)
+    total, _reason = struct.unpack("<Ii", payload)
+    if status == d.STATUS_OK and total == 3 and len(frames) == 1:
+        _pass("a short stream (3 rows) fits in exactly one MORE frame")
+    else:
+        _fail("short stream single-frame case", {"status": status, "total": total, "n_frames": len(frames)})
+except Exception as ex:
+    _fail("short stream single-frame case", ex)
 
 # -- LOAD_CONFIG now succeeds, since a profile is cached ----------------------
 print("\n--- LOAD_CONFIG after a profile is cached ---")

@@ -114,17 +114,62 @@ above)**:
   `tiny_bclibc_integrate_at()` itself already existed and was already
   compiled in for the non-BCP Python binding), RAM unchanged (no new
   persistent state), no warnings.
+- `INTEGRATE`/`INTEGRATE_FAST` (`src/bcp/bcp_dispatch_mp.h`'s
+  `bcp_handle_integrate()`, PROTOCOL.md §4.4/§4.4a): same 16 B `Request`
+  (`range_limit_ft/range_step_ft/time_step:f32, filter_flags:i32`) for
+  both, calls the shared `tiny_bclibc_integrate_stream()` unchanged --
+  again no new engine code, only a wire projection of its existing row
+  callback. **`dispatch()`'s call shape changed** to make streaming
+  possible at all: it now takes an **optional 4th argument, `emit`** (a
+  Python callable invoked once per `MORE` frame as `emit(status,
+  payload)`), since a single `(status, payload)` return can't carry a
+  whole trajectory -- mirrors the existing non-BCP
+  `integrate_stream(shot, holder, req, cb)` binding's own callback shape.
+  `dispatch()`'s return value is still the one definitive result every
+  other command also returns -- here, the final `OK` frame
+  (`total:u32, reason:i32`) or an error tuple; `TypeError` (not a wire
+  status) if a streaming command is dispatched with no `emit`, since rows
+  would otherwise silently vanish. Rows are batched
+  `BCP_STREAM_ROWS_PER_FRAME`=8 to a `MORE` frame (a provisional row-count
+  cap, not yet tuned against real per-transport RTT -- see Epic 5's own
+  still-open ack-scheme discussion) before `emit()` fires; `INTEGRATE`'s
+  rows are a raw memcpy of `TrajectoryData` per row (same native-`real_t`
+  convention `INTEGRATE_AT` uses), `INTEGRATE_FAST`'s are the compact,
+  always-f32 `FastTrajData` (`distance_ft, drop_angle_rad,
+  windage_angle_rad, velocity_fps`) packed field-by-field, matching
+  PROTOCOL.md §4.5a. `ERR_BAD_SIZE`/`ERR_NOT_LOADED` before any row is
+  produced, `ERR_INTERNAL` if the engine call itself fails.
+  Verified this session against the same G7 profile as `INTEGRATE_AT`
+  above: a 0-1000 ft / 100 ft-step request produces exactly 11 rows,
+  split across 2 `MORE` frames (8+3) whose `row_idx`/`count` bookkeeping
+  sums correctly back to the reported `total`, with `reason ==
+  TARGET_RANGE_REACHED`; row 0's fields are physically sane
+  (`velocity_fps` == muzzle velocity, `height_ft` == `-sight_height_ft`,
+  the bore-below-sight-line offset at the muzzle); `INTEGRATE_FAST`
+  against the identical request reports the same `total` with its own
+  compact rows decoding correctly; a short request (3 rows) exercises the
+  single-frame path (no mid-stream flush, only the trailing one).
+  `tests/test_bcp_dispatch_native.py`'s new sections cover all of this
+  plus the no-profile/bad-size/missing-`emit` error paths -- **65 checks**
+  pass in the file now, all on the same unix build described above. Also
+  cross-compiled and linked clean for RPI_PICO (CMake path) -- FLASH
+  364408→365008 B (+600 B), RAM unchanged (the streaming context is
+  stack-allocated per call, not persistent `BcpState`), no warnings.
+  **Not wired up yet**: Epic 6's cooperative-abort checkpoint (the row
+  callback always returns "continue," since there's no C read/write
+  loop or transport object yet to poll for a preempting frame -- Epic 4
+  is still open) and `INTERRUPTED` handling; both need that transport
+  work first, tracked separately.
 
-**Not yet exercised, either command above**: actually running on real
+**Not yet exercised, any command above**: actually running on real
 RP2040/RP2350/ESP32-S3 hardware (no board available in this session) --
 only the unix build was executed; RPI_PICO was compiled and linked, not
 flashed/run.
 
 **Not implemented yet** (raise `NotImplementedError` from `dispatch()`
-today) — in roughly the order it makes sense to tackle them, per the
-dependency notes in Epic 8: `INTEGRATE`/`INTEGRATE_FAST` (need the
-`MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need real cached
-state/a real stream in flight to be worth building against).
+today): `RESET`/`ABORT` (need real cached state/a real stream in flight
+to be worth building against, plus the transport-loop plumbing Epic
+6's `INTERRUPTED` status depends on).
 
 **Building/testing, concretely:**
 ```sh
@@ -941,9 +986,17 @@ assuming it's a real code problem.
         BLE connection interval) before picking a window size or deciding
         whether (a)'s latency worry is real in practice. Not blocking
         Epic 2/3/4/6 work — can stay open while those proceed.
-- [ ] Wire into `tiny_bclibc_integrate_stream`'s row callback
-      (`mp_stream_cb` in `tiny_bclibc_mp.c`) — write a wire frame per row
-      instead of accumulating a Python list.
+- [x] **Implemented — `bcp_stream_row_cb`/`bcp_stream_flush` in
+      `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
+      row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
+      (currently 8, a provisional count pending the ack-scheme's real RTT
+      numbers above, not the ack scheme itself) into each `MORE` frame,
+      handed out through `dispatch()`'s new optional `emit` callback
+      rather than accumulated into a Python list. See the "Status at a
+      glance" section's `INTEGRATE`/`INTEGRATE_FAST` entry for the full
+      writeup and this session's verification. Plain no-ack streaming for
+      now (Epic 5's option (b)) -- the windowed-ack/`RESEND` question
+      above is still open and not blocking this.
 
 ## Epic 6 — Abort / interrupt
 
