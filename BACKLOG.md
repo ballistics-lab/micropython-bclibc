@@ -215,6 +215,11 @@ being used purely as a library from Python application code.
 
 ## Epic 3 — Command/response frame
 
+> Byte-level layout (packet header, per-command struct fields, status
+> codes) lives in [`PROTOCOL.md`](PROTOCOL.md) -- kept in one place instead
+> of duplicated across backlog bullets. This epic tracks the *decisions*;
+> `PROTOCOL.md` is the *reference*.
+
 - [x] **Resolved — wire format `00 COBS(packet) 00`, no `start_byte`, no
       `len`** (supersedes the earlier `<start_byte><cmd:1><len:2>...`
       draft). COBS guarantees no `0x00` inside the encoded bytes, so the
@@ -280,8 +285,28 @@ being used purely as a library from Python application code.
           from the unclamped count, i.e. an inconsistent profile instead of
           an error. Fine for Python callers; the dispatcher must validate
           strictly before handing the buffer to C.
-- [ ] CRC16 over the whole packet before CRC. Variant not fixed yet —
-      proposed CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), table-driven.
+- [x] **Resolved — CRC16/CCITT-FALSE (poly 0x1021, init 0xFFFF), 256-entry
+      table-driven**, over the whole packet before the CRC field.
+      Implemented and tested in `src/bcp_frame.py` (`tests/test_bcp_frame.py`
+      — known-answer vector `crc16(b"123456789") == 0x29B1`, the standard
+      catalogue check value for this variant). **Measured on real
+      hardware, not assumed** — Waveshare RP2040-Zero (RP2040), MicroPython
+      1.29.0, plain bytecode (no `@native`/`@viper`), via `mpremote run`:
+
+      | variant | µs/byte | vs. table256 |
+      |---|---|---|
+      | 256-entry table (chosen) | ~12.6 | 1× |
+      | 16-entry nibble table | ~24.9 | 2× slower |
+      | bitwise, no table | ~87.5 | 7× slower |
+      | (for comparison) COBS encode | ~17.5 | same order as CRC |
+
+      256-entry wins outright — fastest *and* its 512 B ROM cost is
+      negligible against RP2040's flash, so there's no ROM-vs-speed
+      tradeoff pushing towards the smaller table. Worst-case framing cost
+      (`LOAD_PROFILE`, ~1.4 KB, COBS + CRC together) ≈ 40 ms — fine since
+      that frame is sent once per rifle/ammo setup, not per shot; small
+      frames (`Request`, 16 B) cost well under 1 ms, negligible next to
+      the actual integration compute time.
 - [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
       so there is nothing to reply to); host relies on a timeout. Optional
       drop counter reported via `IDENT`.
@@ -339,11 +364,35 @@ being used purely as a library from Python application code.
 
 ## Epic 5 — Streaming (Y-modem-like)
 
-- [ ] `STREAM_START(cmd, filter_flags, range/step, ...)` → server replies
-      with a sequence of `STREAM_DATA` frames — full trajectories are never
-      returned as one packet.
-- [ ] `STREAM_END` — final frame carrying the `stop_reason` code already
-      produced by `tiny_bclibc_integrate_stream`.
+- [x] **Superseded — no `STREAM_START`/`STREAM_DATA`/`STREAM_END`.** Per
+      Epic 3's resolved framing, `INTEGRATE`/`INTEGRATE_FAST` stream on
+      their own: a sequence of `status=MORE` frames (full trajectories are
+      never returned as one packet), terminated by a final `status=OK`
+      frame carrying the `total`/`reason` (`tiny_bclibc_integrate_stream`'s
+      stop reason). See `PROTOCOL.md` §4.4/§4.4a for the exact frame
+      layout.
+- [x] **Resolved — `INTEGRATE_FAST` alongside `INTEGRATE`, same request,
+      thinner per-row wire struct.** `INTEGRATE`'s `MORE` frames carry the
+      full 16-field `TrajectoryData` row (64 B sp / 124 B dp). Most
+      callers only need a few fields (holdover angles for a
+      scope/reticle), and the row size directly gates **per-point
+      latency**, not just total bandwidth -- this matters most once the
+      UART transport epic lands (out of phase-1 scope, see the non-goals
+      above, but the frame layer is transport-agnostic by design, so this
+      is decided now rather than retrofitted later). On a serial link,
+      byte transmission time itself dominates, not CPU-side COBS/CRC cost:
+      at 115200 baud (8N1, ~86.8 µs/byte) a full double-precision row
+      (124 B) takes ~10.8 ms to transmit versus ~1.4 ms for a 16 B
+      compact row -- both well above the ~12.6 µs/byte CRC16 cost measured
+      in Epic 3, so on UART the wire itself sets the pace and row size is
+      the only lever that shortens time-to-next-point. `INTEGRATE_FAST`'s
+      row (`FastTrajData`, `PROTOCOL.md` §4.5a): `distance_ft,
+      drop_angle_rad, windage_angle_rad, velocity_fps` (16 B, fixed
+      regardless of build precision since all wire floats are `f32`).
+      Both commands run the identical underlying
+      `tiny_bclibc_integrate_stream()` call -- `INTEGRATE_FAST` is a
+      thinner wire projection of the same computed rows, not a cheaper
+      computation, so it costs nothing extra on USB CDC1 either.
 - [ ] **Ack scheme — still open, latency vs. reliability tradeoff not yet
       resolved.** Three candidates on the table:
   - **(a) Y-modem-style windowed ack** (current lean) — reliable, simple
@@ -489,6 +538,11 @@ being used purely as a library from Python application code.
       actual single-core target shows up.
 
 ## Epic 8 — Commands on top of existing structures (no a7p)
+
+> Byte-level layout (per-command struct fields) lives in
+> [`PROTOCOL.md`](PROTOCOL.md) -- kept in one place instead of duplicated
+> across backlog bullets. This epic tracks the *decisions*; `PROTOCOL.md`
+> is the *reference*.
 
 - [x] **Resolved — `LOAD_PROFILE`/`LOAD_CONDITIONS` split** (not an a7p
       blob either way — the fields below still map onto `_SHOT_PROPS_DESC`
