@@ -1,10 +1,10 @@
 # Ballistic Co-Processor (BCP) — Implementation Backlog
 
 Working backlog for turning `micropython-bclibc` into a standalone "ballistic
-co-processor" (BCP) firmware application: a stateless-except-cached-profile module
-that answers `LOAD_PROFILE` / `INTEGRATE` / `INTEGRATE_AT` / `FIND_ZERO_ANGLE`
-/ etc. requests over a framed command protocol, instead of being used purely
-as a library from Python application code.
+co-processor" (BCP) firmware application: a stateless-except-cached-profile
+module that answers `LOAD_PROFILE` / `LOAD_CONDITIONS` / `INTEGRATE` /
+`INTEGRATE_AT` / etc. requests over a framed command protocol, instead of
+being used purely as a library from Python application code.
 
 ## Target platforms (phase 1)
 
@@ -246,21 +246,28 @@ as a library from Python application code.
       little-endian. `type` = command, `cmd | 0x80` in a response; `seq`
       set by the host and echoed back (response matching, Epic 6
       generation for `INTERRUPTED`, Epic 5 option (c) `RESEND`); `status`
-      0 in requests. Payload reuses the internal packed layouts
-      (`LOAD_PROFILE` = the `Shot` buffer byte-for-byte). Max packet
-      ≈ 1.4 KB (`LOAD_PROFILE`: 100 + 16·16 + 128·8 = 1380 B + header +
-      CRC) → fixed 1536 B RX buffer.
+      0 in requests. **`LOAD_PROFILE`/`LOAD_CONDITIONS` now have their own
+      wire layouts, distinct from the internal `_SHOT_DESC` buffer** (see
+      the split above and Epic 8) — the dispatcher unpacks each into the
+      persistent internal `Shot` buffer's existing (non-contiguous)
+      offsets rather than writing it in place. Max packet
+      ≈ 1.1 KB (`LOAD_PROFILE`'s drag table, up to 128 pts: 64 B fixed +
+      128·8 = 1088 B + header + CRC) → fixed 1536 B RX buffer still covers
+      it with margin.
 - [x] **Resolved — array element counts:** every variable-length part is
       preceded by its count at a fixed position in the payload; the
       payload length (known from the frame) must **equal** the size
       computed from the counts. Receiver order: counts ≤ caps → compute
       expected size → `==` payload length. Reply `ERR_BAD_ARG` on a count
       over its cap, `ERR_BAD_SIZE` on a size mismatch.
-    - **`LOAD_PROFILE`:** counts already live in the `Shot` header —
-          `[96] drag_type:u8`, `[97] wind_count:u8` (≤ 16),
-          `[98] drag_count:u16` (≤ 128). Expected size
-          `100 + wind_count·16 + (drag_type == CUSTOM ? drag_count·8 : 0)`
-          — `drag_count` is ignored for G1/G7.
+    - **`LOAD_PROFILE`** (own wire layout, no winds — see Epic 8):
+          `drag_type:u8, drag_count:u16` (≤ 128) precede the drag table.
+          Expected size = fixed profile fields +
+          `(drag_type == CUSTOM ? drag_count·8 : 0)` — `drag_count` is
+          ignored for G1/G7.
+    - **`LOAD_CONDITIONS`** (own wire layout — see Epic 8): `wind_count:u8`
+          (≤ 16) precedes the wind array. Expected size = fixed
+          atmosphere/geometry fields + `wind_count·16`.
     - **Stream `MORE` frames:** `row_idx:u16, count:u8, rsvd:u8,
           rows[count]`, size exactly `4 + count·traj_row_size` (explicit
           `count` as the cross-check, even though it is derivable).
@@ -280,10 +287,29 @@ as a library from Python application code.
       drop counter reported via `IDENT`.
 - [x] **Resolved:** `FIND_APEX` and `FIND_MAX_RANGE` are in the v1 command
       set (both already natively bound).
-- [ ] Command enum: `LOAD_PROFILE, INTEGRATE, INTEGRATE_AT,
-      FIND_ZERO_ANGLE, FIND_APEX, FIND_MAX_RANGE, RESET, IDENT,
-      STREAM_START, STREAM_END, ABORT, ACK/NAK/ERROR`. `SET_BLE_PASS` is
-      deferred to the BLE transport epic (see Epic 8) — not part of v1.
+- [ ] Command enum: `LOAD_PROFILE, LOAD_CONDITIONS, INTEGRATE,
+      INTEGRATE_AT, FIND_APEX, FIND_MAX_RANGE, RESET, IDENT, STREAM_START,
+      STREAM_END, ABORT, ACK/NAK/ERROR`. **`FIND_ZERO_ANGLE` dropped from
+      the wire command set** — see Epic 8 (now internal-only,
+      auto-triggered by `LOAD_PROFILE`/`LOAD_CONDITIONS`). **`RESET`
+      redefined, not dropped** — see Epic 8: an application soft-reset,
+      not a data-clearer and not an MCU reboot. `SET_BLE_PASS` is deferred
+      to the BLE transport epic (see Epic 8) — not part of v1.
+- [x] **Resolved — `LOAD_PROFILE` split from `LOAD_CONDITIONS`**
+      (supersedes "`LOAD_PROFILE` = the `Shot` buffer byte-for-byte"
+      below — see Epic 8 for the field-level breakdown). Rationale: the
+      two change at very different rates and gain nothing from being one
+      message —
+      rifle/ammo/zero (`LOAD_PROFILE`) is set up once per session, while
+      wind/atmosphere/shot-geometry (`LOAD_CONDITIONS`) can be updated
+      every few shots as the field environment changes. Bundling them
+      meant resending ~1.4 KB just to push a new wind reading. Split max
+      sizes: `LOAD_PROFILE` ≈ 1.1 KB (dominated by the drag table, up to
+      128 pts), `LOAD_CONDITIONS` ≈ 300 B (dominated by winds, up to 16).
+      `INTEGRATE`'s own request frame was already thin (`_REQ_DESC`, 16 B:
+      `range_limit_ft/range_step_ft/time_step/filter_flags`) and needs no
+      change — it already carries only per-call parameters, not shot
+      data.
       **Proposed, not confirmed:** fold `ACK/NAK/ERROR` into the header's
       `status` (`OK` / `MORE` / `INTERRUPTED` / `ERR_*`) instead of
       commands, and drop `STREAM_START` — `INTEGRATE` itself streams
@@ -464,11 +490,86 @@ as a library from Python application code.
 
 ## Epic 8 — Commands on top of existing structures (no a7p)
 
-- [ ] `LOAD_PROFILE` — accepts a wire payload that maps directly onto
-      `Shot`/`Config` (the same `_SHOT_DESC`-style packed layout already
-      used internally), not an a7p blob.
-- [ ] `RESET` — needs a definition: clear cached `Shot` state, soft-reset
-      the MCU, or both under different codes?
+- [x] **Resolved — `LOAD_PROFILE`/`LOAD_CONDITIONS` split** (not an a7p
+      blob either way — the fields below still map onto `_SHOT_PROPS_DESC`
+      / `_CFG_DESC`, just regrouped by how often each changes):
+    - **`LOAD_PROFILE`** — rifle + ammo + solver tuning + the zero
+          *distance* (not the angle — see below), cached until the next
+          `LOAD_PROFILE` or `RESET`:
+          `bc, weight_grain, diameter_inch, length_inch,
+          muzzle_velocity_fps, sight_height_ft, twist_inch` (bullet/rifle),
+          `zero_distance_ft` (**replaces `barrel_elevation_rad`** — see
+          below), `config` (`step_multiplier, zero_finding_accuracy,
+          minimum_velocity, maximum_drop, gravity_constant,
+          minimum_altitude, max_iterations`), `drag_type` + drag table
+          (G1/G7 selector or custom `mach/cd` points, ≤ 128 — see the
+          array-count rule above). ≈ 1.1 KB max (dominated by a full
+          custom drag table).
+    - **`LOAD_CONDITIONS`** — atmosphere + shot geometry + wind, expected
+          to change every few shots as the field environment shifts:
+          `temp_c, pressure_hpa, altitude_ft, humidity` (atmosphere),
+          `look_angle_rad, barrel_azimuth_rad, cant_angle_rad` (shot
+          geometry/pitch), `latitude_deg, azimuth_deg` (Coriolis), plus
+          the wind array (≤ 16 — see the array-count rule above). ≈ 300 B
+          max. **Not loaded yet** at first `INTEGRATE`/`FIND_*`: falls
+          back to `Shot()`'s existing Python-side defaults (ICAO standard
+          atmosphere, no wind, zero cant/look angle) — same defaults,
+          just applied on-device instead of by the caller.
+    - **Resolved — internal `Shot` layout stays untouched.** `_SHOT_DESC`
+          interleaves profile and condition fields inside the same
+          68-byte props block (e.g. `bc` at offset 0, `temp_c` at 28,
+          `barrel_elevation_rad` at 48), so the wire split does not map
+          onto two contiguous halves of it — and it shouldn't try to:
+          `_SHOT_DESC`/`_SHOT_PROPS_DESC` is already tested and used as-is
+          by non-BCP callers. The dispatcher keeps one persistent internal
+          `Shot` buffer and scatters each `LOAD_*`'s wire fields to that
+          buffer's existing offsets, rather than reordering the internal
+          struct to match the wire grouping.
+    - **Resolved — `FIND_ZERO_ANGLE` is not a wire command.** It stays an
+          internal function only, called automatically by the dispatcher
+          — not something a client invokes directly. `LOAD_PROFILE`
+          carries `zero_distance_ft`, not a pre-solved angle: the
+          elevation needed to hit that distance depends on the current
+          atmosphere (air density affects drop), so it can't be supplied
+          by the client once and cached verbatim — it has to be
+          *recomputed* whenever either half of the picture changes.
+          Dispatcher behavior: after a `LOAD_PROFILE` (against whatever
+          conditions are cached, or the defaults above if none yet) *and*
+          after every `LOAD_CONDITIONS` (against the cached profile's
+          `zero_distance_ft`), internally call `find_zero_angle()` and
+          store the result into the internal `Shot`'s
+          `barrel_elevation_rad` before replying `OK`. **Consequence:** a
+          zero-solve failure (no bracket, no convergence — see
+          `engine.h`'s `find_zero_angle` error paths) must now surface as
+          an error status on the triggering `LOAD_PROFILE`/
+          `LOAD_CONDITIONS` response, since there is no separate
+          `FIND_ZERO_ANGLE` response to carry it. **Resolved:** the `OK`
+          response to both `LOAD_PROFILE` and `LOAD_CONDITIONS` echoes
+          back the solved `barrel_elevation_rad:f32` as telemetry — cheap
+          (4 B), and it's the only way the host learns the current zero
+          without a redundant query round-trip.
+- [x] **Resolved — `RESET` = application soft-reset, not a data-clearer
+      and not an MCU reboot.** Corrects the earlier "drop it, a full
+      reload already fixes any stuck state" framing — that argument
+      addressed only *targeted clearing* (making `LOAD_PROFILE` alone, or
+      `LOAD_CONDITIONS` alone, act as if nothing were cached), which is
+      indeed redundant with a full overwrite. `RESET`'s actual job is
+      different: **collapse the entire dispatcher back to its
+      power-on-equivalent state in one command**, without the client
+      needing to know or resupply anything:
+    - Discards cached profile *and* cached conditions/zero (back to "no
+          profile loaded" — `INTEGRATE`/`FIND_*` before the next
+          `LOAD_PROFILE` should error, not run on stale data).
+    - Resets dispatcher bookkeeping: current command generation/seq
+          tracking (Epic 6), any in-progress stream state (Epic 5), drop
+          counters (Epic 3).
+    - Implies the same preemption `ABORT` already does — a `RESET` while
+          something is running must kill/relaunch the worker first (Epic
+          6's rule), then clear state; it is not a *replacement* for
+          `ABORT`, it is a superset that also wipes cached data.
+    - Explicitly **not** `machine.reset()`/an MCU reboot — that stays a
+          CDC0 REPL/firmware-update concern, out of scope for the BCP
+          command set.
 - [x] **Resolved:** `SET_BLE_PASS` is deferred entirely until the BLE
       transport epic — no stub in v1, to avoid dead code in the meantime.
 - [ ] `IDENT` — version + capabilities; minimum viable version is just the
