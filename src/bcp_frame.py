@@ -28,9 +28,19 @@ is 0 in a request; in a response it is one of the STATUS_* codes below.
 # in tests/test_bcp_frame.py.
 _CRC_POLY = 0x1021
 
+# array('H', ...) instead of a plain list: a list of 256 ints is really a
+# 256-pointer object array (~1040 B measured on RP2040), while a packed
+# uint16 array is ~528 B for the same 256 entries -- same values, same
+# lookup, about half the RAM, ~5% slower (measured, within noise next to
+# the table-size choice itself; see BACKLOG.md Epic 3).
+try:
+    from array import array as _array
+except ImportError:
+    _array = None
+
 
 def _make_crc_table():
-    table = []
+    table = _array("H", bytes(512)) if _array else [0] * 256
     for i in range(256):
         crc = i << 8
         for _ in range(8):
@@ -38,7 +48,7 @@ def _make_crc_table():
                 crc = ((crc << 1) ^ _CRC_POLY) & 0xFFFF
             else:
                 crc = (crc << 1) & 0xFFFF
-        table.append(crc)
+        table[i] = crc
     return table
 
 
