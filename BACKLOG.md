@@ -263,9 +263,11 @@ being used purely as a library from Python application code.
       dispatcher unpacks each into the persistent internal `Shot`
       buffer's existing (non-contiguous) offsets rather than writing it
       in place. Max packet
-      ≈ 1.0 KB (`LOAD_PROFILE`'s drag table, up to 128 pts: 36 B fixed +
-      128·8 = 1060 B + header + CRC) → fixed 1536 B RX buffer still covers
-      it with margin.
+      ≈ 1.6 KB (`LOAD_PROFILE`'s `CUSTOM` drag table, up to 200 pts —
+      raised from the library's earlier 128-point limit, see the
+      "Resolved — MultiBC wire exposure" bullet in Epic 8: 36 B fixed +
+      200·8 = 1636 B + header + CRC = 1642 B) → **RX buffer bumped to
+      2048 B** (was 1536 B, no longer enough) to keep comfortable margin.
 - [x] **Resolved — array element counts:** every variable-length part is
       preceded by its count at a fixed position in the payload; the
       payload length (known from the frame) must **equal** the size
@@ -273,12 +275,12 @@ being used purely as a library from Python application code.
       expected size → `==` payload length. Reply `ERR_BAD_ARG` on a count
       over its cap, `ERR_BAD_SIZE` on a size mismatch.
     - **`LOAD_PROFILE`** (own wire layout, no winds — see Epic 8):
-          `drag_type:u8, drag_count:u16` (≤ 128) precede the drag table.
-          Expected size = fixed profile fields +
-          `(drag_type == CUSTOM ? drag_count·8 : 0)` — `drag_count` is
-          ignored for G1/G7.
+          `drag_type:u8, drag_count:u16` (≤ 200 for `CUSTOM`, ≤ 5 for
+          `*_MULTIBC`) precede the drag table. Expected size = fixed
+          profile fields + `drag_count·8` for `CUSTOM`/`*_MULTIBC`
+          (`0` for G1/G7, `drag_count` ignored there).
     - **`LOAD_CONDITIONS`** (own wire layout — see Epic 8): `wind_count:u8`
-          (≤ 16) precedes the wind array. Expected size = fixed
+          (≤ 5) precedes the wind array. Expected size = fixed
           atmosphere/geometry fields + `wind_count·16`.
     - **`LOAD_CONFIG`** (own wire layout — see Epic 8): no variable-length
           part, no count field — expected size is just its fixed 28 B.
@@ -290,7 +292,8 @@ being used purely as a library from Python application code.
           (`src/tiny_bclibc_mp.c`, Shot unpacking): it checks
           `bi.len < needed` (so trailing bytes from a merged/truncated frame
           pass), and silently clamps `wind_count` to 16 / `drag_count` to
-          128 — with `wind_count > 16` the drag offset is still computed
+          200 (raised from 128, see Epic 8's "MultiBC wire exposure"
+          bullet) — with `wind_count > 16` the drag offset is still computed
           from the unclamped count, i.e. an inconsistent profile instead of
           an error. Fine for Python callers; the dispatcher must validate
           strictly before handing the buffer to C.
@@ -313,7 +316,8 @@ being used purely as a library from Python application code.
       minimizing is the table's **RAM** footprint (not ROM/flash — the
       table is computed once at import, not a frozen constant, so it
       lives on the heap either way; see the follow-up below). Worst-case
-      framing cost (`LOAD_PROFILE`, ~1.0 KB, COBS + CRC together) ≈ 30 ms
+      framing cost (`LOAD_PROFILE`, ~1.6 KB — the 200-point `CUSTOM`
+      drag-table cap, see Epic 8 — COBS + CRC together) ≈ 49 ms
       — fine since that frame is sent once per rifle/ammo setup, not per
       shot; small frames (`Request`, 16 B) cost well under 1 ms,
       negligible next to the actual integration compute time.
@@ -415,14 +419,17 @@ being used purely as a library from Python application code.
       a **large fixed per-call overhead (~100 µs)** — channel config +
       `dma.config()` + busy-poll `dma.active()` — that dominates at the
       protocol's typical small frame sizes and makes it *slower* than
-      `viper` below ~300 B:
+      `viper` below ~300 B (sizes below are what `LOAD_CONDITIONS`/
+      `LOAD_PROFILE`'s max payloads were *at the time this was measured*,
+      before their caps were revised further down in this epic — kept as
+      real data points, not re-measured against the current caps):
 
       | size | crc `viper` | crc DMA (incl. Python-level setup) |
       |---|---|---|
       | 16 B (`Request`) | 35.7 µs | 106.0 µs |
       | 68 B (`MORE` frame, 4 rows) | 60.1 µs | 102.3 µs |
-      | 296 B (`LOAD_CONDITIONS` max) | 167.7 µs | 102.1 µs |
-      | 1060 B (`LOAD_PROFILE` max) | 527.5 µs | **109.8 µs** |
+      | 296 B (`LOAD_CONDITIONS` max at the time) | 167.7 µs | 102.1 µs |
+      | 1060 B (`LOAD_PROFILE` max at the time) | 527.5 µs | **109.8 µs** |
 
       Only wins for the rare large `LOAD_PROFILE` frame, loses for every
       frequent small one — the opposite of "DMA is just strictly faster
@@ -504,7 +511,11 @@ being used purely as a library from Python application code.
       sizes at the time: `LOAD_PROFILE` ≈ 1.1 KB (dominated by the drag
       table, up to 128 pts), `LOAD_CONDITIONS` ≈ 300 B (dominated by
       winds, up to 16) — `LOAD_PROFILE` shrank further to ≈ 1.0 KB once
-      solver tuning also split out into its own `LOAD_CONFIG` (below).
+      solver tuning also split out into its own `LOAD_CONFIG` (below), and
+      later grew back to ≈ 1.6 KB once the `CUSTOM` drag-table cap itself
+      was raised from 128 to 200 points (see the "Resolved — MultiBC wire
+      exposure" bullet further down this epic) — the two changes moved
+      opposite directions for unrelated reasons, not a reversal of either.
       `INTEGRATE`'s own request frame was already thin (`_REQ_DESC`, 16 B:
       `range_limit_ft/range_step_ft/time_step/filter_flags`) and needs no
       change — it already carries only per-call parameters, not shot
@@ -745,25 +756,92 @@ being used purely as a library from Python application code.
 - [x] **Resolved — `LOAD_PROFILE`/`LOAD_CONDITIONS` split** (not an a7p
       blob either way — the fields below still map onto `_SHOT_PROPS_DESC`
       / `_CFG_DESC`, just regrouped by how often each changes):
-    - **`LOAD_PROFILE`** — rifle + ammo + solver tuning + the zero
-          *distance* (not the angle — see below), cached until the next
-          `LOAD_PROFILE` or `RESET`:
+    - **`LOAD_PROFILE`** — rifle + ammo + the zero *distance* (not the
+          angle — see below), cached until the next `LOAD_PROFILE` or
+          `RESET`. Solver tuning (`step_multiplier` etc.) does **not**
+          live here — split further into its own `LOAD_CONFIG`, see the
+          later "Resolved — LOAD_CONFIG" bullet in this epic:
           `bc, weight_grain, diameter_inch, length_inch,
           muzzle_velocity_fps, sight_height_ft, twist_inch` (bullet/rifle),
           `zero_distance_ft` (**replaces `barrel_elevation_rad`** — see
-          below), `config` (`step_multiplier, zero_finding_accuracy,
-          minimum_velocity, maximum_drop, gravity_constant,
-          minimum_altitude, max_iterations`), `drag_type` + drag table
-          (G1/G7 selector or custom `mach/cd` points, ≤ 128 — see the
-          array-count rule above). ≈ 1.1 KB max (dominated by a full
-          custom drag table).
+          below), `drag_type` + drag table. **Corrected — `drag_type` is
+          a tagged union, not just a table selector**, per the "Resolved
+          — MultiBC wire exposure" bullet right below: `0`=G1,
+          `1`=G7 (static table, `bc` used normally), `2`=CUSTOM (hand-built
+          `mach/cd` curve, ≤ 200, `bc` used normally), `3`/`4`=
+          `G1_MULTIBC`/`G7_MULTIBC` (BC/Mach breakpoints, ≤ 5, `bc`
+          **ignored** — device runs Epic 2's `build_multibc()` and forces
+          `bc=1.0` internally). ≈ 1.6 KB max (dominated by a full
+          200-point `CUSTOM` curve — `*_MULTIBC`'s 5-point cap is far
+          smaller, 40 B).
+    - **Resolved — MultiBC wire exposure, and the drag-table size caps.**
+          Epic 2's `MultiBC()`/`build_multibc()` had no wire exposure at
+          all until this pass — `drag_type` 0/1/2 only ever covered "use
+          the static reference table" or "here is a curve I already
+          computed," never "here are BC/Mach breakpoints, device: fold
+          them into a curve," which is the entire point of Epic 2.
+          `G1_MULTIBC`/`G7_MULTIBC` close that gap: `drag_points` holds
+          `drag_count × {mach:f32, bc:f32}` breakpoints (matching
+          `MultiBC()`'s own existing `(mach, bc)` pair order exactly, not
+          a new shape), the dispatcher runs the same `build_multibc()`
+          call `MultiBC()` makes today, producing a curve of exactly the
+          reference table's own length (`G1_N`/`G7_N`, **not**
+          `drag_count` — that's only the *input* breakpoint count), then
+          constructs the profile with `bc` forced to `1.0`, matching
+          `MultiBC()`'s documented contract (the BC-ratio scaling is
+          already baked into the curve, so the scalar has to be `1.0` or
+          it gets applied twice). **Why the wire's `bc` field (offset 0)
+          is ignored rather than repurposed or removed in `*_MULTIBC`
+          mode:** once a curve carries multiple BC/Mach breakpoints there
+          is no single scalar BC left to put there, but making every
+          other field's offset conditional on `drag_type` just to reclaim
+          4 don't-care bytes isn't worth it. Contract: the dispatcher
+          does not read/validate this field in `*_MULTIBC` mode; by
+          convention (not enforced) a client sends `1.0` there anyway, so
+          a packet capture still reads sensibly to a human.
+          **Size caps, chosen to match the real precedent of the
+          established `.a7p` profile schema** (`coef_rows` `maxItems`:
+          200 for `bc_type=CUSTOM`, 5 for G1/G7 multi-row), not picked
+          arbitrarily: `CUSTOM` drag table ≤ 200 points, `*_MULTIBC`
+          breakpoints ≤ 5, `LOAD_CONDITIONS`' wind array ≤ 5 (next
+          bullet). **The `CUSTOM` cap required an actual library change,
+          not just a wire-level limit:** `tiny_bclibc`'s own internal cap
+          (`_MAX_DRAG_PTS` in `tiny_bclibc.py`, `MAX_DRAG_PTS` in
+          `tiny_bclibc_mp.c` — sizes the `ShotHolder`'s `mach_data`/
+          `cd_data`/`curve_buf` arrays) was **128**, below 200; a wire cap
+          of 200 alone would do nothing, since the existing C parser
+          silently clamps anything past its own internal limit (already
+          documented above as a gotcha). Raised `_MAX_DRAG_PTS`/
+          `MAX_DRAG_PTS` from 128 to 200 in both files. **Verified for
+          real, not just edited:** rebuilt the natmod (`make dist`,
+          x64), ran it through the unix port against
+          `tests/test_bclibc.py` — 18/18 PASS, `MultiBC`'s own G1/G7
+          identity checks unaffected (`G1_N`=79/`G7_N`=84 are both well
+          under either 128 or 200, so this only ever raises the ceiling,
+          changes nothing at smaller sizes); separately fed an actual
+          200-point custom curve through `Shot()`/`integrate()` end to
+          end (not just re-running the existing suite, which never
+          exercises a curve anywhere near either limit) — produced a
+          sane trajectory; confirmed a 201-point curve still clamps to
+          200 instead of crashing (the existing, unfixed clamp behavior).
+          Cost: `ShotHolder` grows by `(200-128) * 4 real_t` for each of
+          `mach_data`/`cd_data` (+576 B, sp) and `(200-128) * 4 real_t`
+          `TINY_BCLIBC_CurvePoint`s in `curve_buf` (+1152 B, sp) — **+1728
+          B per `Shot()` instance** on single-precision builds, computed
+          directly from the struct definitions, not measured on hardware
+          this time. Fine on RP2350/ESP32-S3's RAM budgets; a real, if
+          small, line item worth knowing about. `*_MULTIBC`'s cap of 5
+          and `LOAD_CONDITIONS`' wind cap of 5 both stay well inside the
+          library's own existing limits (`MAX_BC_POINTS`=16,
+          `_MAX_WINDS`=16) — no library change needed for either.
     - **`LOAD_CONDITIONS`** — atmosphere + shot geometry + wind, expected
           to change every few shots as the field environment shifts:
           `temp_c, pressure_hpa, altitude_ft, humidity` (atmosphere),
           `look_angle_rad, barrel_azimuth_rad, cant_angle_rad` (shot
           geometry/pitch), `latitude_deg, azimuth_deg` (Coriolis), plus
-          the wind array (≤ 16 — see the array-count rule above). ≈ 300 B
-          max. **Not loaded yet** at first `INTEGRATE`/`FIND_*`: falls
+          the wind array (≤ 5 — see the array-count rule above and the
+          size-cap bullet just above). ≈ 120 B max. **Not loaded yet** at
+          first `INTEGRATE(_FAST)`/`INTEGRATE_AT`: falls
           back to `Shot()`'s existing Python-side defaults (ICAO standard
           atmosphere, no wind, zero cant/look angle) — same defaults,
           just applied on-device instead of by the caller.

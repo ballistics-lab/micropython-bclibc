@@ -166,7 +166,7 @@ class FrameDecoder:
     BACKLOG.md Epic 3).
     """
 
-    def __init__(self, max_frame_size=1536):
+    def __init__(self, max_frame_size=2048):
         self._max_frame_size = max_frame_size
         self._buf = bytearray()
 
