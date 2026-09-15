@@ -409,6 +409,21 @@ being used purely as a library from Python application code.
           buffer instead (same pattern `tiny_bclibc`'s `ShotHolder`
           already uses), to avoid GC-heap churn on every frame once this
           runs continuously rather than in a benchmark loop.
+    - **ROM/RAM cost, measured the same way Epic 2 measured its own
+          (real linked firmware diff, same board, not the raw
+          pre-link `.o`):** built `WAVESHARE_RP2040_ZERO` twice, with and
+          without `BCLIBC_BCP=1` (otherwise identical) —
+          **+1524 B flash (`.text`), +512 B RAM (`.bss`)**. The RAM
+          number is exactly the 256-entry CRC table (`256 × 2 B`),
+          confirming again that it's heap/`.bss`-resident, not a frozen
+          flash constant, same conclusion as the earlier Python-side
+          RAM-vs-ROM correction, just now with the real C linked number
+          instead of an isolated micro-benchmark. Both figures include
+          the still-placeholder `src/bclibc_bcp.py`'s frozen bytecode
+          (negligible, ~11 lines) alongside `_bcp_frame` itself — not
+          separated out, but `_bcp_frame` dominates either way. Under
+          0.25% of RP2040's 640 KB flash and 0.2% of its 256 KB RAM —
+          not a design constraint at this size.
 - [x] **Corrected — `src/bcp_frame.py` is not kept on as a permanent
       "oracle."** The earlier framing (a maintained parallel Python
       implementation, kept around specifically to diff the C
