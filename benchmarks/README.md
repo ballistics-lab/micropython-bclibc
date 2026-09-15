@@ -5,6 +5,33 @@
 
 ---
 
+## BCP wire — `INTEGRATE_FAST` over real CDC1 vs local (no wire)
+
+**Script:** `bcp_wire_bench.py` (host-side; run against a board running
+`bclibc_bcp.start(cdc1)` — see BACKLOG.md Epic 4). Same shot/request as
+the cross-platform table above (G7/168gr/2750fps, 1 km/10 m steps), timed
+from the host across a real USB CDC1 connection, and compared against the
+same firmware's own local (in-REPL, no wire) number for a true
+wire-vs-no-wire delta:
+
+| Board | local (no wire) | CDC1 wire | overhead | ratio |
+|---|---:|---:|---:|---:|
+| RP2040-Zero | 313.98 ms | 355.65 ms | +41.7 ms | 1.13× |
+| RP2350 (Pico 2) | 17.90 ms | 43.42 ms | +25.5 ms | 2.43× |
+
+The ~25-42 ms overhead (framing + USB + `LOAD_PROFILE`'s own zero-solve)
+is roughly constant across both boards; it only dominates on RP2350
+because there's so little solve time left to hide it behind, not because
+CDC1 itself is slower there. USB CDC-ACM "baud rate" has no effect on
+throughput (115200/460800/921600 measured within noise of each other) —
+expected, since it's a virtual serial port over USB bulk transfer, not a
+real UART. See BACKLOG.md Epic 4's own writeup for the full story,
+including a real pyserial gotcha (`Serial.read(N)` blocking for the whole
+timeout on a short response) that inflated the first measurement of this
+5-6× before it was found and fixed.
+
+---
+
 ## Cross-platform — `integrate` 1 km, 10 m steps
 
 | Platform | Engine / Precision | avg ms | shots/sec | vs RP2040 SP |

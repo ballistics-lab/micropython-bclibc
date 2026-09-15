@@ -44,6 +44,10 @@
 #include "py/obj.h"
 #include "py/runtime.h"
 #include "py/misc.h"
+#include "py/objtuple.h"
+#include "py/stream.h"
+#include "py/mphal.h"
+#include "py/nlr.h"
 
 #include "tiny_bclibc.h"
 #include "generated/bclibc_mp/version.h"
@@ -972,6 +976,248 @@ static mp_obj_t mp_bcp_dispatch(size_t n_args, const mp_obj_t *args)
     }
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bcp_dispatch_obj, 3, 4, mp_bcp_dispatch);
+
+/* ── run(stream) -- the read/decode/dispatch/write loop (Epic 4) ─────────
+ * Everything above this point (parse_frame/build_frame in bcp_frame_mp.h,
+ * dispatch() here) was, until now, only ever driven one call at a time from
+ * Python (tests/test_bcp_dispatch_native.py) -- see this file's own top
+ * comment: "A future C read/write loop calls both: parse_frame() ->
+ * dispatch() -> build_frame(). For now dispatch() is also directly
+ * callable from Python". This is that loop, finally written. Per
+ * BACKLOG.md Epic 1's "Entry point" bullet and Epic 3's "implementation
+ * language is C" resolution: `run()` owns the whole loop natively --
+ * `bclibc_bcp.py` stays thin plumbing that only constructs the transport
+ * object (a `usb.device.cdc.CDCInterface`, see Epic 4's own hardware
+ * bring-up notes) and calls `_tiny_bclibc.run(cdc1)`, which never returns
+ * under normal operation (matches "start the dispatcher and return" only
+ * at the Python level -- Epic 7's optional second-core placement is what
+ * actually makes that non-blocking for the CDC0 REPL; running it
+ * synchronously on the main core, as this first cut does when called
+ * directly, blocks that core exactly as documented until Epic 7 lands).
+ *
+ * `stream` is any object satisfying MicroPython's stream protocol
+ * (`io.IOBase` with `readinto`/`write`/`ioctl`, same contract
+ * `machine.UART` and this project's own CDCInterface satisfy) -- driven
+ * via `mp_stream_rw()` (py/stream.h), never through a per-frame trip back
+ * into Python bytecode. This is also what makes `run()` testable on the
+ * unix build with no real hardware at all: tests/test_bcp_run_native.py
+ * drives it against a plain Python mock stream object.
+ *
+ * Framing (PROTOCOL.md §1): accumulate bytes until a 0x00 delimiter, same
+ * algorithm as PROTOCOL.md's own reference decode loop and bcp_frame.py's
+ * (removed) FrameDecoder.feed() -- empty segments (00 00) ignored, an
+ * over-long undelimited run dropped and resynced on the next 0x00 rather
+ * than growing the buffer unboundedly. BCP_MAX_FRAME_SIZE matches Epic 3's
+ * 2048 B RX-buffer precedent (LOAD_PROFILE's worst case, a 200-point
+ * CUSTOM drag table, is ~1.6 KB).
+ */
+#define BCP_MAX_FRAME_SIZE 2048u
+
+/* Context for the currently in-flight run() call's streaming `emit`
+ * callback (INTEGRATE/INTEGRATE_FAST only). Safe as file-scope statics,
+ * not a heap-allocated closure: Epic 6's no-queue rule means dispatch()
+ * calls run synchronously to completion one at a time, so there is never
+ * more than one run() loop -- and therefore never more than one emit
+ * callback -- active at once. */
+static mp_obj_t bcp_run_stream_;
+static uint8_t bcp_run_resp_type_; /* request type_ | 0x80, PROTOCOL.md §2 */
+static uint8_t bcp_run_seq_;
+
+/* Writes one already-COBS/CRC-framed buffer out to bcp_run_stream_ in
+ * full, raising OSError on any real (non-recoverable) write failure --
+ * same as letting mp_stream_write_exactly's errcode propagate anywhere
+ * else in this codebase would. A write failure here means the transport
+ * itself is broken, which is a fair reason for run()'s loop to end rather
+ * than limp on.
+ *
+ * `mp_event_handle_nowait()` after the write matters, not just style: it's
+ * the port's own hook for actually pumping TinyUSB (`tud_task()`) --
+ * `py/scheduler.c`'s own comment on it, and `ports/rp2/rp2_flash.c`'s
+ * "mp_event_handle_nowait() will call the TinyUSB task if needed" -- and
+ * it otherwise only runs from `mp_hal_delay_ms()`'s poll loop, which
+ * `run()`'s own read side only reaches *after* a whole dispatch() call
+ * returns. Without this, a streaming command's `MORE` frames queue up in
+ * `CDCInterface`'s `_wb` ring buffer (only drained once its in-flight USB
+ * transfer's completion callback runs, which itself needs a `tud_task()`
+ * pump to fire) rather than actually reaching the wire between rows --
+ * measured live on real hardware during this session's own bring-up: a
+ * 1 km/10 m-step `INTEGRATE_FAST` (14 `MORE`+`OK` frames) that computes in
+ * ~18 ms standalone on RP2350 was taking ~200 ms end-to-end over CDC1
+ * without this call. */
+static void bcp_run_write_frame(mp_obj_t frame)
+{
+    mp_buffer_info_t fbi;
+    mp_get_buffer_raise(frame, &fbi, MP_BUFFER_READ);
+    int errcode = 0;
+    mp_stream_write_exactly(bcp_run_stream_, fbi.buf, fbi.len, &errcode);
+    mp_event_handle_nowait();
+    if (errcode != 0)
+    {
+        mp_raise_OSError(errcode);
+    }
+}
+
+/* Bound to dispatch()'s optional 4th arg (`emit`) while a streaming
+ * command (INTEGRATE/INTEGRATE_FAST) is in flight -- called once per
+ * `MORE` frame with the raw (status, payload) pair bcp_handle_integrate()
+ * already builds (see that function's own doc comment above). Unlike the
+ * Python-level `emit` tests/test_bcp_dispatch_native.py passes (which just
+ * collects rows for the test to inspect), this one actually frames and
+ * writes each row batch to the wire immediately -- the whole reason `run()`
+ * exists. */
+static mp_obj_t bcp_run_emit(mp_obj_t status_obj, mp_obj_t payload_obj)
+{
+    mp_obj_t frame_args[4] = {
+        MP_OBJ_NEW_SMALL_INT(bcp_run_resp_type_),
+        MP_OBJ_NEW_SMALL_INT(bcp_run_seq_),
+        status_obj,
+        payload_obj,
+    };
+    bcp_run_write_frame(mp_bcp_build_frame(4, frame_args));
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(bcp_run_emit_obj, bcp_run_emit);
+
+/* One already delimiter-stripped, still COBS-encoded segment came in --
+ * parse it, dispatch it, frame and write the result. Reuses
+ * mp_bcp_parse_frame()/mp_bcp_dispatch()/mp_bcp_build_frame() directly
+ * (the exact same tested functions Python callers use) rather than a
+ * second, run()-only copy of any of that logic -- same "don't maintain a
+ * second implementation to diff against" reasoning BACKLOG.md Epic 3
+ * already settled on for bcp_frame.py.
+ *
+ * A raised exception from dispatch() itself (an unrecognized `type_`'s
+ * dev-time NotImplementedError, or anything else going wrong inside a
+ * handler) is caught here and turned into an ERR_INTERNAL response frame
+ * instead of propagating -- one malformed/unsupported frame from the host
+ * must not take down the whole dispatch loop for every other command
+ * still to come. A failure to *read or write* the transport itself is not
+ * caught here (see bcp_run_write_frame/the caller's read loop) -- that
+ * means the transport is broken, which is a fair reason for run() to end.
+ */
+static void bcp_run_handle_segment(const uint8_t *encoded, size_t encoded_len)
+{
+    mp_obj_t encoded_obj = mp_obj_new_bytes(encoded, encoded_len);
+    mp_obj_t parsed = mp_bcp_parse_frame(encoded_obj);
+    if (parsed == mp_const_none)
+    {
+        return; /* dropped: bad COBS / bad CRC / under-length -- already
+                  * counted in bcp_frame_drop_count(), no seq to reply to */
+    }
+
+    size_t n_items;
+    mp_obj_t *items;
+    mp_obj_tuple_get(parsed, &n_items, &items);
+    uint8_t type_ = (uint8_t)mp_obj_get_int(items[0]);
+    uint8_t seq = (uint8_t)mp_obj_get_int(items[1]);
+    mp_obj_t payload_obj = items[3];
+
+    bcp_run_resp_type_ = (uint8_t)(type_ | 0x80u);
+    bcp_run_seq_ = seq;
+
+    mp_obj_t dispatch_args[4] = {
+        MP_OBJ_NEW_SMALL_INT(type_),
+        MP_OBJ_NEW_SMALL_INT(seq),
+        payload_obj,
+        MP_OBJ_FROM_PTR(&bcp_run_emit_obj),
+    };
+
+    nlr_buf_t nlr;
+    mp_obj_t result;
+    if (nlr_push(&nlr) == 0)
+    {
+        result = mp_bcp_dispatch(4, dispatch_args);
+        nlr_pop();
+    }
+    else
+    {
+        mp_obj_t err_args[4] = {
+            MP_OBJ_NEW_SMALL_INT(bcp_run_resp_type_),
+            MP_OBJ_NEW_SMALL_INT(seq),
+            MP_OBJ_NEW_SMALL_INT(BCP_STATUS_ERR_INTERNAL),
+            mp_const_empty_bytes,
+        };
+        bcp_run_write_frame(mp_bcp_build_frame(4, err_args));
+        return;
+    }
+
+    size_t res_n;
+    mp_obj_t *res_items;
+    mp_obj_tuple_get(result, &res_n, &res_items);
+    mp_obj_t frame_args[4] = {
+        MP_OBJ_NEW_SMALL_INT(bcp_run_resp_type_),
+        MP_OBJ_NEW_SMALL_INT(seq),
+        res_items[0], /* status */
+        res_items[1], /* payload */
+    };
+    bcp_run_write_frame(mp_bcp_build_frame(4, frame_args));
+}
+
+/* run(stream) -- never returns under normal operation (see this section's
+ * own top comment). Reads in whatever-sized chunks are ready
+ * (MP_STREAM_RW_ONCE -- a non-blocking stream like CDCInterface(timeout=0)
+ * must not be forced to fill a fixed-size buffer before returning
+ * anything), splits on 0x00 exactly per PROTOCOL.md §1, and hands each
+ * segment to bcp_run_handle_segment(). `mp_is_nonblocking_error()` +
+ * a short `mp_hal_delay_ms()` is the whole "no data right now" path --
+ * see py/modio.c's iobase_read_write(): a Python-level `readinto()`
+ * returning `None` (this project's own CDCInterface does exactly that
+ * when its `timeout` expires with nothing read) is what surfaces as
+ * MP_EAGAIN here, not a special case this file has to know about. */
+static mp_obj_t mp_bcp_run(mp_obj_t stream_obj)
+{
+    bcp_run_stream_ = stream_obj;
+
+    uint8_t *frame_buf = m_new(uint8_t, BCP_MAX_FRAME_SIZE);
+    size_t frame_len = 0;
+    uint8_t rxbuf[64];
+
+    for (;;)
+    {
+        int errcode = 0;
+        mp_uint_t n = mp_stream_rw(stream_obj, rxbuf, sizeof(rxbuf), &errcode,
+                                    MP_STREAM_RW_READ | MP_STREAM_RW_ONCE);
+        if (errcode != 0)
+        {
+            if (mp_is_nonblocking_error(errcode))
+            {
+                mp_hal_delay_ms(1);
+                continue;
+            }
+            m_del(uint8_t, frame_buf, BCP_MAX_FRAME_SIZE);
+            mp_raise_OSError(errcode);
+        }
+        if (n == 0)
+        {
+            mp_hal_delay_ms(1);
+            continue;
+        }
+
+        for (mp_uint_t i = 0; i < n; i++)
+        {
+            uint8_t b = rxbuf[i];
+            if (b == 0)
+            {
+                if (frame_len > 0)
+                {
+                    bcp_run_handle_segment(frame_buf, frame_len);
+                }
+                frame_len = 0;
+            }
+            else if (frame_len < BCP_MAX_FRAME_SIZE)
+            {
+                frame_buf[frame_len++] = b;
+            }
+            else
+            {
+                /* over-long undelimited run -- drop, resync on next 0x00
+                 * (PROTOCOL.md §1's bounded-RX-buffer case) */
+                frame_len = 0;
+            }
+        }
+    }
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(mp_bcp_run_obj, mp_bcp_run);
 
 /* No module table / MP_REGISTER_MODULE here either -- see bcp_frame_mp.h's
  * own note just above its equivalent spot. */

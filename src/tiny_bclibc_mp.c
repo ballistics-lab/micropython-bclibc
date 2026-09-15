@@ -694,6 +694,7 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_INTERNAL), MP_ROM_INT(BCP_STATUS_ERR_INTERNAL)},
     /* bcp_dispatch_mp.h -- command dispatch (PROTOCOL.md §4) */
     {MP_ROM_QSTR(MP_QSTR_dispatch), MP_ROM_PTR(&mp_bcp_dispatch_obj)},
+    {MP_ROM_QSTR(MP_QSTR_run), MP_ROM_PTR(&mp_bcp_run_obj)},
     {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_PROFILE), MP_ROM_INT(BCP_CMD_LOAD_PROFILE)},
     {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONFIG), MP_ROM_INT(BCP_CMD_LOAD_CONFIG)},
     {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONDITIONS), MP_ROM_INT(BCP_CMD_LOAD_CONDITIONS)},

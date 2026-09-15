@@ -205,11 +205,123 @@ happened yet on any of them)**:
 handler** (`LOAD_PROFILE`, `LOAD_CONFIG`, `LOAD_CONDITIONS`, `INTEGRATE`,
 `INTEGRATE_FAST`, `INTEGRATE_AT`, `RESET`, `IDENT`, `ABORT`) -- an
 unrecognized `type_` still raises `NotImplementedError`, a development-
-time signal, not a real gap in the command table anymore. What's left
-before this is a real, flashable coprocessor is **not another command**:
-Epic 4 (USB CDC1 transport, the actual read/decode/dispatch/write loop)
-and, once that exists, wiring Epic 6's cooperative-abort checkpoint and
-`INTERRUPTED` status into it for real.
+time signal, not a real gap in the command table anymore.
+
+**The read/decode/dispatch/write loop itself now exists and is
+hardware-verified** -- `src/bcp/bcp_dispatch_mp.h`'s `run(stream)`
+(registered as `_tiny_bclibc.run`, wrapped by `bclibc_bcp.start(stream)`):
+reuses `parse_frame`/`dispatch`/`build_frame` directly (no second
+implementation of any of them), accumulates transport bytes into frames
+per PROTOCOL.md §1, and drives a native `emit` callback
+(`bcp_run_emit`/`bcp_run_write_frame`) for `INTEGRATE`/`INTEGRATE_FAST`'s
+`MORE` frames instead of the Python-callable `emit` the dispatch tests use
+-- the whole loop never trips back into Python bytecode except the one
+unavoidable call into a stream object's own `readinto`/`write` (same as
+any other MicroPython stream consumer). A raised exception from
+`dispatch()` itself (an unrecognized command, any handler failure) is
+caught around just that one call and turned into an `ERR_INTERNAL`
+response frame, so one bad frame from the host doesn't take down the
+whole loop -- proven for real (see below), not just reasoned about.
+**Verified, in order of how much of the stack each exercises:**
+- Unix, no hardware: `tests/test_bcp_run_native.py` drives `run()`
+  against a scripted `io.IOBase` mock stream (`MockStream`) -- single- and
+  multi-chunk framing (including `EAGAIN`/`None`-return retry timing),
+  a corrupt-CRC frame silently dropped with the loop continuing, an
+  unrecognized command answered `ERR_INTERNAL` with the loop continuing,
+  and a full `LOAD_PROFILE` + `INTEGRATE_FAST` streaming exchange (`MORE`
+  frames plus the final `OK`/total summary) -- 17 checks, all pass, no
+  regressions in `test_bcp_dispatch_native.py`/`test_bcp_frame_native.py`/
+  `test_bclibc.py` run alongside it.
+- **Real hardware, real USB, no mock**: flashed the same
+  `WAVESHARE_RP2040_ZERO` build used throughout this backlog, brought up
+  CDC1 exactly as Epic 4's transport bring-up already verified, then ran
+  `bclibc_bcp.start(cdc1)` (blocking, foreground -- see the caveat below)
+  and drove it from the host over the real `/dev/ttyACM1`-equivalent port
+  with a from-scratch throwaway COBS/CRC16 host client (`bcp_frame.py`
+  having been removed, see Epic 3's own "actually deleted" bullet): a
+  genuine `IDENT` request round-tripped correctly end-to-end (real COBS
+  encode on the host, real USB bulk transfer, real on-device `parse_frame`
+  → `dispatch` → `build_frame`, real bytes back), and a corrupt-CRC frame
+  followed by a good one confirmed the loop survives bad input for real --
+  `drop_count` in the second `IDENT` response's own payload went from `0`
+  to `1`, proving the corruption was actually counted, not just not
+  crashed on.
+- **Real, useful side effect found during this bring-up, not designed
+  in on purpose:** running `start()`/`run()` synchronously (no second
+  core/thread, Epic 7 not built yet) is not un-killable -- a `Ctrl-C`/raw-
+  REPL-entry attempt on CDC0 (e.g. any `mpremote ... exec`) raised
+  `KeyboardInterrupt` inside `run()`'s non-blocking-read retry path
+  (`mp_hal_delay_ms(1)`, called on every "no data yet" poll, evidently
+  services the same keyboard-interrupt-pending check the VM's own
+  bytecode loop does) and ended the loop -- confirmed by the same
+  real-hardware IDENT request getting no response at all immediately
+  afterward. Useful as an escape hatch during development (the board is
+  never permanently stuck); also means CDC0 REPL access and a running
+  `run()` loop are mutually exclusive today, exactly as documented below,
+  and a stray `Ctrl-C`/reconnect on CDC0 is enough to kill an in-progress
+  BCP session -- one more reason Epic 7's second-core placement matters,
+  not just for not blocking the REPL but for not being *interruptible* by
+  it either.
+- **Streaming over real hardware: also done, on both RP2040 and RP2350,
+  with a real wire-latency benchmark, not just the unix mock-stream
+  proof above.** `benchmarks/bcp_wire_bench.py` (new script) drives a
+  real `INTEGRATE_FAST` (1 km/10 m steps, same G7/168gr/2750fps shot
+  `benchmarks/tiny_bclibc_natmod_bench_2core.py` already uses) over a
+  real CDC1 connection from the host, timing the full
+  `LOAD_PROFILE` + `INTEGRATE_FAST` (14 `MORE`+`OK` frames) round trip.
+  **First result was misleading, not a device problem —**
+  a classic pyserial gotcha: `Serial.read(N)` blocks for the *entire*
+  configured timeout if fewer than `N` bytes ever arrive, instead of
+  returning as soon as *some* data is ready. The first client asked for
+  `read(256)`/`read(4096)` against ~130 B/1.8 KB responses, so *every*
+  measurement silently included almost the full timeout window
+  (~200-550 ms) regardless of how fast the device actually answered —
+  nothing to do with the wire, USB, or the dispatch loop. Fixed by only
+  ever reading `ser.in_waiting or 1` bytes (see the script's own
+  docstring) — this alone dropped RP2350's number from ~244 ms to
+  **~43 ms** with zero device-side change, and was confirmed with a
+  byte-arrival timeline (`ser.read()` with a short timeout showed all
+  1.8 KB actually arriving within ~50 ms, not 200+). Also tried, on the
+  device side, before finding the real cause: added
+  `mp_event_handle_nowait()` (the port's own hook for pumping
+  `tud_task()`, per `py/scheduler.c`/`ports/rp2/rp2_flash.c` — otherwise
+  only reached via `mp_hal_delay_ms()`, which `run()`'s hot dispatch path
+  never calls) after every `bcp_run_write_frame()` — harmless and kept
+  (a real, if here non-load-bearing, gap: nothing was pumping the USB
+  stack mid-stream before this), but it made no measurable difference on
+  its own, confirming the pyserial read pattern was the whole story.
+  **Real, clean numbers** (same-session local baseline via the plain
+  `tiny_bclibc` Python API on the *same* flashed firmware, not
+  `benches.md`'s older/different-build numbers, for a true
+  wire-vs-no-wire comparison):
+
+  | Board | local (REPL, no wire) | CDC1 wire | overhead | ratio |
+  |---|---:|---:|---:|---:|
+  | RP2040-Zero | 313.98 ms | 355.65 ms | +41.7 ms | 1.13× |
+  | RP2350 (Pico 2) | 17.90 ms | 43.42 ms | +25.5 ms | 2.43× |
+
+  The ~25-42 ms real overhead (framing + USB + `LOAD_PROFILE`'s own
+  zero-solve, folded into the same measurement) is roughly constant
+  across both boards — it dominates on RP2350 only because there's so
+  little solve time left to hide it behind, not because CDC1 itself is
+  slower there. RP2350's local number also confirms, empirically, that
+  this mainline usermod build links against hardware FPU codegen for
+  RP2350 (17.90 ms lands right next to `benches.md`'s "RP2350 armv7emsp,
+  hardware FPU" row, 15.99 ms — not anywhere near the "armv7m soft-float"
+  row's 140.88 ms).
+  **Also checked and ruled out:** CDC-ACM "baud rate" has no effect on
+  USB CDC transfer speed (115200/460800/921600 all measured within noise
+  of each other on RP2350) — expected, since it's a virtual serial port
+  over USB full-speed bulk transfer, not a real UART with a clock to
+  configure; `CDCInterface.init(baudrate=...)` only ever affects the
+  reported line coding, never actual throughput (see `usb-device-cdc`'s
+  own `cdc.py` docstring on this).
+  **Not yet done:** the same real-hardware wire check on ESP32-S3 (only
+  RP2040/RP2350 tested); placing `run()` on a second core/thread so CDC0
+  stays responsive while it runs (Epic 7); and wiring Epic 6's
+  cooperative-abort checkpoint / `INTERRUPTED` status into the loop for
+  real (the `mp_stream_cb` hook `INTEGRATE`'s engine call takes still
+  always returns "continue" -- see that command's own entry above).
 
 **Not yet exercised, any command above**: actually running the
 `LOAD_CONDITIONS`/`INTEGRATE`/`INTEGRATE_FAST`/`INTEGRATE_AT`/`RESET`/
@@ -236,14 +348,22 @@ BCLIBC_BCP=1 make -C <micropython>/ports/rp2 BOARD=<board> \
     USER_C_MODULES=<this repo>/usermod/micropython.cmake \
     FROZEN_MANIFEST=<this repo>/usermod/manifest.py
 ```
-**Gotcha, hit twice this epic:** an *incremental* build directory can
-silently link against a stale generated `moduledefs`/QSTR collection
-after changing `BCLIBC_BCP`, or after changing *which* C symbols get
-registered as Python-visible names (as opposed to just editing a
-function body) — seen so far only on rp2's CMake build, not unix's Make
-build. If a rebuild fails with `undefined reference to <something that
-was just renamed/removed>`, `rm -rf` that one build directory before
-assuming it's a real code problem.
+**Gotcha, hit three times now across this epic and Epic 4:** an
+*incremental* build directory can silently link/compile against a stale
+generated `moduledefs`/QSTR collection after changing `BCLIBC_BCP`, after
+changing *which* C symbols get registered as Python-visible names (as
+opposed to just editing a function body), or after adding a **new**
+QSTR-worthy name (a new Python-visible function/constant) -- seen so far
+only on rp2's CMake build, not unix's Make build. Symptom varies: an
+`undefined reference to <something just renamed/removed>` link error the
+first two times; a `redeclaration of enumerator 'MP_QSTR_<name>'` *compile*
+error the third time, adding `run()` to the globals table (a stale
+`qstrdefs.generated.h` already had `MP_QSTR_run` from the frozen `asyncio`
+manifest's own `run()`, and the incremental rebuild didn't regenerate it
+to notice the new usermod-side reference was the same qstr, not a fresh
+one). All three: `rm -rf` that one build directory before assuming it's a
+real code problem -- confirmed each time that a from-scratch rebuild in a
+clean directory just works.
 
 **Another gotcha, hit during Epic 4's hardware bring-up:** the local
 `micropython` checkout's `lib/pico-sdk` submodule can be checked out to a
@@ -336,20 +456,24 @@ assuming a real MicroPython/pico-sdk incompatibility.
       and `mpyhouse/` file name as the plain one — separate job, distinct
       artifact name. Whether a multi-token `CIBMP_EXTRA_MAKE_ARGS` is split
       correctly is not verified yet.
-- [ ] Entry point: a frozen `main.py` does auto-run on rp2/esp32
-      (`pyexec_file_if_exists()` checks frozen modules first), but it then
-      **shadows** any filesystem `main.py`, and the REPL only starts after
-      `main.py` returns — so it must start the dispatcher in the background
-      and return (Epic 4's "CDC1 never blocks the CDC0 REPL"). **Shape,
-      per Epic 3/6/7's C-dispatcher resolution:** `bclibc_bcp.py` stays
-      thin plumbing, not the dispatcher itself — it constructs/configures
-      the transport object (CDC1 or UART), optionally picks which core to
-      run on (Epic 7), and hands the transport object to one C entry point
-      that owns the whole read/decode/dispatch/write loop from there.
-      Something like `import bclibc_bcp; bclibc_bcp.start(cdc1)` where
-      `start()` is a thin Python function whose entire body is
-      constructing the transport and calling into the native module —
-      no per-frame Python code in the running loop at all.
+- [x] **`bclibc_bcp.start(stream)` implemented and hardware-verified,
+      exactly the shape this bullet originally called for.** `start()`'s
+      entire body is one call into `_tiny_bclibc.run()` (Epic 4's own
+      native read/decode/dispatch/write loop, see the "Status at a
+      glance" section's own writeup) — no per-frame Python code in the
+      running loop at all, matching this bullet's original ask verbatim.
+- [ ] **Not done yet: the auto-run half.** A frozen `main.py` does
+      auto-run on rp2/esp32 (`pyexec_file_if_exists()` checks frozen
+      modules first), but it then **shadows** any filesystem `main.py`,
+      and the REPL only starts after `main.py` returns — so it must start
+      the dispatcher in the background and return (Epic 4's "CDC1 never
+      blocks the CDC0 REPL"), which needs Epic 7's second-core placement
+      first (not built yet — see the real-hardware caveat in the "Status
+      at a glance" section: calling `start()` directly, as this session's
+      hardware test did, blocks the calling core until the loop ends).
+      No frozen `main.py` exists yet for this reason; `start()` must be
+      invoked explicitly for now (from the REPL, or a filesystem
+      `main.py` a user supplies themselves).
 
 ## Epic 2 — Multi-BC native binding
 
@@ -1070,8 +1194,21 @@ assuming a real MicroPython/pico-sdk incompatibility.
       it has no `.any()`; poll for pending data with `cdc.read(-1)`
       (returns `None` if nothing is ready when `timeout=0`, per
       `usb-device-cdc`'s own `_readinto`), not an `any()`/`read()` pair.
-- [ ] Non-blocking (or second-core) operation of the CDC1 dispatch loop, so
-      CDC1 traffic never blocks the CDC0 REPL.
+- [x] **The dispatch loop itself: implemented and hardware-verified.**
+      `_tiny_bclibc.run(stream)` (`bclibc_bcp.start(stream)`'s one-line
+      body) -- see the "Status at a glance" section's own writeup for the
+      full design and verification (unix mock-stream tests plus a real
+      RP2040-Zero round trip over actual USB CDC1, including a corrupt-CRC
+      frame proven dropped without killing the loop).
+- [ ] **Still open: non-blocking (or second-core) operation**, so CDC1
+      traffic never blocks the CDC0 REPL -- needs Epic 7. Concretely
+      confirmed *not* solved yet: running `start()`/`run()` directly (no
+      second core/thread) blocks the calling core for as long as it runs,
+      and -- a real, verified side effect, not a design choice -- a
+      `Ctrl-C`/raw-REPL-entry attempt on CDC0 was enough to raise
+      `KeyboardInterrupt` into it and end the loop (see "Status at a
+      glance"). Both point the same direction: this needs its own
+      core/thread before it's usable outside a test session.
 - [ ] UART and BLE NUS transports: explicitly deferred to a later epic
       (same frame parser, different byte source — and per the above, that
       parser is C, so "same" now literally means the same compiled code,
