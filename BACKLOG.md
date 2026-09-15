@@ -360,6 +360,55 @@ being used purely as a library from Python application code.
     - Below is the full exploration that led here (viper, DMA-hardware
           CRC, RP2040 vs. RP2350 economics) — kept for the numbers, not as
           a proposal to actually ship any of these Python-level tricks.
+    - **Confirmed for real, on real hardware, not just argued for.**
+          Wrote the actual C port (`src/bcp_frame_mp.c`: `crc16`,
+          `cobs_encode`/`cobs_decode`, `build_frame`/`parse_frame`,
+          registered as a new `_bcp_frame` usermod module, gated
+          `BCLIBC_BCP=1` only — see `usermod/micropython.mk`/
+          `.cmake`). Verified in two ways: (1) unix usermod build
+          (`BCLIBC_BCP=1`), `tests/test_bcp_frame_native.py` (a C-module
+          port of `test_bcp_frame.py`'s known-answer vectors and framing
+          failure scenarios) — 24/24 PASS; a plain (non-BCP) usermod
+          build confirmed `_bcp_frame` is absent, gating works. (2) Built
+          and **flashed actual rp2 firmware** (`BOARD=WAVESHARE_RP2040_ZERO`,
+          `BCLIBC_BCP=1`) onto the same RP2040-Zero used throughout this
+          epic, confirmed `_bcp_frame`/`_tiny_bclibc.BCP` both present and
+          correct over `mpremote`, then re-ran the framing-vs-solver
+          comparison for real, in C, on the **slow** tier this time (the
+          earlier comparison above was RP2350 hw-FPU):
+
+          | | RP2040, plain Python (measured earlier) | RP2040, C (measured now) |
+          |---|---|---|
+          | `crc16` (1636/1060 B*) | ~13.1 µs/byte | ~0.14 µs/byte (~94×) |
+          | `cobs_encode` (1636/1060 B*) | ~17.7 µs/byte | ~0.68 µs/byte (~26×) |
+          | full `build_frame`+`parse_frame`, 68 B `MORE` frame | ~2253 µs | **226.7 µs** |
+          | solver time for the same 4 rows (this board) | — | 9810 µs |
+
+          (*the Python-side numbers were measured against the frame sizes
+          in effect at the time, 1060 B/`LOAD_PROFILE`; the drag-table cap
+          grew to 200 points/1636 B afterwards, see below — the µs/byte
+          rates are what transfers, not the absolute byte count.)
+
+          **C framing is ~43× cheaper than the solver's own cost to
+          produce the same 4 rows — on RP2040, the slowest of the three
+          targets**, not just on RP2350/ESP32-S3 where the earlier
+          Python-only comparison above was made. Recall the Python-only
+          finding was the opposite: naive Python framing (~2253 µs) was
+          *slower* than RP2350's solver time for 4 rows (~633 µs) — the
+          bottleneck this whole "implementation language is C" resolution
+          exists to fix. With the real C port measured on the *worst*
+          platform and still landing at ~1/43rd of solver cost, `viper`
+          and the DMA-sniffer path explored below are no longer worth
+          pursuing for framing at all — plain, unaccelerated C already
+          has a wide enough margin everywhere.
+    - **One real implementation detail worth flagging, not yet a
+          problem:** `bcp_frame_mp.c`'s `cobs_encode`/`cobs_decode`/
+          `build_frame`/`parse_frame` currently `m_new`/`m_del` a fresh
+          buffer on every call — fine given the ~43× margin above, but a
+          production dispatch loop should reuse a static/caller-owned
+          buffer instead (same pattern `tiny_bclibc`'s `ShotHolder`
+          already uses), to avoid GC-heap churn on every frame once this
+          runs continuously rather than in a benchmark loop.
 - [x] **Corrected — `src/bcp_frame.py` is not kept on as a permanent
       "oracle."** The earlier framing (a maintained parallel Python
       implementation, kept around specifically to diff the C
@@ -379,11 +428,15 @@ being used purely as a library from Python application code.
       parallel one. What
       `bcp_frame.py`/`tests/test_bcp_frame.py` actually were: a fast
       design-iteration tool for nailing down the wire format this
-      session (now settled in `PROTOCOL.md`) — that job is done. Once the
-      C port lands, tests target the C module directly (via the unix
-      port, same pattern as `tests/test_bclibc.py`), reusing this
-      session's known-answer vectors and failure-scenario cases as the
-      actual test content, not diffing against a kept-alive Python twin.
+      session (now settled in `PROTOCOL.md`) — that job is done. **Done,
+      not just planned:** the C port landed (`src/bcp_frame_mp.c`, see the
+      "implementation language is C" resolution above) and
+      `tests/test_bcp_frame_native.py` targets it directly via the unix
+      port, reusing `test_bcp_frame.py`'s known-answer vectors and
+      failure-scenario cases almost verbatim — not diffing against a
+      kept-alive Python twin. `bcp_frame.py`/`test_bcp_frame.py` themselves
+      are left in place, untouched, as the historical record of that
+      design-iteration phase.
 - [x] **Explored, not adopted — `@micropython.native`/`@micropython.viper`
       for `crc16`, on real RP2040-Zero hardware, `mpremote run`:**
 

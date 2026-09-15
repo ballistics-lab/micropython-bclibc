@@ -59,4 +59,7 @@ CFLAGS_USERMOD += \
 # change: switch the flag in a clean BUILD directory.
 ifeq ($(BCLIBC_BCP),1)
 CFLAGS_USERMOD += -DBCLIBC_BCP=1
+# bcp_frame_mp.c (COBS+CRC16 wire codec, PROTOCOL.md) is BCP-only -- unlike
+# tiny_bclibc_mp.c, not part of a plain usermod build at all.
+SRC_USERMOD_C += $(USERMOD_DIR)/../src/bcp_frame_mp.c
 endif
