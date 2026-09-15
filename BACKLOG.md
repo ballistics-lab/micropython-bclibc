@@ -160,16 +160,55 @@ above)**:
   loop or transport object yet to poll for a preempting frame -- Epic 4
   is still open) and `INTERRUPTED` handling; both need that transport
   work first, tracked separately.
+- `RESET`/`ABORT` (`src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_reset()` +
+  the `BCP_CMD_ABORT` case, PROTOCOL.md §4.7/§4.8): both no-payload,
+  `OK`-only commands, the simplest two in the table -- no engine call, no
+  wire-format decoding. `RESET` is an **application soft-reset**: `memset`s
+  the whole persistent `bcp_state` (profile, config, conditions/zero, all
+  three `has_*` flags together) then re-runs
+  `bcp_state_ensure_init()` on it, so "after RESET" is bit-for-bit the
+  same state as a fresh boot rather than a hand-maintained list of fields
+  to clear (can't drift as new `LOAD_*` fields get added later) --
+  plus resets `bcp_frame_mp.h`'s `bcp_frame_drop_count_` telemetry
+  counter (same translation unit, no new plumbing needed). `ABORT`
+  answers `OK` unconditionally: per the no-queue preemption rule (Epic
+  6), it's supposed to stop whatever's running and answer `INTERRUPTED`
+  under that command's own `seq` -- but with every `dispatch()` call
+  still running synchronously to completion (no C read/write loop or
+  persisted in-flight state -- Epic 4 not built yet), there is nothing
+  ever actually in flight for either command to preempt yet; both note
+  this explicitly and point at Epic 4/6 as the prerequisite for the real
+  behavior.
+  Verified this session: unix usermod build -- `RESET` after a cached
+  profile+config leaves `LOAD_CONFIG`/`LOAD_CONDITIONS`/`INTEGRATE_AT` all
+  answering `ERR_NOT_LOADED` again (the cache is actually gone, not just
+  nominally), clears `drop_count` back to `0` from a real nonzero value,
+  and a fresh `LOAD_PROFILE` afterward succeeds exactly like on a cold
+  boot (no stale pointer/count left over for it to trip on). `ABORT`
+  verified idle (`OK`, empty payload) both before anything is loaded and
+  after a `RESET`. `tests/test_bcp_dispatch_native.py`'s new `ABORT /
+  RESET` section (run last, since `RESET` wipes every other section's
+  cached state) covers all of this -- **74 checks** pass in the file now,
+  all on the same unix build described above. Also cross-compiled and
+  linked clean for RPI_PICO (CMake path) -- FLASH 365008→365064 B
+  (+56 B; the smallest addition yet, consistent with "no new engine
+  code, no new persistent fields, just a `memset` + one counter reset"),
+  RAM unchanged, no warnings.
+
+**Every `BCP_CMD_*` in PROTOCOL.md's command table now has a real
+handler** (`LOAD_PROFILE`, `LOAD_CONFIG`, `LOAD_CONDITIONS`, `INTEGRATE`,
+`INTEGRATE_FAST`, `INTEGRATE_AT`, `RESET`, `IDENT`, `ABORT`) -- an
+unrecognized `type_` still raises `NotImplementedError`, a development-
+time signal, not a real gap in the command table anymore. What's left
+before this is a real, flashable coprocessor is **not another command**:
+Epic 4 (USB CDC1 transport, the actual read/decode/dispatch/write loop)
+and, once that exists, wiring Epic 6's cooperative-abort checkpoint and
+`INTERRUPTED` status into it for real.
 
 **Not yet exercised, any command above**: actually running on real
 RP2040/RP2350/ESP32-S3 hardware (no board available in this session) --
 only the unix build was executed; RPI_PICO was compiled and linked, not
 flashed/run.
-
-**Not implemented yet** (raise `NotImplementedError` from `dispatch()`
-today): `RESET`/`ABORT` (need real cached state/a real stream in flight
-to be worth building against, plus the transport-loop plumbing Epic
-6's `INTERRUPTED` status depends on).
 
 **Building/testing, concretely:**
 ```sh

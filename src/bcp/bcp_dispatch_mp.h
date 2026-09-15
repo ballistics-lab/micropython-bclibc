@@ -26,12 +26,12 @@
  * no byte-offset interleaving to manage regardless of which order
  * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
  *
- * Only IDENT, LOAD_CONFIG, LOAD_PROFILE, LOAD_CONDITIONS, INTEGRATE_AT and
- * INTEGRATE/INTEGRATE_FAST are implemented so far — see BACKLOG.md Epic
- * 3/8 for the rest of the command table; unimplemented commands raise
- * NotImplementedError (a development-time signal, not a wire status —
- * production dispatch will route every BCP_CMD_* to a real handler
- * before this ships).
+ * Every BCP_CMD_* is now routed to a real handler (LOAD_PROFILE,
+ * LOAD_CONFIG, LOAD_CONDITIONS, INTEGRATE, INTEGRATE_FAST, INTEGRATE_AT,
+ * RESET, IDENT, ABORT) -- see BACKLOG.md Epic 3/8 for each one's own
+ * design notes and PROTOCOL.md for the wire-level reference. An unknown
+ * `type_` outside that set still raises NotImplementedError (a
+ * development-time signal, not a wire status).
  */
 #ifndef BCP_DISPATCH_MP_H
 #define BCP_DISPATCH_MP_H
@@ -775,6 +775,54 @@ static size_t bcp_handle_integrate(const uint8_t *payload, size_t payload_len, i
     return 8u;
 }
 
+/* ── RESET (PROTOCOL.md §4.7) ─────────────────────────────────────────────
+ * No request/response payload beyond OK. An **application soft-reset**,
+ * not a targeted per-LOAD_* clearer (redundant -- every LOAD_PROFILE/
+ * LOAD_CONFIG/LOAD_CONDITIONS already fully overwrites its own fields) and
+ * not an MCU reboot (out of BCP's scope -- that's a CDC0 REPL/firmware-
+ * update concern). Collapses the whole dispatcher back to exactly the
+ * power-on-equivalent state `bcp_state_ensure_init()` would produce on a
+ * fresh boot: clears cached profile, config, conditions/zero (`bcp_state`
+ * zeroed then re-initialized, not hand-copied field by field, so this
+ * can't drift from what "fresh boot" actually means) and dispatcher
+ * bookkeeping (`bcp_frame_drop_count_`, from `bcp_frame_mp.h` -- same
+ * translation unit, see its own header comment on `dispatch()`'s
+ * ordering).
+ *
+ * PROTOCOL.md notes RESET implies the same preemption ABORT does (Epic 6):
+ * if something is running, stop it first, then clear state. With no C
+ * read/write loop or persisted in-flight state yet (Epic 4) and every
+ * dispatch() call running synchronously to completion, there is nothing
+ * actually in flight by the time a RESET call runs -- see ABORT's own
+ * comment below for the same reasoning. Revisit once that transport work
+ * lands.
+ */
+static void bcp_handle_reset(void)
+{
+    memset(&bcp_state, 0, sizeof(bcp_state));
+    bcp_state_ensure_init();
+    bcp_frame_drop_count_ = 0;
+}
+
+/* ── ABORT (PROTOCOL.md §4.8) ─────────────────────────────────────────────
+ * No payload. Per the no-queue preemption rule (Epic 6, superseded to
+ * cooperative-only -- see BACKLOG.md): any new valid frame already
+ * preempts whatever command is currently running; ABORT is just the case
+ * where nothing replaces it. PROTOCOL.md describes two responses in that
+ * case: the preempted command's own `INTERRUPTED` (under *its* seq) and
+ * ABORT's own plain `OK` (under ABORT's seq).
+ *
+ * Nothing to actually preempt yet, for the same reason RESET's comment
+ * above gives: dispatch() calls run synchronously to completion (no C
+ * read/write loop, no persisted in-flight state -- Epic 4), so by the
+ * time an ABORT call runs, any previous command has already returned.
+ * Accepted and answered OK regardless, matching the wire contract; there
+ * is no `INTERRUPTED` to emit here yet either. Revisit once Epic 4's
+ * transport loop and Epic 6's cooperative checkpoint (already wired into
+ * `bcp_stream_row_cb` as a no-op "always continue," see its own comment)
+ * give ABORT something real to interrupt.
+ */
+
 /* ── IDENT (PROTOCOL.md §4.6) ─────────────────────────────────────────────
  * No request payload (ignored). Response, fixed part matches struct format
  * "<BBHHBHBIB" (15 B) followed by the version string:
@@ -911,6 +959,11 @@ static mp_obj_t mp_bcp_dispatch(size_t n_args, const mp_obj_t *args)
         mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
         return mp_obj_new_tuple(2, items);
     }
+    case BCP_CMD_RESET:
+        bcp_handle_reset();
+        return bcp_zero_response((uint8_t)BCP_STATUS_OK, 0);
+    case BCP_CMD_ABORT:
+        return bcp_zero_response((uint8_t)BCP_STATUS_OK, 0);
     default:
         /* mp_raise_NotImplementedError() is a natmod-only (dynruntime.h)
          * macro; mp_type_NotImplementedError itself is declared directly

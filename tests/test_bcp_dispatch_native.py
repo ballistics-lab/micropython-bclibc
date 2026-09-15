@@ -693,6 +693,93 @@ try:
 except Exception as ex:
     _fail("LOAD_CONFIG with profile cached", ex)
 
+# -- ABORT / RESET (run last -- RESET wipes all cached state) -----------------
+print("\n--- ABORT / RESET ---")
+
+try:
+    # No C read/write loop yet (Epic 4), so dispatch() calls run
+    # synchronously to completion -- nothing is ever "in flight" for ABORT
+    # to preempt here. Still a valid, always-OK command per PROTOCOL.md
+    # §4.8's wire contract.
+    status, payload = d.dispatch(d.CMD_ABORT, 1, b"")
+    if status == d.STATUS_OK and payload == b"":
+        _pass("ABORT with nothing running -> OK, empty payload")
+    else:
+        _fail("ABORT idle case", (status, payload))
+except Exception as ex:
+    _fail("ABORT idle case", ex)
+
+try:
+    # Bump drop_count so RESET clearing it back to 0 is an actual check,
+    # not a vacuous one -- force one more bad frame here rather than
+    # relying on the round-trip/telemetry sections above having left it
+    # nonzero.
+    bad = bytearray(f.build_frame(d.CMD_IDENT, 1, 0, b""))
+    bad[3] ^= 0xFF
+    f.parse_frame(bytes(bad[1:-1]))
+    drop_before = f.drop_count()
+
+    # Profile/config/conditions are all still cached from the sections
+    # above -- confirm that before RESET, so the after-RESET checks below
+    # are testing an actual clear, not a no-op on already-empty state.
+    status, payload = d.dispatch(d.CMD_LOAD_CONFIG, 1, cfg)
+    profile_was_cached = status == d.STATUS_OK
+
+    status, payload = d.dispatch(d.CMD_RESET, 1, b"")
+    checks = [
+        ("a profile was actually cached before RESET (precondition)", profile_was_cached),
+        ("RESET -> OK, empty payload", status == d.STATUS_OK and payload == b""),
+        ("drop_count was nonzero before RESET (precondition)", drop_before > 0),
+        ("RESET clears drop_count back to 0", f.drop_count() == 0),
+    ]
+    for name, ok in checks:
+        if ok:
+            _pass(name)
+        else:
+            _fail(name)
+except Exception as ex:
+    _fail("RESET", ex)
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONFIG, 1, cfg)
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("LOAD_CONFIG after RESET -> ERR_NOT_LOADED (profile cache cleared)")
+    else:
+        _fail("LOAD_CONFIG after RESET", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONFIG after RESET", ex)
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("LOAD_CONDITIONS after RESET -> ERR_NOT_LOADED (profile cache cleared)")
+    else:
+        _fail("LOAD_CONDITIONS after RESET", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONDITIONS after RESET", ex)
+
+try:
+    status, payload = d.dispatch(d.CMD_INTEGRATE_AT, 1, _pack_integrate_at(_KEY_POS_X, 100.0))
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("INTEGRATE_AT after RESET -> ERR_NOT_LOADED (profile cache cleared)")
+    else:
+        _fail("INTEGRATE_AT after RESET", (status, payload))
+except Exception as ex:
+    _fail("INTEGRATE_AT after RESET", ex)
+
+try:
+    # A fresh LOAD_PROFILE after RESET must work exactly like on a cold
+    # boot -- RESET must not leave any stale internal pointer/count behind
+    # that a later LOAD_PROFILE fails to fully overwrite.
+    p = _pack_profile(0.305, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    status, payload = d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    if status == d.STATUS_OK and len(payload) == 4:
+        _pass("LOAD_PROFILE works normally again after RESET")
+    else:
+        _fail("LOAD_PROFILE after RESET", (status, payload))
+except Exception as ex:
+    _fail("LOAD_PROFILE after RESET", ex)
+
 print("\n=== done ===")
 if _failures:
     print("{} test(s) FAILED".format(_failures))
