@@ -7,9 +7,11 @@ Run with:
 or from repo root:
     /path/to/micropython test_bcp_dispatch_native.py
 
-Only IDENT is implemented so far (see BACKLOG.md Epic 3/8) -- this test
-covers IDENT itself, the drop_count telemetry it reports (from
-_bcp_frame.parse_frame's own failure counter), the unknown-command
+Only IDENT and LOAD_CONFIG are implemented so far (see BACKLOG.md Epic
+3/8) -- this test covers IDENT itself, the drop_count telemetry it
+reports (from _bcp_frame.parse_frame's own failure counter), LOAD_CONFIG's
+size validation and its ERR_NOT_LOADED response (no LOAD_PROFILE yet, so
+nothing to re-solve a zero against), the unknown-command
 NotImplementedError, and one full parse_frame -> dispatch -> build_frame
 round trip tying _bcp_frame and _bcp_dispatch together.
 """
@@ -84,6 +86,40 @@ try:
     print("  (informational) version={!r} drop_count={}".format(version, drop_count))
 except Exception as ex:
     _fail("IDENT payload decode", ex)
+
+# -- LOAD_CONFIG -----------------------------------------------------------------
+print("\n--- LOAD_CONFIG ---")
+# Config()'s own Python-side defaults (tiny_bclibc.py) -- same values the
+# device applies before the first LOAD_CONFIG (PROTOCOL.md §4.2a).
+_CFG_PAYLOAD = struct.pack("<6fi", 0.5, 0.001, 50.0, -15000.0, -32.17405, -1500.0, 50)
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONFIG, 1, _CFG_PAYLOAD)
+    # No LOAD_PROFILE yet -- nothing cached to re-solve a zero against.
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("LOAD_CONFIG with no profile cached -> ERR_NOT_LOADED, empty payload")
+    else:
+        _fail("LOAD_CONFIG no-profile case", (status, payload))
+except Exception as ex:
+    _fail("LOAD_CONFIG no-profile case", ex)
+
+try:
+    status, payload = d.dispatch(d.CMD_LOAD_CONFIG, 1, b"too short")
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("LOAD_CONFIG with wrong payload size -> ERR_BAD_SIZE")
+    else:
+        _fail("LOAD_CONFIG bad size", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_CONFIG bad size", ex)
+
+try:
+    status, _ = d.dispatch(d.CMD_LOAD_CONFIG, 1, _CFG_PAYLOAD + b"\x00")
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("LOAD_CONFIG one byte too long -> ERR_BAD_SIZE")
+    else:
+        _fail("LOAD_CONFIG one byte too long", "got status={}".format(status))
+except Exception as ex:
+    _fail("LOAD_CONFIG one byte too long", ex)
 
 # -- unknown command -------------------------------------------------------------
 print("\n--- unknown command ---")
