@@ -67,11 +67,11 @@ just compiled):
   engine (`tiny_bclibc_build_shot_props()`/`tiny_bclibc_find_zero_angle()`
   via the shared `bcp_resolve_zero()`), no Python involved.
 
-**Implemented, unix-verified only (not yet hardware-verified — RP2040-Zero
-and an ESP32-S3 board are now available as of Epic 4's USB-transport
-bring-up below, but re-running `test_bcp_dispatch_native.py`'s equivalent
-against real hardware for these specific commands hasn't happened yet;
-RP2350 still has no board at all)**:
+**Implemented, unix-verified only (not yet hardware-verified — RP2040-Zero,
+RP2350 (Pico 2) and an ESP32-S3 board are all now available as of Epic 4's
+USB-transport bring-up below, but re-running `test_bcp_dispatch_native.py`'s
+equivalent against real hardware for these specific commands hasn't
+happened yet on any of them)**:
 - `LOAD_CONDITIONS` (`src/bcp/bcp_dispatch_mp.h`'s
   `bcp_handle_load_conditions()`, PROTOCOL.md §4.3): parses atmosphere
   (`temp_c`/`pressure_hpa`/`altitude_ft`/`humidity`), shot geometry
@@ -213,12 +213,13 @@ and, once that exists, wiring Epic 6's cooperative-abort checkpoint and
 
 **Not yet exercised, any command above**: actually running the
 `LOAD_CONDITIONS`/`INTEGRATE`/`INTEGRATE_FAST`/`INTEGRATE_AT`/`RESET`/
-`ABORT` dispatch handlers themselves on real hardware -- RP2040-Zero and
-an ESP32-S3 board are now available (see Epic 4's USB-transport
-bring-up), but this pass only re-verified the USB CDC1 transport coming
-up, not these commands; RPI_PICO/ESP32-S3 were compiled and linked for
-this session's dispatch work, not flashed/run against it. RP2350 has no
-board available at all yet.
+`ABORT` dispatch handlers themselves on real hardware -- RP2040-Zero,
+RP2350 (Pico 2) and an ESP32-S3 board are all now available (see Epic 4's
+USB-transport bring-up), but this pass only re-verified the USB CDC1
+transport coming up on each, not these dispatch commands; the firmware
+built for each board froze/compiled `_tiny_bclibc`'s dispatcher but never
+ran `test_bcp_dispatch_native.py`'s equivalent against it over an actual
+wire connection.
 
 **Building/testing, concretely:**
 ```sh
@@ -1042,12 +1043,17 @@ assuming a real MicroPython/pico-sdk incompatibility.
       `CDCInterface` + `usb.device.get().init(cdc1, builtin_driver=True)`
       re-enumerated a genuine `/dev/ttyACM1` alongside the still-alive
       REPL on `/dev/ttyACM0`, and the same raw host-side echo test
-      round-tripped its bytes exactly. **RP2350 still not yet repeated**
-      (no board available at time of writing) -- same
-      `MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE=1` default applies there too
-      (`ports/rp2/mpconfigport.h`, arch-independent within the port), so
-      expected to carry over, but not yet verified on real RP2350
-      hardware.
+      round-tripped its bytes exactly.
+      **Repeated for real on RP2350 too** (Raspberry Pi Pico 2,
+      `BOARD=RPI_PICO2`) -- same `MICROPY_HW_ENABLE_USB_RUNTIME_DEVICE=1`
+      default (arch-independent within `ports/rp2/mpconfigport.h`), clean
+      build first try (FLASH 361516 B/1 MB, RAM 30268 B/512 KB), UF2
+      bootloader-copy flash identical to RP2040's. Identical result again:
+      `BCP=True`, composite `/dev/ttyACM1` came up alongside a still-alive
+      REPL on `/dev/ttyACM0`, raw echo round-tripped exactly. **All three
+      phase-1 targets (RP2040, RP2350, ESP32-S3) now have this specific
+      item -- `usb.device` CDC-composite bring-up -- confirmed for real,
+      on real hardware, not reasoned about.**
       **Tooling gotcha hit while verifying, worth recording:** `mpremote`
       defaults to soft-resetting the board before `exec`/`run` (sends
       Ctrl-D, `_auto_soft_reset` in `mpremote/main.py`) -- for this
