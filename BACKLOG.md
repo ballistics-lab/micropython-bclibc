@@ -1328,158 +1328,193 @@ assuming a real MicroPython/pico-sdk incompatibility.
         ack-scheme work above eventually lands on needs to size
         `bclibc_bcp.py`'s own `CDCInterface.init(txbuf=...)` to match, not
         just pick a row count against the RX-buffer cap alone.
-- **Real-time feasibility of single-point queries (`INTEGRATE_AT` /
-      `INTEGRATE_FAST` with `range_limit_ft == range_step_ft`) at a
-      target 30 Hz refresh rate, measured on real hardware, over real
-      CDC1 -- this is the actual, hardware-grounded answer to "can BCP
-      drive a live reticle/rangefinder display," not a guess.**
-      First-cut testing used `range_limit_ft == range_step_ft == zero_ft`
-      (i.e. querying exactly the zeroed distance) and found both
-      single-point commands cheap on both boards (RP2350: 4-5 ms; RP2040:
-      57-60 ms) -- **misleading**, because it conflated "distance to
-      zero" with "distance being queried." A shot is zeroed once (e.g.
-      100 m) but a rangefinder can hand back *any* distance to actually
-      query (e.g. 1000 m); the query distance, not the zero distance, is
-      what drives RK4 integration cost, since the engine has to step the
-      whole way from the muzzle out to wherever it's asked. Re-measured
-      with `zero_distance_ft` fixed at 100 m and the query target varied
-      -- **and the command choice turned out not to matter at all**:
-      `INTEGRATE_AT` (bracketing/interception search) and
-      `INTEGRATE_FAST` with `range_limit_ft == range_step_ft == target`
-      (direct one-shot stream to that one distance) cost the same to
-      within measurement noise at every distance tested -- the
-      bottleneck is the RK4 stepping itself, not which command shape
-      reaches it. Full curve (`INTEGRATE_AT`, G7/168gr/2750fps,
-      zero=100 m, real CDC1 round trip including framing/USB):
+  - **Real-time feasibility of single-point queries (`INTEGRATE_AT` /
+        `INTEGRATE_FAST` with `range_limit_ft == range_step_ft`) at a
+        target 30 Hz refresh rate, measured on real hardware, over real
+        CDC1 -- this is the actual, hardware-grounded answer to "can BCP
+        drive a live reticle/rangefinder display," not a guess.**
+        First-cut testing used `range_limit_ft == range_step_ft == zero_ft`
+        (i.e. querying exactly the zeroed distance) and found both
+        single-point commands cheap on both boards (RP2350: 4-5 ms; RP2040:
+        57-60 ms) -- **misleading**, because it conflated "distance to
+        zero" with "distance being queried." A shot is zeroed once (e.g.
+        100 m) but a rangefinder can hand back *any* distance to actually
+        query (e.g. 1000 m); the query distance, not the zero distance, is
+        what drives RK4 integration cost, since the engine has to step the
+        whole way from the muzzle out to wherever it's asked. Re-measured
+        with `zero_distance_ft` fixed at 100 m and the query target varied
+        -- **and the command choice turned out not to matter at all**:
+        `INTEGRATE_AT` (bracketing/interception search) and
+        `INTEGRATE_FAST` with `range_limit_ft == range_step_ft == target`
+        (direct one-shot stream to that one distance) cost the same to
+        within measurement noise at every distance tested -- the
+        bottleneck is the RK4 stepping itself, not which command shape
+        reaches it. Full curve (`INTEGRATE_AT`, G7/168gr/2750fps,
+        zero=100 m, real CDC1 round trip including framing/USB):
 
-| target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
-| ------ | ---------: | -----------: | ---------: | -----------: |
-| 300 m  |    4.09 ms |        244.5 |   57.67 ms |         17.3 |
-| 500 m  |    5.49 ms |        182.0 |   95.97 ms |         10.4 |
-| 1000 m |   10.29 ms |         97.2 |  228.43 ms |          4.4 |
-| 2000 m |   31.57 ms |         31.7 |  894.09 ms |          1.1 |
-| 3000 m |   60.92 ms |         16.4 | 1794.11 ms |          0.6 |
+        | target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
+        | ------ | ---------: | -----------: | ---------: | -----------: |
+        | 300 m  |    4.09 ms |        244.5 |   57.67 ms |         17.3 |
+        | 500 m  |    5.49 ms |        182.0 |   95.97 ms |         10.4 |
+        | 1000 m |   10.29 ms |         97.2 |  228.43 ms |          4.4 |
+        | 2000 m |   31.57 ms |         31.7 |  894.09 ms |          1.1 |
+        | 3000 m |   60.92 ms |         16.4 | 1794.11 ms |          0.6 |
 
-```mermaid
-xychart-beta
-title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
-x-axis [300, 500, 1000, 2000, 3000]
-y-axis "req/s" 0 --> 250
-line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
-line "30 Hz target" [30, 30, 30, 30, 30]
-```
+        ```mermaid
+        xychart-beta
+            title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
+            x-axis [300, 500, 1000, 2000, 3000]
+            y-axis "req/s" 0 --> 250
+            line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
+            line "30 Hz target" [30, 30, 30, 30, 30]
+        ```
 
-```mermaid
-xychart-beta
-title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
-x-axis [300, 500, 1000, 2000, 3000]
-y-axis "req/s" 0 --> 30
-line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
-line "30 Hz target" [30, 30, 30, 30, 30]
-```
+        ```mermaid
+        xychart-beta
+            title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
+            x-axis [300, 500, 1000, 2000, 3000]
+            y-axis "req/s" 0 --> 30
+            line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
+            line "30 Hz target" [30, 30, 30, 30, 30]
+        ```
 
-      **Growth is faster than linear in distance on both boards** (RP2350
-      300→1000 m: 3.3× the distance costs only 2.5× the time; 1000→3000 m:
-      3× the distance costs ~6× the time) -- consistent with the
-      transonic/subsonic drag region needing smaller adaptive steps the
-      longer a projectile flies, not just "more of the same" stepping.
-      **Conclusions:**
-      - **RP2040 (no hardware FPU) cannot hit 30 Hz for a from-scratch
-      single-point query at any realistic hunting/sniping distance** --
-      it's already under 30 Hz at 300 m (17.3 req/s) and falls to just
-      0.6 req/s by 3000 m. This is a hard engine/CPU
-      floor, not a wire or protocol cost (framing overhead is a couple
-      ms at most, per Epic 4's own numbers) -- no command shape, batch
-      size, or transport swap fixes it.
-      - **RP2350/ESP32-S3 (hardware FPU) comfortably clear 30 Hz out to
-      ~1.5-2 km**, but **also fail past there** (31.7 req/s at 2000 m is
-      already borderline; 16.4 req/s at 3000 m is a clear miss). Not a
-      RP2040-only problem once the target is far enough out.
-      - **The only architecture that actually guarantees 30 Hz display
-      refresh at arbitrary target distance, on any of these three
-      boards, is decoupling physics recompute from display refresh**:
-      run a real `LOAD_PROFILE`/`LOAD_CONDITIONS`-triggered solve (or a
-      wider `INTEGRATE`/`INTEGRATE_FAST` sweep covering the ranges of
-      interest) only when the *inputs* actually change (new zero, new
-      wind, rangefinder hands back a new distance to track) -- an
-      event, not a 30 Hz timer -- and have the host interpolate between
-      already-fetched points for the 30 Hz redraw itself. A per-display-
-      frame from-scratch physics call cannot be made to meet 30 Hz for
-      an arbitrarily distant target on any board tested, so the
-      real-time budget has to live on the *host* side of that split,
-      not the device side.
-      - **Directly confirmed: one streamed multi-point request beats N
-      separate single-point requests by ~5×, on both boards** --
-      exactly what "the engine walks the trajectory once and doesn't
-      redo earlier stepping per query" predicts, and the concrete
-      number behind the "compute once" recommendation just above.
-      Compared two ways of building the same 10-point grid (100 m
-      through 1000 m, zero=100 m): **(A)** one `INTEGRATE_FAST` call with
-      `range_limit_ft=1000 m, range_step_ft=100 m` (11 rows, one RK4
-      walk) vs **(B)** ten separate `INTEGRATE_FAST` calls with
-      `range_limit_ft == range_step_ft` at each of 100, 200, ..., 1000 m
-      (each one re-integrating from the muzzle every time):
+        **Growth is faster than linear in distance on both boards** (RP2350
+        300→1000 m: 3.3× the distance costs only 2.5× the time; 1000→3000 m:
+        3× the distance costs ~6× the time) -- consistent with the
+        transonic/subsonic drag region needing smaller adaptive steps the
+        longer a projectile flies, not just "more of the same" stepping.
+        **Conclusions:**
+        - **RP2040 (no hardware FPU) cannot hit 30 Hz for a from-scratch
+          single-point query at any realistic hunting/sniping distance** --
+          it's already under 30 Hz at 300 m (17.3 req/s) and falls to just
+          0.6 req/s by 3000 m. This is a hard engine/CPU floor, not a wire
+          or protocol cost (framing overhead is a couple ms at most, per
+          Epic 4's own numbers) -- no command shape, batch size, or
+          transport swap fixes it.
+        - **RP2350/ESP32-S3 (hardware FPU) comfortably clear 30 Hz out to
+          ~1.5-2 km**, but **also fail past there** (31.7 req/s at 2000 m
+          is already borderline; 16.4 req/s at 3000 m is a clear miss). Not
+          a RP2040-only problem once the target is far enough out.
+        - **The only architecture that actually guarantees 30 Hz display
+          refresh at arbitrary target distance, on any of these three
+          boards, is decoupling physics recompute from display refresh**:
+          run a real `LOAD_PROFILE`/`LOAD_CONDITIONS`-triggered solve (or a
+          wider `INTEGRATE`/`INTEGRATE_FAST` sweep covering the ranges of
+          interest) only when the *inputs* actually change (new zero, new
+          wind, rangefinder hands back a new distance to track) -- an
+          event, not a 30 Hz timer -- and have the host interpolate between
+          already-fetched points for the 30 Hz redraw itself. A
+          per-display-frame from-scratch physics call cannot be made to
+          meet 30 Hz for an arbitrarily distant target on any board
+          tested, so the real-time budget has to live on the *host* side
+          of that split, not the device side.
+        - **Directly confirmed: one streamed multi-point request beats N
+          separate single-point requests by ~5×, on both boards** --
+          exactly what "the engine walks the trajectory once and doesn't
+          redo earlier stepping per query" predicts, and the concrete
+          number behind the "compute once" recommendation just above.
+          Compared two ways of building the same 10-point grid (100 m
+          through 1000 m, zero=100 m): **(A)** one `INTEGRATE_FAST` call
+          with `range_limit_ft=1000 m, range_step_ft=100 m` (11 rows, one
+          RK4 walk) vs **(B)** ten separate `INTEGRATE_FAST` calls with
+          `range_limit_ft == range_step_ft` at each of 100, 200, ...,
+          1000 m (each one re-integrating from the muzzle every time):
 
-      |                                     |   RP2350 |     RP2040 |
-      | ----------------------------------- | -------: | ---------: |
-      | (A) one stream, 11 rows             | 13.25 ms |  243.52 ms |
-      | (B) ten separate single-point calls | 69.87 ms | 1168.80 ms |
-      | B/A                                 |    5.27× |      4.80× |
+          |                                     |   RP2350 |     RP2040 |
+          | ----------------------------------- | -------: | ---------: |
+          | (A) one stream, 11 rows             | 13.25 ms |  243.52 ms |
+          | (B) ten separate single-point calls | 69.87 ms | 1168.80 ms |
+          | B/A                                 |    5.27× |      4.80× |
 
-      Building a correction grid (multiple holdover points, e.g. for a
-      BDC reticle or a range card) should always be **one**
-      `INTEGRATE`/`INTEGRATE_FAST` call spanning the grid, never a loop
-      of single-point queries -- the naive per-point loop a client
-      might reach for first is ~5× slower than the one-shot streamed
-      alternative on both boards tested, for no additional accuracy.
-- **A real, previously-unfound bug caught chasing this further: `INTEGRATE`
-      (not `_FAST`) hangs outright over CDC1 with the transport config
-      `bclibc_bcp.py`'s own docstring example uses.** Built
-      `benchmarks/bcp_wire_full_bench.py` -- a direct wire port of
-      `tests/tiny_bclibc_bench.py` (same shot, same requests/targets,
-      driven over real CDC1 instead of a local call) -- to get a clean
-      wire-vs-`benches.md` comparison across every BCP command that has a
-      local equivalent. First run timed out immediately on a plain
-      `INTEGRATE` 1 km/10 m request. Cause: `INTEGRATE`'s rows are the
-      full native `TrajectoryData` (64 B on this SP build, not
-      `INTEGRATE_FAST`'s 16 B `FastTrajData`) -- even at the *standard,
-      unmodified* `BCP_STREAM_ROWS_PER_FRAME=8`, one `MORE` frame is
-      `4 + 8*64 = 516 B`, already bigger than `CDCInterface`'s **default**
-      `txbuf=256` the docstring example in `src/bclibc_bcp.py` shows.
-      Every wire benchmark run before this one only ever exercised
-      `INTEGRATE_FAST` (16 B rows, `4+8*16=132 B`, comfortably under
-      256 B) -- so this was a live, ship-as-documented bug in the plain
-      `INTEGRATE` path that nothing had actually exercised over a real
-      transport yet. Same fix as the earlier `BCP_STREAM_ROWS_PER_FRAME`
-      experiment above: `CDCInterface.init(txbuf=2048, rxbuf=2048)`
-      (matching the existing 2048 B RX-buffer precedent) makes `INTEGRATE`
-      work over CDC1 too. **`bclibc_bcp.py`'s own example needs updating
-      to that `txbuf`/`rxbuf`, not left at the library default** -- the
-      default is a silent trap for the first real client that calls plain
-      `INTEGRATE` instead of `INTEGRATE_FAST`.
-      Full wire-vs-local comparison once fixed (same shot as
-      `benches.md`'s own RP2040 Stock / RP2350 armv7emsp-hw-FPU rows):
+          Building a correction grid (multiple holdover points, e.g. for a
+          BDC reticle or a range card) should always be **one**
+          `INTEGRATE`/`INTEGRATE_FAST` call spanning the grid, never a
+          loop of single-point queries -- the naive per-point loop a
+          client might reach for first is ~5× slower than the one-shot
+          streamed alternative on both boards tested, for no additional
+          accuracy.
+  - **A real, previously-unfound bug caught chasing this further:
+        `INTEGRATE` (not `_FAST`) hangs outright over CDC1 with the
+        transport config `bclibc_bcp.py`'s own docstring example uses.**
+        Built `benchmarks/bcp_wire_full_bench.py` -- a direct wire port of
+        `tests/tiny_bclibc_bench.py` (same shot, same requests/targets,
+        driven over real CDC1 instead of a local call) -- to get a clean
+        wire-vs-`benches.md` comparison across every BCP command that has
+        a local equivalent. First run timed out immediately on a plain
+        `INTEGRATE` 1 km/10 m request. Cause: `INTEGRATE`'s rows are the
+        full native `TrajectoryData` (64 B on this SP build, not
+        `INTEGRATE_FAST`'s 16 B `FastTrajData`) -- even at the *standard,
+        unmodified* `BCP_STREAM_ROWS_PER_FRAME=8`, one `MORE` frame is
+        `4 + 8*64 = 516 B`, already bigger than `CDCInterface`'s
+        **default** `txbuf=256` the docstring example in
+        `src/bclibc_bcp.py` shows. Every wire benchmark run before this
+        one only ever exercised `INTEGRATE_FAST` (16 B rows,
+        `4+8*16=132 B`, comfortably under 256 B) -- so this was a live,
+        ship-as-documented bug in the plain `INTEGRATE` path that nothing
+        had actually exercised over a real transport yet. Same fix as the
+        earlier `BCP_STREAM_ROWS_PER_FRAME` experiment above:
+        `CDCInterface.init(txbuf=2048, rxbuf=2048)` (matching the existing
+        2048 B RX-buffer precedent) makes `INTEGRATE` work over CDC1 too.
+        **`bclibc_bcp.py`'s own example needs updating to that
+        `txbuf`/`rxbuf`, not left at the library default** -- the default
+        is a silent trap for the first real client that calls plain
+        `INTEGRATE` instead of `INTEGRATE_FAST`.
+        Full wire-vs-local comparison once fixed (same shot as
+        `benches.md`'s own RP2040 Stock / RP2350 armv7emsp-hw-FPU rows):
 
-      | metric | RP2350 wire | RP2350 local (`benches.md`) | RP2040 wire | RP2040 local (`benches.md`) |
-      |---|---:|---:|---:|---:|
-      | `INTEGRATE` 1 km/10 m (101 rows) | 108.17 ms | 15.99 ms | 480.63 ms | 353.75 ms |
-      | `INTEGRATE` 3 km/100 m (30 rows) | **87.30 ms** | 73.20 ms | 1914.37 ms | 2158.65 ms |
-      | `INTEGRATE_AT` (100-2000 ft) | 4.76 ms | 2.42 ms | 62.32 ms | 66.99 ms |
-      | zero-solve, 300 m (`LOAD_PROFILE`, closest wire equivalent to `find_zero_angle()`) | 4.95 ms, 0.1434° | 4.13 ms, 0.1434° | 59.03 ms, 0.1434° | 119.07 ms |
+        | metric | RP2350 wire | RP2350 local (`benches.md`) | RP2040 wire | RP2040 local (`benches.md`) |
+        |---|---:|---:|---:|---:|
+        | `INTEGRATE` 1 km/10 m (101 rows) | 108.17 ms | 15.99 ms | 480.63 ms | 353.75 ms |
+        | `INTEGRATE` 3 km/100 m (30 rows) | **87.30 ms** | 73.20 ms | 1914.37 ms | 2158.65 ms |
+        | `INTEGRATE_AT` (100-2000 ft) | 4.76 ms | 2.42 ms | 62.32 ms | 66.99 ms |
+        | zero-solve, 300 m (`LOAD_PROFILE`, closest wire equivalent to `find_zero_angle()`) | 4.95 ms, 0.1434° | 4.13 ms, 0.1434° | 59.03 ms, 0.1434° | 119.07 ms |
 
-      Elevation agrees exactly (`0.1434°`) between wire and local on both
-      boards -- same physics, only the transport cost differs.
-      **Genuinely surprising result: the 3 km/100 m request is *cheaper
-      over the wire* than the 1 km/10 m request on both boards**, despite
-      integrating 3× the distance -- because it only emits 30 rows (4
-      `MORE` frames at the 8-row batch) versus 1 km/10 m's 101 rows (13
-      frames). At this batch size, **frame count (i.e. row count), not
-      physical integration distance, is what dominates wire time** -- a
-      coarser output step over a longer distance can be wire-cheaper than
-      a fine step over a shorter one, even though the engine itself does
-      more work for the former. Reinforces the same lesson as the 5×
-      per-point-loop finding above from the opposite direction: minimize
-      *frames*, not just re-solves.
+        Elevation agrees exactly (`0.1434°`) between wire and local on
+        both boards -- same physics, only the transport cost differs.
+        **Genuinely surprising result: the 3 km/100 m request is *cheaper
+        over the wire* than the 1 km/10 m request on both boards**,
+        despite integrating 3× the distance -- because it only emits 30
+        rows (4 `MORE` frames at the 8-row batch) versus 1 km/10 m's 101
+        rows (13 frames). At this batch size, **frame count (i.e. row
+        count), not physical integration distance, is what dominates wire
+        time** -- a coarser output step over a longer distance can be
+        wire-cheaper than a fine step over a shorter one, even though the
+        engine itself does more work for the former. Reinforces the same
+        lesson as the 5× per-point-loop finding above from the opposite
+        direction: minimize *frames*, not just re-solves.
+  - **Tried the opposite extreme -- `BCP_STREAM_ROWS_PER_FRAME=1` (one row
+        per `MORE` frame, matching how the non-BCP `integrate_stream(shot,
+        req, cb)` Python callback fires once per row with no batching at
+        all) -- confirms batching is a real win, not an artifact.** RP2350,
+        `INTEGRATE_FAST` 1 km/10 m: **121.79 ms** at 1 row/frame (101
+        frames) vs `43.42 ms` at the standard 8 rows/frame (14 frames) --
+        **2.8× slower** with no batching. RP2040: `366.26 ms` vs
+        `355.65 ms` -- only ~3% slower, because RP2040's own solve time
+        (~314 ms) so thoroughly dominates the total that per-frame
+        overhead differences barely register there, unlike on RP2350
+        where they're the whole story. Reverted back to `8` (no reason
+        found to change it).
+  - **Reran `benchmarks/bcp_wire_full_bench.py` with `--fast`
+        (`INTEGRATE_FAST` instead of plain `INTEGRATE`) -- resolves the
+        "3 km cheaper than 1 km" inversion above, confirming *why* it
+        happened.**
+
+        | | RP2350 `INTEGRATE` | RP2350 `INTEGRATE_FAST` | RP2040 `INTEGRATE` | RP2040 `INTEGRATE_FAST` |
+        |---|---:|---:|---:|---:|
+        | 1 km/10 m (101 rows) | 108.17 ms | **49.57 ms** | 480.63 ms | 366.59 ms |
+        | 3 km/100 m (30 rows) | **87.30 ms** ⚠ | 72.99 ms | 1914.37 ms | 1887.06 ms |
+
+        With `INTEGRATE_FAST`'s thinner 16 B rows, the inversion mostly
+        disappears (72.99 ms > 49.57 ms -- the "normal" ordering, longer
+        distance costs more) because frame-count overhead shrinks relative
+        to actual solve time, letting physical integration distance
+        dominate again as it "should." With `INTEGRATE`'s full 64 B rows,
+        frame-count overhead is large enough to *invert* the ordering
+        instead. On RP2040 the row-format choice barely matters either way
+        (~1.3× at 1 km, ~1.01× at 3 km) since solve time swamps everything
+        there regardless of wire format -- the same board-dependent
+        pattern as every other finding in this section.
+- [x] **Implemented — `bcp_stream_row_cb`/`bcp_stream_flush` in
       `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
       row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
       (currently 8, a provisional count pending the ack-scheme's real RTT
