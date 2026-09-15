@@ -1214,6 +1214,97 @@ assuming a real MicroPython/pico-sdk incompatibility.
       parser is C, so "same" now literally means the same compiled code,
       not just the same design).
 
+### CDC1 latency investigation (no hardware this session — see caveat)
+
+**Context:** the real-hardware numbers above (`benchmarks/bcp_wire_bench.py`,
+this same "Status at a glance" section) show wire-vs-local overhead of
+**+41.7 ms (RP2040-Zero)** / **+25.5 ms (RP2350)** for one `LOAD_PROFILE` +
+`INTEGRATE_FAST` round trip (14 `MORE`+`OK` frames). This session had **no
+physical RP2040/RP2350/ESP32-S3 access** (a different, cloud-only
+environment than the one that did the hardware bring-up above) — everything
+below is unix-only, meant to rule hypotheses *in or out* by isolating
+software-side costs from whatever's specific to real USB, not to produce a
+final answer. Scripts: `benchmarks/bcp_pty/` (see its own README).
+
+**Hypothesis 1 — CRC16/COBS framing cost.** Microbenchmarked `crc16()`/
+`cobs_encode()`/`cobs_decode()` directly (`framing_micro_bench.py`) across
+16 B–1800 B payloads (1800 B = worst-case full-table `LOAD_PROFILE`). Worst
+case: crc16 7.0 µs + cobs_encode 14.0 µs + cobs_decode 11.6 µs = **32.7 µs
+total**, on x64. Even a generous 30× slowdown for a 125 MHz Cortex-M0+
+lands under 1 ms. **Ruled out** as the dominant cost — Epic 3's "table-driven,
+O(1)-per-byte" resolution holds up.
+
+**Hypothesis 2 — the non-blocking retry loop's `mp_hal_delay_ms(1)`.**
+Built a real (not simulated) non-blocking unix pty: the slave fd is set
+`O_NONBLOCK` host-side before the device process inherits it (unix
+MicroPython has no `os.O_NONBLOCK`/`fcntl` to do this itself), so
+`run()`'s `readinto()` genuinely returns `None` and drives the exact same
+`mp_is_nonblocking_error()` → `mp_hal_delay_ms(1)` → retry path
+`bcp_dispatch_mp.h`'s `mp_bcp_run()` uses on real hardware
+(`device_pty_run_nb.py`/`host_pty_bench_nb.py`). Result: 301 real retries
+across 101 requests (~3/request), but total added latency was only
+**+0.583 ms over 100 iterations** (1.000 ms/iter non-blocking vs 0.417 ms
+blocking) — far less than 301 × 1 ms would predict. Calibrated the delay
+primitive in isolation (`time.sleep_ms(1)` × 300, back-to-back): a genuine
+**1000.83 µs/call** when called back-to-back with nothing else to do. The
+mismatch (real per-retry cost in `run()` ≈ 0.19–0.3 ms, not 1 ms) means
+`mp_hal_delay_ms`'s underlying wait (`mp_event_wait_ms`) returns **early**
+once the fd is actually readable on unix, rather than blindly sleeping the
+full millisecond — it is not a dumb busy-sleep in this context. **Ruled
+out** as the dominant cost, at least under this port's event-wait
+semantics; unconfirmed whether rp2/esp32's `mp_hal_delay_ms` behaves the
+same way (plausible, since the port docs describe it as the hook that
+pumps `tud_task()`, implying it's already event-driven there too, but not
+verified — no hardware this session).
+
+**Hypothesis 3 — MicroPython itself (VM/interpreter tax) vs pure C.**
+Wrote a from-scratch pure-C (zero MicroPython) device harness
+(`pure_c_bcp.c`) reusing the *actual* project code: `tiny_bclibc.h`
+directly (header-only, `TINY_BCLIBC_FUNC` defaults to `static inline`, no
+separate link step) for the engine calls, and a verbatim copy of
+`bcp_frame_mp.h`'s pure-C `crc16`/`cobs_encode`/`cobs_decode` core (the
+`mp_obj_t` wrappers are the only part left out). Same blocking-pty shape as
+Hypothesis 2's baseline, so it's a direct comparison:
+**pure C 0.355–0.364 ms vs MicroPython 0.417 ms** — a real but small ~15%
+("MicroPython tax") difference. **Caveat this cuts against itself:** this
+was two separate unix *processes* (OS scheduling, syscalls) being compared,
+which doesn't map onto the embedded target at all — there, `usermod`
+MicroPython is linked into the same firmware image as a bare-metal app
+would be, `run()`'s hot loop is already compiled C either way (Epic 3's
+"implementation language is C" resolution), and there's no process
+boundary to cross. The real embedded delta is expected to be *smaller*
+than 15%, not larger. **Ruled out** as the dominant cost, with the same
+"no hardware to confirm" caveat as Hypothesis 2.
+
+**Net result:** every software-side hypothesis tested (framing math, the
+retry-poll loop, MicroPython vs pure C) is individually **two-plus orders
+of magnitude** below the observed 25–42 ms, and stays that way even summed.
+None of these can be exercised meaningfully without a real USB bus in the
+loop anyway — a unix pty has no USB event queue at all, which is exactly
+the missing piece pointed at below.
+
+**New, unverified lead — TinyUSB's own event-processing cap.** Diffed the
+TinyUSB commit MicroPython v1.29.0 pins (`b549ac1d8`) against the one
+v1.21.0–v1.23.0 pin (`1fdf29075`, unchanged across all three — confirmed
+via `git ls-tree <tag> lib/tinyusb` in a full `micropython` checkout).
+Found `b73df6c22` ("Limit events processed by `tud_task_ext()`"): before
+it, `tud_task()` drained the *entire* USB event queue in one call; after,
+it stops after `CFG_TUD_TASK_EVENTS_PER_RUN` events (**default 16**, was
+unlimited) and returns, needing a subsequent call to drain the rest. This
+is exactly the function `run()`'s poll loop depends on
+(`mp_event_handle_nowait()` → `tud_task()`) to service CDC1 mid-stream, and
+a 14-`MORE`-frame `INTEGRATE_FAST` burst is a plausible way to queue enough
+events to hit that cap. **Not tested this session** (no hardware). Also
+note: **MicroPython v1.21.0 itself is not a viable comparison point** — the
+`usb.device`/`CDCInterface` dynamic-USB API this whole epic depends on
+didn't exist until v1.23.0 (`9d0d262b`, merged 2024-03-15; v1.21.0 shipped
+2023-10-06). **Proposed test, next time hardware is available:** don't
+downgrade the toolchain — override `#define CFG_TUD_TASK_EVENTS_PER_RUN 0`
+(unlimited, pre-`b73df6c22` behavior) in the current v1.29.0 build's
+`tusb_config.h` and re-run `bcp_wire_bench.py` on RP2350/RP2040-Zero
+unchanged otherwise, for a clean single-variable test against the existing
++25.5 ms / +41.7 ms baseline.
+
 ## Epic 5 — Streaming (Y-modem-like)
 
 - [x] **Superseded — no `STREAM_START`/`STREAM_DATA`/`STREAM_END`.** Per
