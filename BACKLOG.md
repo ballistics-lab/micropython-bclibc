@@ -300,13 +300,31 @@ being used purely as a library from Python application code.
       | bitwise, no table | ~87.5 | 7× slower |
       | (for comparison) COBS encode | ~17.5 | same order as CRC |
 
-      256-entry wins outright — fastest *and* its 512 B ROM cost is
-      negligible against RP2040's flash, so there's no ROM-vs-speed
-      tradeoff pushing towards the smaller table. Worst-case framing cost
-      (`LOAD_PROFILE`, ~1.4 KB, COBS + CRC together) ≈ 40 ms — fine since
-      that frame is sent once per rifle/ammo setup, not per shot; small
-      frames (`Request`, 16 B) cost well under 1 ms, negligible next to
-      the actual integration compute time.
+      256-entry wins outright on speed, so the only real cost worth
+      minimizing is the table's **RAM** footprint (not ROM/flash — the
+      table is computed once at import, not a frozen constant, so it
+      lives on the heap either way; see the follow-up below). Worst-case
+      framing cost (`LOAD_PROFILE`, ~1.4 KB, COBS + CRC together) ≈ 40 ms
+      — fine since that frame is sent once per rifle/ammo setup, not per
+      shot; small frames (`Request`, 16 B) cost well under 1 ms,
+      negligible next to the actual integration compute time.
+- [x] **Resolved — CRC table stored as `array('H', ...)`, not a plain
+      `list`.** A `list` of 256 ints is really a 256-pointer object array;
+      measured on the same RP2040-Zero: **1040 B** RAM for the list vs
+      **528 B** for a packed `array('H', ...)` holding the same 256
+      values — same lookup, ~5% slower (16855 vs 16037 µs for a 1400 B
+      CRC, i.e. noise next to the table-size choice above). Applied in
+      `src/bcp_frame.py`, re-verified for real on-device (not just the
+      isolated micro-benchmark): imported the updated module over
+      `mpremote`, `crc16(b"123456789")` still `0x29B1`, `build_frame`/
+      `FrameDecoder` round-trip still correct. **Not pursued further:**
+      going all the way to a zero-RAM table (a `bytes` literal that a
+      *frozen* build keeps in flash instead of computing at import) would
+      need hand-verified hex-table source instead of the current 6-line
+      poly loop computed at runtime — real transcription risk (this
+      session already hit exactly that mistake once, with the COBS test
+      vectors) for savings that don't matter yet at this scale. Revisit
+      only if on-device RAM actually gets tight.
 - [ ] Bad-CRC frames are dropped silently (their `seq` cannot be trusted,
       so there is nothing to reply to); host relies on a timeout. Optional
       drop counter reported via `IDENT`.

@@ -75,11 +75,16 @@ variant).
 
 Measured on real hardware (Waveshare RP2040-Zero, RP2040, MicroPython
 1.29.0, plain bytecode) at **~12.6 µs/byte** -- 2x faster than a 16-entry
-nibble table and 7x faster than a bitwise loop, at a negligible 512 B ROM
-cost. See `BACKLOG.md` Epic 3 for the full comparison table. Worst-case
-framing cost (COBS + CRC16 together, the ~1.4 KB `LOAD_PROFILE` frame)
-≈ 40 ms -- negligible next to how rarely that frame is sent (once per
-rifle/ammo setup) and to actual integration compute time for everything
+nibble table and 7x faster than a bitwise loop. The table is computed
+once at import (not a frozen flash constant), so its cost is **RAM**, not
+ROM: stored as `array('H', ...)` rather than a plain `list` (a list of
+256 ints is really a 256-pointer object array) -- measured **528 B**
+versus **1040 B** for the same 256 values, ~5% slower, noise next to the
+table-size choice itself. See `BACKLOG.md` Epic 3 for the full comparison
+table. Worst-case framing cost (COBS + CRC16 together, the ~1.4 KB
+`LOAD_PROFILE` frame) ≈ 40 ms -- negligible next to how rarely that frame
+is sent (once per rifle/ammo setup) and to actual integration compute
+time for everything
 else.
 
 ## 3. Response status codes
