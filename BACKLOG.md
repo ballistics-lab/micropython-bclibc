@@ -88,15 +88,41 @@ above)**:
   (RP2040, armv6m, CMake path, fresh `build-RPI_PICO/`) with
   `BCLIBC_BCP=1` this session -- FLASH 361116→364264 B (+3148 B), RAM
   24700→30220 B (+5520 B, mostly `BcpState`'s 200-point drag/5-wind
-  backing arrays), no warnings. **Not yet exercised**: actually running on
-  real RP2040/RP2350/ESP32-S3 hardware (no board available in this
-  session) -- only the unix build was executed; RPI_PICO was compiled and
-  linked, not flashed/run.
+  backing arrays), no warnings.
+- `INTEGRATE_AT` (`src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_integrate_at()`,
+  PROTOCOL.md §4/§4.5): 8 B fixed request (`key:u8, rsvd:u8[3],
+  target:f32`), calls the shared `bcp_build_props()` (factored out of
+  `bcp_resolve_zero()`, same call both now share) + the engine's own
+  `tiny_bclibc_integrate_at()` unchanged -- no new engine code. Response
+  on success is a **raw memcpy** of `TINY_BCLIBC_BaseTrajData` followed by
+  `TINY_BCLIBC_TrajectoryData` (native `real_t`, not the always-f32
+  encoding `LOAD_*` uses -- matches PROTOCOL.md §4.5's documented
+  contract that row size depends on build precision, decoded via IDENT's
+  own `real_size`/`base_traj_size`/`traj_row_size`). `ERR_BAD_ARG` if
+  `key` is outside `TINY_BCLIBC_InterpKey`'s 0..7 range, `ERR_NOT_LOADED`
+  with no profile cached, `ERR_INTERNAL` if the engine finds no
+  bracketing crossing for `target` (`TINY_BCLIBC_ERR_INTERCEPTION`).
+  Verified this session against a real G7 profile (168 gr/.308/bc=0.305,
+  2750 fps, zeroed at 300 m): querying `KEY_POS_X` at the zero distance
+  itself returns `distance_ft`/`px` matching the target and `height_ft`/
+  `drop_angle_rad` ≈ 0 (a correctly zeroed rifle has no drop *at* its own
+  zero range) -- not just "doesn't crash", the physics checks out.
+  `tests/test_bcp_dispatch_native.py`'s new `INTEGRATE_AT` sections cover
+  this plus the three error paths above; all 37 checks in the file pass
+  on the same unix build. Also cross-compiled and linked clean for
+  RPI_PICO (CMake path) -- FLASH 364264→364408 B (+144 B; small, since
+  `tiny_bclibc_integrate_at()` itself already existed and was already
+  compiled in for the non-BCP Python binding), RAM unchanged (no new
+  persistent state), no warnings.
+
+**Not yet exercised, either command above**: actually running on real
+RP2040/RP2350/ESP32-S3 hardware (no board available in this session) --
+only the unix build was executed; RPI_PICO was compiled and linked, not
+flashed/run.
 
 **Not implemented yet** (raise `NotImplementedError` from `dispatch()`
 today) — in roughly the order it makes sense to tackle them, per the
-dependency notes in Epic 8: `INTEGRATE_AT` (single-row response, no
-streaming machinery needed) → `INTEGRATE`/`INTEGRATE_FAST` (need the
+dependency notes in Epic 8: `INTEGRATE`/`INTEGRATE_FAST` (need the
 `MORE`-frame streaming path, Epic 5) → `RESET`/`ABORT` (need real cached
 state/a real stream in flight to be worth building against).
 

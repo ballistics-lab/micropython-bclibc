@@ -26,11 +26,11 @@
  * no byte-offset interleaving to manage regardless of which order
  * LOAD_PROFILE/LOAD_CONDITIONS arrive in.
  *
- * Only IDENT, LOAD_CONFIG, LOAD_PROFILE and LOAD_CONDITIONS are implemented
- * so far — see BACKLOG.md Epic 3/8 for the rest of the command table;
- * unimplemented commands raise NotImplementedError (a development-time
- * signal, not a wire status — production dispatch will route every
- * BCP_CMD_* to a real handler before this ships).
+ * Only IDENT, LOAD_CONFIG, LOAD_PROFILE, LOAD_CONDITIONS and INTEGRATE_AT
+ * are implemented so far — see BACKLOG.md Epic 3/8 for the rest of the
+ * command table; unimplemented commands raise NotImplementedError (a
+ * development-time signal, not a wire status — production dispatch will
+ * route every BCP_CMD_* to a real handler before this ships).
  */
 #ifndef BCP_DISPATCH_MP_H
 #define BCP_DISPATCH_MP_H
@@ -204,6 +204,16 @@ static void bcp_state_ensure_init(void)
     bcp_state.ready = true;
 }
 
+/* ── Shared ShotProps builder ─────────────────────────────────────────────
+ * Every command that runs the engine against the current cached state
+ * (bcp_resolve_zero() below, INTEGRATE_AT) needs a fresh TINY_BCLIBC_ShotProps
+ * built from bcp_state.shot -- same call, same curve_buf scratch, so it's
+ * factored out once instead of repeated at each call site. */
+static int32_t bcp_build_props(TINY_BCLIBC_ShotProps *out)
+{
+    return tiny_bclibc_build_shot_props(&bcp_state.shot, bcp_state.curve_buf, out);
+}
+
 /* ── Shared zero re-solve ──────────────────────────────────────────────────
  * LOAD_PROFILE/LOAD_CONFIG/LOAD_CONDITIONS all re-trigger this exact same
  * solve (PROTOCOL.md §4.2/§4.2a/§4.3): builds a ShotProps from whatever's
@@ -217,7 +227,7 @@ static void bcp_state_ensure_init(void)
 static int32_t bcp_resolve_zero(real_t *angle_out)
 {
     TINY_BCLIBC_ShotProps props;
-    int32_t rc = tiny_bclibc_build_shot_props(&bcp_state.shot, bcp_state.curve_buf, &props);
+    int32_t rc = bcp_build_props(&props);
     if (rc != TINY_BCLIBC_OK)
     {
         return rc;
@@ -536,6 +546,76 @@ static int bcp_handle_load_conditions(const uint8_t *payload, size_t payload_len
     return 1;
 }
 
+/* ── INTEGRATE_AT (PROTOCOL.md §4/§4.5) ───────────────────────────────────
+ * Request: 8 B fixed -- `key:u8, rsvd:u8[3], target:f32`. `key` selects
+ * which TINY_BCLIBC_BaseTrajData field `target` is interpolated against
+ * (TINY_BCLIBC_KEY_TIME..TINY_BCLIBC_KEY_VEL_Z, 0..7, traj_data.h). No
+ * variable-length part, so (§4.1) reduces to an exact size match, same as
+ * LOAD_CONFIG.
+ *
+ * Response, on success: raw `TINY_BCLIBC_BaseTrajData` immediately followed
+ * by raw `TINY_BCLIBC_TrajectoryData` -- a straight memcpy of both native
+ * structs, *not* the always-f32 field-by-field encoding LOAD_PROFILE/
+ * LOAD_CONFIG/LOAD_CONDITIONS use. This matches PROTOCOL.md §4.5's own
+ * documented contract (row size depends on the build's real_t precision;
+ * a host decodes it using IDENT's own real_size/base_traj_size/
+ * traj_row_size, not a fixed assumption) and is safe on every BCP target
+ * in scope -- all little-endian, same rationale bcp_wu16()'s own comment
+ * above gives for the explicit-byte-order helpers being unnecessary here
+ * (there is no cross-field byte-order concern with a same-endianness
+ * memcpy either).
+ *
+ * `ERR_BAD_ARG` if `key` is out of `TINY_BCLIBC_InterpKey`'s range.
+ * `ERR_NOT_LOADED` if no profile is cached yet. `ERR_INTERNAL` if the
+ * underlying `tiny_bclibc_integrate_at()` fails (most commonly: no
+ * bracketing crossing found for `target`, TINY_BCLIBC_ERR_INTERCEPTION) --
+ * same mapping bcp_resolve_zero()'s callers already use for the engine's
+ * other failure modes, there's no more specific wire status for it.
+ */
+#define BCP_INTEGRATE_AT_REQ_SIZE 8u
+
+static size_t bcp_handle_integrate_at(const uint8_t *payload, size_t payload_len,
+                                       uint8_t out[sizeof(TINY_BCLIBC_BaseTrajData) + sizeof(TINY_BCLIBC_TrajectoryData)],
+                                       uint8_t status_out[1])
+{
+    if (payload_len != BCP_INTEGRATE_AT_REQ_SIZE)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_SIZE;
+        return 0;
+    }
+    uint8_t key = payload[0];
+    if (key > (uint8_t)TINY_BCLIBC_KEY_VEL_Z)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_BAD_ARG;
+        return 0;
+    }
+    if (!bcp_state.has_profile)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_NOT_LOADED;
+        return 0;
+    }
+    real_t target = (real_t)bcp_rdf32(payload, 4);
+
+    TINY_BCLIBC_ShotProps props;
+    TINY_BCLIBC_BaseTrajData raw;
+    TINY_BCLIBC_TrajectoryData full;
+    int32_t rc = bcp_build_props(&props);
+    if (rc == TINY_BCLIBC_OK)
+    {
+        rc = tiny_bclibc_integrate_at(&props, (int32_t)key, target, &raw, &full);
+    }
+    if (rc != TINY_BCLIBC_OK)
+    {
+        status_out[0] = (uint8_t)BCP_STATUS_ERR_INTERNAL;
+        return 0;
+    }
+
+    memcpy(out, &raw, sizeof(raw));
+    memcpy(out + sizeof(raw), &full, sizeof(full));
+    status_out[0] = (uint8_t)BCP_STATUS_OK;
+    return sizeof(raw) + sizeof(full);
+}
+
 /* ── IDENT (PROTOCOL.md §4.6) ─────────────────────────────────────────────
  * No request payload (ignored). Response, fixed part matches struct format
  * "<BBHHBHBIB" (15 B) followed by the version string:
@@ -637,6 +717,17 @@ static mp_obj_t mp_bcp_dispatch(mp_obj_t type_obj, mp_obj_t seq_obj, mp_obj_t pa
         uint8_t status;
         int ok = bcp_handle_load_conditions((const uint8_t *)pbi.buf, pbi.len, &status);
         return bcp_zero_response(status, ok);
+    }
+    case BCP_CMD_INTEGRATE_AT:
+    {
+        mp_buffer_info_t pbi;
+        mp_get_buffer_raise(payload_obj, &pbi, MP_BUFFER_READ);
+        uint8_t out[sizeof(TINY_BCLIBC_BaseTrajData) + sizeof(TINY_BCLIBC_TrajectoryData)];
+        uint8_t status;
+        size_t n = bcp_handle_integrate_at((const uint8_t *)pbi.buf, pbi.len, out, &status);
+        mp_obj_t resp_payload = (n > 0) ? mp_obj_new_bytes(out, n) : mp_const_empty_bytes;
+        mp_obj_t items[2] = {MP_OBJ_NEW_SMALL_INT(status), resp_payload};
+        return mp_obj_new_tuple(2, items);
     }
     default:
         /* mp_raise_NotImplementedError() is a natmod-only (dynruntime.h)

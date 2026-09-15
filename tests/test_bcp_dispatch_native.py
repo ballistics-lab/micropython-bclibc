@@ -171,6 +171,44 @@ try:
 except Exception as ex:
     _fail("LOAD_CONDITIONS bad size", ex)
 
+# -- INTEGRATE_AT (no profile yet) -------------------------------------------------
+print("\n--- INTEGRATE_AT (no profile cached yet) ---")
+
+_KEY_TIME, _KEY_MACH, _KEY_POS_X, _KEY_POS_Y, _KEY_POS_Z, _KEY_VEL_X, _KEY_VEL_Y, _KEY_VEL_Z = range(8)
+
+
+def _pack_integrate_at(key, target):
+    return struct.pack("<B", key) + b"\x00\x00\x00" + struct.pack("<f", target)
+
+
+try:
+    status, payload = d.dispatch(d.CMD_INTEGRATE_AT, 1, _pack_integrate_at(_KEY_POS_X, 100.0))
+    if status == d.STATUS_ERR_NOT_LOADED and payload == b"":
+        _pass("INTEGRATE_AT with no profile cached -> ERR_NOT_LOADED, empty payload")
+    else:
+        _fail("INTEGRATE_AT no-profile case", (status, payload))
+except Exception as ex:
+    _fail("INTEGRATE_AT no-profile case", ex)
+
+try:
+    status, _ = d.dispatch(d.CMD_INTEGRATE_AT, 1, b"short")
+    if status == d.STATUS_ERR_BAD_SIZE:
+        _pass("INTEGRATE_AT with wrong payload size -> ERR_BAD_SIZE")
+    else:
+        _fail("INTEGRATE_AT bad size", "got status={}".format(status))
+except Exception as ex:
+    _fail("INTEGRATE_AT bad size", ex)
+
+try:
+    # key=8 is one past TINY_BCLIBC_KEY_VEL_Z (7) -- out of InterpKey's range.
+    status, _ = d.dispatch(d.CMD_INTEGRATE_AT, 1, _pack_integrate_at(8, 100.0))
+    if status == d.STATUS_ERR_BAD_ARG:
+        _pass("INTEGRATE_AT with key out of range -> ERR_BAD_ARG")
+    else:
+        _fail("INTEGRATE_AT bad key", "got status={}".format(status))
+except Exception as ex:
+    _fail("INTEGRATE_AT bad key", ex)
+
 # -- unknown command -------------------------------------------------------------
 print("\n--- unknown command ---")
 try:
@@ -429,6 +467,66 @@ try:
     d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
 except Exception:
     pass
+
+# -- INTEGRATE_AT (profile cached) ---------------------------------------------
+print("\n--- INTEGRATE_AT (profile cached) ---")
+
+_BASE_TRAJ_NAMES = "time px py pz vx vy vz mach".split()
+_TRAJ_NAMES = (
+    "time distance_ft velocity_fps mach height_ft slant_height_ft drop_angle_rad "
+    "windage_ft windage_angle_rad slant_distance_ft angle_rad density_ratio drag "
+    "energy_ft_lb ogw_lb"
+).split()
+
+
+def _unpack_integrate_at(payload, base_size, traj_size):
+    base = struct.unpack_from("<{}f".format(len(_BASE_TRAJ_NAMES)), payload, 0)
+    traj = struct.unpack_from("<{}fi".format(len(_TRAJ_NAMES)), payload, base_size)
+    return dict(zip(_BASE_TRAJ_NAMES, base)), dict(zip(_TRAJ_NAMES + ["flag"], traj))
+
+
+try:
+    # Reload a clean G7 profile + ICAO/no-wind conditions so this section
+    # doesn't depend on whichever LOAD_CONDITIONS variant ran last above.
+    p = _pack_profile(0.305, 168.0, 0.308, 1.2, 2750.0, 1.5, 10.0, _ZERO_FT, _DRAG_G7, [])
+    d.dispatch(d.CMD_LOAD_PROFILE, 1, p)
+    d.dispatch(d.CMD_LOAD_CONDITIONS, 1, _pack_conditions(*_ICAO, winds=[]))
+
+    _, ident_payload = d.dispatch(d.CMD_IDENT, 1, b"")
+    traj_row_size, base_traj_size = struct.unpack_from("<HH", ident_payload, 2)
+    status, payload = d.dispatch(d.CMD_INTEGRATE_AT, 1, _pack_integrate_at(_KEY_POS_X, _ZERO_FT))
+    if status != d.STATUS_OK:
+        _fail("INTEGRATE_AT at the zero distance", (status, payload))
+    elif len(payload) != base_traj_size + traj_row_size:
+        _fail("INTEGRATE_AT payload size", "got {} expected {}".format(len(payload), base_traj_size + traj_row_size))
+    else:
+        base, traj = _unpack_integrate_at(payload, base_traj_size, traj_row_size)
+        checks = [
+            ("px matches the requested target distance", abs(base["px"] - _ZERO_FT) < 0.5),
+            ("distance_ft matches the requested target too", abs(traj["distance_ft"] - _ZERO_FT) < 0.5),
+            ("height_ft is ~0 at the zero range (rifle is zeroed there)", abs(traj["height_ft"]) < 0.1),
+            ("drop_angle_rad is ~0 at the zero range", abs(traj["drop_angle_rad"]) < 1e-4),
+            ("velocity_fps has decayed below the muzzle velocity", 0.0 < traj["velocity_fps"] < 2750.0),
+            ("mach is positive and supersonic-range plausible", 0.5 < traj["mach"] < 5.0),
+        ]
+        for name, ok in checks:
+            if ok:
+                _pass(name)
+            else:
+                _fail(name, {"base": base, "traj": traj})
+except Exception as ex:
+    _fail("INTEGRATE_AT at the zero distance", ex)
+
+try:
+    # KEY_MACH target of 100.0 is never reached by a bullet that starts well
+    # below it and only decelerates -- no bracketing crossing exists.
+    status, payload = d.dispatch(d.CMD_INTEGRATE_AT, 1, _pack_integrate_at(_KEY_MACH, 100.0))
+    if status == d.STATUS_ERR_INTERNAL and payload == b"":
+        _pass("INTEGRATE_AT with an unreachable target -> ERR_INTERNAL, empty payload")
+    else:
+        _fail("INTEGRATE_AT unreachable target", (status, payload))
+except Exception as ex:
+    _fail("INTEGRATE_AT unreachable target", ex)
 
 # -- LOAD_CONFIG now succeeds, since a profile is cached ----------------------
 print("\n--- LOAD_CONFIG after a profile is cached ---")
