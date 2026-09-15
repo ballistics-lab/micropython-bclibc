@@ -1432,6 +1432,54 @@ line "30 Hz target" [30, 30, 30, 30, 30]
       of single-point queries -- the naive per-point loop a client
       might reach for first is ~5× slower than the one-shot streamed
       alternative on both boards tested, for no additional accuracy.
+- **A real, previously-unfound bug caught chasing this further: `INTEGRATE`
+      (not `_FAST`) hangs outright over CDC1 with the transport config
+      `bclibc_bcp.py`'s own docstring example uses.** Built
+      `benchmarks/bcp_wire_full_bench.py` -- a direct wire port of
+      `tests/tiny_bclibc_bench.py` (same shot, same requests/targets,
+      driven over real CDC1 instead of a local call) -- to get a clean
+      wire-vs-`benches.md` comparison across every BCP command that has a
+      local equivalent. First run timed out immediately on a plain
+      `INTEGRATE` 1 km/10 m request. Cause: `INTEGRATE`'s rows are the
+      full native `TrajectoryData` (64 B on this SP build, not
+      `INTEGRATE_FAST`'s 16 B `FastTrajData`) -- even at the *standard,
+      unmodified* `BCP_STREAM_ROWS_PER_FRAME=8`, one `MORE` frame is
+      `4 + 8*64 = 516 B`, already bigger than `CDCInterface`'s **default**
+      `txbuf=256` the docstring example in `src/bclibc_bcp.py` shows.
+      Every wire benchmark run before this one only ever exercised
+      `INTEGRATE_FAST` (16 B rows, `4+8*16=132 B`, comfortably under
+      256 B) -- so this was a live, ship-as-documented bug in the plain
+      `INTEGRATE` path that nothing had actually exercised over a real
+      transport yet. Same fix as the earlier `BCP_STREAM_ROWS_PER_FRAME`
+      experiment above: `CDCInterface.init(txbuf=2048, rxbuf=2048)`
+      (matching the existing 2048 B RX-buffer precedent) makes `INTEGRATE`
+      work over CDC1 too. **`bclibc_bcp.py`'s own example needs updating
+      to that `txbuf`/`rxbuf`, not left at the library default** -- the
+      default is a silent trap for the first real client that calls plain
+      `INTEGRATE` instead of `INTEGRATE_FAST`.
+      Full wire-vs-local comparison once fixed (same shot as
+      `benches.md`'s own RP2040 Stock / RP2350 armv7emsp-hw-FPU rows):
+
+      | metric | RP2350 wire | RP2350 local (`benches.md`) | RP2040 wire | RP2040 local (`benches.md`) |
+      |---|---:|---:|---:|---:|
+      | `INTEGRATE` 1 km/10 m (101 rows) | 108.17 ms | 15.99 ms | 480.63 ms | 353.75 ms |
+      | `INTEGRATE` 3 km/100 m (30 rows) | **87.30 ms** | 73.20 ms | 1914.37 ms | 2158.65 ms |
+      | `INTEGRATE_AT` (100-2000 ft) | 4.76 ms | 2.42 ms | 62.32 ms | 66.99 ms |
+      | zero-solve, 300 m (`LOAD_PROFILE`, closest wire equivalent to `find_zero_angle()`) | 4.95 ms, 0.1434° | 4.13 ms, 0.1434° | 59.03 ms, 0.1434° | 119.07 ms |
+
+      Elevation agrees exactly (`0.1434°`) between wire and local on both
+      boards -- same physics, only the transport cost differs.
+      **Genuinely surprising result: the 3 km/100 m request is *cheaper
+      over the wire* than the 1 km/10 m request on both boards**, despite
+      integrating 3× the distance -- because it only emits 30 rows (4
+      `MORE` frames at the 8-row batch) versus 1 km/10 m's 101 rows (13
+      frames). At this batch size, **frame count (i.e. row count), not
+      physical integration distance, is what dominates wire time** -- a
+      coarser output step over a longer distance can be wire-cheaper than
+      a fine step over a shorter one, even though the engine itself does
+      more work for the former. Reinforces the same lesson as the 5×
+      per-point-loop finding above from the opposite direction: minimize
+      *frames*, not just re-solves.
       `src/bcp/bcp_dispatch_mp.h`.** Not literally "one wire frame per
       row" as first phrased -- rows are batched `BCP_STREAM_ROWS_PER_FRAME`
       (currently 8, a provisional count pending the ack-scheme's real RTT
