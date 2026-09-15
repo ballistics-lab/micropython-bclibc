@@ -925,14 +925,18 @@ being used purely as a library from Python application code.
           written this time): solver tuning only —
           `step_multiplier, zero_finding_accuracy, minimum_velocity,
           maximum_drop, gravity_constant, minimum_altitude,
-          max_iterations` (`PROTOCOL.md` §4.2a) — fixed 28 B, identical
-          layout to the internal `_CFG_DESC` range, so it's a straight
-          `memcpy` into the persistent Shot buffer's cfg offset, no
-          field-by-field repacking. No variable-length part, so its
-          array-count rule (§4.1) is just an exact-size check. Defaults
-          (`Config()`'s own Python-side values) apply on-device before
-          the first `LOAD_CONFIG`, same pattern as `LOAD_CONDITIONS`'s
-          fallback. **Implemented and hardware-verified**
+          max_iterations` (`PROTOCOL.md` §4.2a) — fixed 28 B. Wire order
+          differs from `TINY_BCLIBC_Config`'s own field order
+          (`cMaxIterations` sits before `cGravityConstant`/
+          `cMinimumAltitude` there), so it's parsed field-by-field, not a
+          raw copy — see the state redesign below for why there's a real
+          native `TINY_BCLIBC_Config` to parse into now, not a byte
+          range. No variable-length part, so its array-count rule (§4.1)
+          is just an exact-size check. Defaults come straight from the
+          engine's own `TINY_BCLIBC_Config_default()` (not hand-copied
+          numbers — see below), applied on-device before the first
+          `LOAD_CONFIG`, same pattern as `LOAD_CONDITIONS`'s fallback.
+          **Implemented and hardware-verified**
           (`src/bcp_dispatch_mp.c`'s `BCP_CMD_LOAD_CONFIG` case): config
           is validated and stored for real; the "re-solve the zero and
           answer with `barrel_elevation_rad`" half is honestly reported
@@ -943,18 +947,56 @@ being used purely as a library from Python application code.
           re-verified on the same RP2040-Zero flashed throughout this
           epic — identical `ERR_NOT_LOADED`/`ERR_BAD_SIZE` behavior over
           `mpremote` on real hardware.
-    - **New shared header, not a design decision but worth recording:**
-          `src/bcp_shot_layout.h` — the `_SHOT_DESC` byte offsets, single
-          source of truth for both `tiny_bclibc_mp.c` (already refactored
-          to include it instead of its own local `#define`s) and
-          `bcp_dispatch_mp.c` (writes `LOAD_*` wire fields directly into
-          the same layout). Written specifically because the two files
-          need to agree on this byte-for-byte — the persistent Shot
-          buffer `bcp_dispatch_mp.c` now owns is meant to be handed to
-          `tiny_bclibc_mp.c`'s own `integrate()`/`find_zero_angle()`/etc.
-          unchanged once those commands exist, so a silent offset drift
-          between two hand-copied `#define` lists was a real risk, not a
-          hypothetical one.
+    - **Superseded — persistent state is a native `TINY_BCLIBC_Shot`
+          struct, not a `_SHOT_DESC`-shaped byte buffer.** The first draft
+          of this (above) introduced `src/bcp_shot_layout.h` as a shared
+          byte-offset header for both `tiny_bclibc_mp.c` and
+          `bcp_dispatch_mp.c`, on the assumption that the cached profile
+          had to stay wire-compatible bytes because it would eventually
+          be handed to `tiny_bclibc_mp.c`'s own Python-facing
+          `integrate()`/`find_zero_angle()` functions. That assumption
+          was wrong: this file is going to call straight into the C
+          engine (`tiny_bclibc_build_shot_props()`,
+          `tiny_bclibc_find_zero_angle()`, etc.) instead, per the
+          "implementation language is C" resolution (Epic 3) — a
+          real-time target has no business converting through Python
+          just to call C. Once that's the plan, there is no reason to
+          keep a byte-packed buffer at all: `TINY_BCLIBC_Shot` (the
+          engine's own raw-field struct, already exactly what
+          `tiny_bclibc_build_shot_props()` expects as input) is a native
+          C struct with independently-addressed members — `winds` and
+          the drag curve (`mach_data`/`cd_data`/`drag_table_size`) are
+          separate pointers/arrays with no interleaving, so the "which
+          order do `LOAD_PROFILE`/`LOAD_CONDITIONS` arrive in" question
+          this section was originally raised to solve **doesn't come up
+          at all** — the compiler lays out independent struct members
+          independently; there was never a real reason to hand-manage
+          that ourselves. `src/bcp_shot_layout.h` deleted,
+          `tiny_bclibc_mp.c` reverted to its own local `#define`s (its
+          Python-facing `Shot()` binding still needs byte offsets for
+          parsing buffer-protocol objects from non-BCP callers — that
+          usage is unaffected and unrelated). New `BcpState` in
+          `bcp_dispatch_mp.c`: `TINY_BCLIBC_Shot shot` plus backing
+          arrays for the drag curve/winds/PCHIP scratch space (sized to
+          the BCP caps above) and `has_profile`/`has_config`/
+          `has_conditions`/`ready` flags. `LOAD_CONFIG` rewritten to
+          parse straight into `shot.config` (a real `TINY_BCLIBC_Config`)
+          instead of a byte range; defaults now come from
+          `TINY_BCLIBC_Config_default()` rather than 7 hand-copied
+          numbers. **Re-verified for real after the rewrite**, not
+          assumed safe: same 20/20 `test_bcp_dispatch_native.py` pass on
+          the unix usermod build (no test changes needed — `dispatch()`'s
+          bytes-in/bytes-out contract didn't change, only what's behind
+          it), `tiny_bclibc.py`'s own `Shot()`/`integrate()` re-checked
+          working after `tiny_bclibc_mp.c`'s revert, and the same
+          RP2040-Zero reflashed and re-checked over `mpremote` --
+          identical `IDENT`/`LOAD_CONFIG` behavior to before the
+          redesign. RAM cost of the larger static backing arrays: real
+          firmware went from 27172 B to 30392 B (+3220 B) on this build
+          -- the worst-case drag-curve/PCHIP-scratch arrays are now
+          allocated for real, where the byte-buffer draft would have
+          paid a similar cost anyway once `LOAD_PROFILE`/
+          `LOAD_CONDITIONS` needed the same worst-case sizing.
     - **`LOAD_CONDITIONS`** — atmosphere + shot geometry + wind, expected
           to change every few shots as the field environment shifts:
           `temp_c, pressure_hpa, altitude_ft, humidity` (atmosphere),
