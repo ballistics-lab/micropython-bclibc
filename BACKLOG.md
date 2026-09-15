@@ -1352,31 +1352,31 @@ assuming a real MicroPython/pico-sdk incompatibility.
         reaches it. Full curve (`INTEGRATE_AT`, G7/168gr/2750fps,
         zero=100 m, real CDC1 round trip including framing/USB):
 
-        | target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
-        | ------ | ---------: | -----------: | ---------: | -----------: |
-        | 300 m  |    4.09 ms |        244.5 |   57.67 ms |         17.3 |
-        | 500 m  |    5.49 ms |        182.0 |   95.97 ms |         10.4 |
-        | 1000 m |   10.29 ms |         97.2 |  228.43 ms |          4.4 |
-        | 2000 m |   31.57 ms |         31.7 |  894.09 ms |          1.1 |
-        | 3000 m |   60.92 ms |         16.4 | 1794.11 ms |          0.6 |
+| target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
+| ------ | ---------: | -----------: | ---------: | -----------: |
+| 300 m  |    4.09 ms |        244.5 |   57.67 ms |         17.3 |
+| 500 m  |    5.49 ms |        182.0 |   95.97 ms |         10.4 |
+| 1000 m |   10.29 ms |         97.2 |  228.43 ms |          4.4 |
+| 2000 m |   31.57 ms |         31.7 |  894.09 ms |          1.1 |
+| 3000 m |   60.92 ms |         16.4 | 1794.11 ms |          0.6 |
 
-        ```mermaid
-        xychart-beta
-            title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
-            x-axis [300, 500, 1000, 2000, 3000]
-            y-axis "req/s" 0 --> 250
-            line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
-            line "30 Hz target" [30, 30, 30, 30, 30]
-        ```
+```mermaid
+xychart-beta
+    title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
+    x-axis [300, 500, 1000, 2000, 3000]
+    y-axis "req/s" 0 --> 250
+    line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
+    line "30 Hz target" [30, 30, 30, 30, 30]
+```
 
-        ```mermaid
-        xychart-beta
-            title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
-            x-axis [300, 500, 1000, 2000, 3000]
-            y-axis "req/s" 0 --> 30
-            line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
-            line "30 Hz target" [30, 30, 30, 30, 30]
-        ```
+```mermaid
+xychart-beta
+    title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
+    x-axis [300, 500, 1000, 2000, 3000]
+    y-axis "req/s" 0 --> 30
+    line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
+    line "30 Hz target" [30, 30, 30, 30, 30]
+```
 
         **Growth is faster than linear in distance on both boards** (RP2350
         300→1000 m: 3.3× the distance costs only 2.5× the time; 1000→3000 m:
@@ -1420,11 +1420,11 @@ assuming a real MicroPython/pico-sdk incompatibility.
           `range_limit_ft == range_step_ft` at each of 100, 200, ...,
           1000 m (each one re-integrating from the muzzle every time):
 
-          |                                     |   RP2350 |     RP2040 |
-          | ----------------------------------- | -------: | ---------: |
-          | (A) one stream, 11 rows             | 13.25 ms |  243.52 ms |
-          | (B) ten separate single-point calls | 69.87 ms | 1168.80 ms |
-          | B/A                                 |    5.27× |      4.80× |
+|                                     |   RP2350 |     RP2040 |
+| ----------------------------------- | -------: | ---------: |
+| (A) one stream, 11 rows             | 13.25 ms |  243.52 ms |
+| (B) ten separate single-point calls | 69.87 ms | 1168.80 ms |
+| B/A                                 |    5.27× |      4.80× |
 
           Building a correction grid (multiple holdover points, e.g. for a
           BDC reticle or a range card) should always be **one**
@@ -1462,12 +1462,12 @@ assuming a real MicroPython/pico-sdk incompatibility.
         Full wire-vs-local comparison once fixed (same shot as
         `benches.md`'s own RP2040 Stock / RP2350 armv7emsp-hw-FPU rows):
 
-        | metric | RP2350 wire | RP2350 local (`benches.md`) | RP2040 wire | RP2040 local (`benches.md`) |
-        |---|---:|---:|---:|---:|
-        | `INTEGRATE` 1 km/10 m (101 rows) | 108.17 ms | 15.99 ms | 480.63 ms | 353.75 ms |
-        | `INTEGRATE` 3 km/100 m (30 rows) | **87.30 ms** | 73.20 ms | 1914.37 ms | 2158.65 ms |
-        | `INTEGRATE_AT` (100-2000 ft) | 4.76 ms | 2.42 ms | 62.32 ms | 66.99 ms |
-        | zero-solve, 300 m (`LOAD_PROFILE`, closest wire equivalent to `find_zero_angle()`) | 4.95 ms, 0.1434° | 4.13 ms, 0.1434° | 59.03 ms, 0.1434° | 119.07 ms |
+| metric | RP2350 wire | RP2350 local (`benches.md`) | RP2040 wire | RP2040 local (`benches.md`) |
+|---|---:|---:|---:|---:|
+| `INTEGRATE` 1 km/10 m (101 rows) | 108.17 ms | 15.99 ms | 480.63 ms | 353.75 ms |
+| `INTEGRATE` 3 km/100 m (30 rows) | **87.30 ms** | 73.20 ms | 1914.37 ms | 2158.65 ms |
+| `INTEGRATE_AT` (100-2000 ft) | 4.76 ms | 2.42 ms | 62.32 ms | 66.99 ms |
+| zero-solve, 300 m (`LOAD_PROFILE`, closest wire equivalent to `find_zero_angle()`) | 4.95 ms, 0.1434° | 4.13 ms, 0.1434° | 59.03 ms, 0.1434° | 119.07 ms |
 
         Elevation agrees exactly (`0.1434°`) between wire and local on
         both boards -- same physics, only the transport cost differs.
@@ -1499,10 +1499,10 @@ assuming a real MicroPython/pico-sdk incompatibility.
         "3 km cheaper than 1 km" inversion above, confirming *why* it
         happened.**
 
-        | | RP2350 `INTEGRATE` | RP2350 `INTEGRATE_FAST` | RP2040 `INTEGRATE` | RP2040 `INTEGRATE_FAST` |
-        |---|---:|---:|---:|---:|
-        | 1 km/10 m (101 rows) | 108.17 ms | **49.57 ms** | 480.63 ms | 366.59 ms |
-        | 3 km/100 m (30 rows) | **87.30 ms** ⚠ | 72.99 ms | 1914.37 ms | 1887.06 ms |
+| | RP2350 `INTEGRATE` | RP2350 `INTEGRATE_FAST` | RP2040 `INTEGRATE` | RP2040 `INTEGRATE_FAST` |
+|---|---:|---:|---:|---:|
+| 1 km/10 m (101 rows) | 108.17 ms | **49.57 ms** | 480.63 ms | 366.59 ms |
+| 3 km/100 m (30 rows) | **87.30 ms** ⚠ | 72.99 ms | 1914.37 ms | 1887.06 ms |
 
         With `INTEGRATE_FAST`'s thinner 16 B rows, the inversion mostly
         disappears (72.99 ms > 49.57 ms -- the "normal" ordering, longer
