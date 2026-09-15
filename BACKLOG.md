@@ -92,7 +92,10 @@ as a library from Python application code.
       `bclibc_bcp` frozen; `v1.29.0-rp2-RPI_PICO2` — `bclibc_bcp` frozen
       (no symbols in a `.uf2` to check the C half; same make-command-line
       path as the local rp2 check above).
-- [ ] CI job for BCP builds (`usermod.yml`). Two things to handle: the
+- [ ] CI job for BCP builds (`usermod.yml`) — **deferred until Epic 3/4
+      lands real code** (the frame parser is testable on unix). With only a
+      placeholder app there is nothing meaningful to run, and the flag
+      plumbing has no reason to break before then. When adding it: the
       environment form `CIBMP_EXTRA_MAKE_ARGS` **replaces** the config's
       `extra-make-args` including `[override]`s (armhf would lose
       `LDFLAGS_EXTRA=-static`), and a BCP build has the same identifier
