@@ -1,18 +1,29 @@
-/* bcp_frame_mp.c — BCP wire framing codec (COBS + CRC16/CCITT-FALSE), C port
+/* bcp_frame_mp.h — BCP wire framing codec (COBS + CRC16/CCITT-FALSE), C port
  * of the Python reference implementation in src/bcp_frame.py. See
  * PROTOCOL.md §1-§2 for the wire format this implements, and BACKLOG.md
  * Epic 3's "implementation language is C, not Python" resolution for why
  * this exists as a usermod C module instead of staying in Python.
  *
- * Only compiled/registered when BCLIBC_BCP=1 (see usermod/manifest.py,
- * usermod/micropython.mk, usermod/micropython.cmake) — usermod only, no
- * natmod branch: BCLIBC_BCP is a usermod-only build per Epic 1.
+ * This is a `.h` on purpose despite holding full function bodies, not just
+ * declarations: it is `#include`d exactly once, from tiny_bclibc_mp.c
+ * under `#ifdef BCLIBC_BCP`, so that private helpers here can stay `static`
+ * instead of needing `extern` declarations across translation units (the
+ * "single amalgamated unit" / "unity build" pattern) -- it is never
+ * compiled as its own translation unit and never listed in
+ * usermod/micropython.mk or .cmake. Only compiled at all when
+ * BCLIBC_BCP=1 (see usermod/manifest.py) — usermod only, no natmod
+ * branch: BCLIBC_BCP is a usermod-only build per Epic 1. The include
+ * guard below is defensive only, given the single call site.
  *
  * `src/bcp_frame.py`/`tests/test_bcp_frame.py` are not touched by this file
  * and stay as the historical design-iteration reference (their known-answer
  * vectors and failure-scenario cases are re-used almost verbatim by
- * tests/test_bcp_frame_native.py against this module instead).
+ * tests/test_bcp_frame_native.py, run against the real functions defined
+ * here -- exposed under `_tiny_bclibc`, not a separate module, see
+ * tiny_bclibc_mp.c's own umbrella comment).
  */
+#ifndef BCP_FRAME_MP_H
+#define BCP_FRAME_MP_H
 
 #include <string.h>
 
@@ -256,11 +267,12 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bcp_build_frame_obj, 3, 4, mp_bcp_
  * `seq` to reply to on a corrupt frame, matching FrameDecoder's
  * silently-drop contract (PROTOCOL.md §1, BACKLOG.md Epic 3). */
 /* Frames dropped for bad COBS/under-length/bad CRC since boot -- reported
- * as IDENT's drop_count (PROTOCOL.md §4.6, optional telemetry). Exposed to
- * bcp_dispatch_mp.c via bcp_frame_drop_count(), not through Python. */
+ * as IDENT's drop_count (PROTOCOL.md §4.6, optional telemetry). Read by
+ * bcp_dispatch_mp.h's IDENT handler further down this same translation
+ * unit, not through Python -- `static`, no `extern` needed. */
 static uint32_t bcp_frame_drop_count_ = 0;
 
-uint32_t bcp_frame_drop_count(void)
+static uint32_t bcp_frame_drop_count(void)
 {
     return bcp_frame_drop_count_;
 }
@@ -306,32 +318,15 @@ static mp_obj_t mp_bcp_drop_count(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(mp_bcp_drop_count_obj, mp_bcp_drop_count);
 
-/* ── Module registration (usermod only — BCLIBC_BCP is usermod-only) ────── */
+/* No module table / MP_REGISTER_MODULE here: bcp_frame_mp.h and
+ * bcp_dispatch_mp.h only define C functions and their mp_obj_t wrapper
+ * objects -- one combined `_bcp` module (Python-visible name, globals
+ * table, registration) is assembled in tiny_bclibc_mp.c's umbrella
+ * section, from both files' objects together. Same reasoning as merging
+ * the two .c files into one translation unit in the first place: once
+ * the C is one thing, there's no reason to still expose two separate
+ * Python-importable names for it (and the two files' STATUS_* constants
+ * would otherwise be listed twice, once per module, for the exact same
+ * values). */
 
-static const mp_rom_map_elem_t bcp_frame_module_globals_table[] = {
-    {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__bcp_frame)},
-    {MP_ROM_QSTR(MP_QSTR_crc16), MP_ROM_PTR(&mp_bcp_crc16_obj)},
-    {MP_ROM_QSTR(MP_QSTR_cobs_encode), MP_ROM_PTR(&mp_bcp_cobs_encode_obj)},
-    {MP_ROM_QSTR(MP_QSTR_cobs_decode), MP_ROM_PTR(&mp_bcp_cobs_decode_obj)},
-    {MP_ROM_QSTR(MP_QSTR_build_frame), MP_ROM_PTR(&mp_bcp_build_frame_obj)},
-    {MP_ROM_QSTR(MP_QSTR_parse_frame), MP_ROM_PTR(&mp_bcp_parse_frame_obj)},
-    {MP_ROM_QSTR(MP_QSTR_drop_count), MP_ROM_PTR(&mp_bcp_drop_count_obj)},
-    {MP_ROM_QSTR(MP_QSTR_HEADER_SIZE), MP_ROM_INT(BCP_HEADER_SIZE)},
-    {MP_ROM_QSTR(MP_QSTR_CRC_SIZE), MP_ROM_INT(BCP_CRC_SIZE)},
-    {MP_ROM_QSTR(MP_QSTR_MIN_PACKET_SIZE), MP_ROM_INT(BCP_MIN_PACKET_SIZE)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_OK), MP_ROM_INT(BCP_STATUS_OK)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_MORE), MP_ROM_INT(BCP_STATUS_MORE)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_INTERRUPTED), MP_ROM_INT(BCP_STATUS_INTERRUPTED)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_SIZE), MP_ROM_INT(BCP_STATUS_ERR_BAD_SIZE)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_ARG), MP_ROM_INT(BCP_STATUS_ERR_BAD_ARG)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_NOT_LOADED), MP_ROM_INT(BCP_STATUS_ERR_NOT_LOADED)},
-    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_INTERNAL), MP_ROM_INT(BCP_STATUS_ERR_INTERNAL)},
-};
-static MP_DEFINE_CONST_DICT(bcp_frame_module_globals, bcp_frame_module_globals_table);
-
-const mp_obj_module_t bcp_frame_module = {
-    .base = {&mp_type_module},
-    .globals = (mp_obj_dict_t *)&bcp_frame_module_globals,
-};
-
-MP_REGISTER_MODULE(MP_QSTR__bcp_frame, bcp_frame_module);
+#endif /* BCP_FRAME_MP_H */
