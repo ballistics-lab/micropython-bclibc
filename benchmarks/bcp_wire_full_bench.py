@@ -13,10 +13,12 @@ real cost driver, and why a naive per-point loop is ~5x slower than one
 streamed multi-point request).
 
 Not every local benchmark has a wire equivalent:
-  - `integrate()`       -> BCP `INTEGRATE` (same underlying computation,
-                            full-precision native rows -- not `INTEGRATE_FAST`,
-                            to match `tiny_bclibc.integrate()`'s own row shape
-                            as closely as possible).
+  - `integrate()`       -> BCP `INTEGRATE` by default (same underlying
+                            computation, full-precision native rows -- matches
+                            `tiny_bclibc.integrate()`'s own row shape most
+                            closely), or `INTEGRATE_FAST` (thinner 16 B rows)
+                            with the `--fast` flag, to compare row-size
+                            effects on wire time directly.
   - `integrate_at()`     -> BCP `INTEGRATE_AT`, same 5 targets (100-2000 ft).
   - `find_zero_angle()`  -> **no dedicated wire command** (PROTOCOL.md/
                             BACKLOG.md Epic 8: the zero solve is internal,
@@ -31,7 +33,7 @@ Not every local benchmark has a wire equivalent:
                             host-side wire client -- not benchmarked.
 
 Usage:
-    python3 benchmarks/bcp_wire_full_bench.py /dev/ttyACM1
+    python3 benchmarks/bcp_wire_full_bench.py /dev/ttyACM1 [--fast]
 """
 
 import math
@@ -46,6 +48,7 @@ import serial
 
 CMD_LOAD_PROFILE = 1
 CMD_INTEGRATE = 4
+CMD_INTEGRATE_FAST = 5
 CMD_INTEGRATE_AT = 6
 DRAG_G7 = 1
 TRAJ_FLAG_RANGE = 8
@@ -70,15 +73,15 @@ def pack_integrate_at(key, target):
     return struct.pack("<B", key) + b"\x00\x00\x00" + struct.pack("<f", target)
 
 
-def bench_integrate(ser, reader, range_limit_ft, range_step_ft, iterations=10):
+def bench_integrate(ser, reader, range_limit_ft, range_step_ft, iterations=10, cmd=CMD_INTEGRATE):
     times = []
     total = reason = 0
     for _ in range(iterations):
         t0 = time.perf_counter()
-        ser.write(build_frame(CMD_INTEGRATE, 1, 0, pack_integrate_req(range_limit_ft, range_step_ft, 0.0, TRAJ_FLAG_RANGE)))
+        ser.write(build_frame(cmd, 1, 0, pack_integrate_req(range_limit_ft, range_step_ft, 0.0, TRAJ_FLAG_RANGE)))
         while True:
             type_, seq, status, payload = reader.next_frame(time.time() + 10)
-            if type_ != (CMD_INTEGRATE | 0x80):
+            if type_ != (cmd | 0x80):
                 continue
             if status == STATUS_MORE:
                 continue
@@ -131,12 +134,14 @@ def bench_load_profile_zero(ser, reader, zero_ft, iterations=20):
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM1"
+    fast = "--fast" in sys.argv[2:]
+    cmd = CMD_INTEGRATE_FAST if fast else CMD_INTEGRATE
     ser = serial.Serial(port, 115200, timeout=0.2)
     time.sleep(0.3)
     reader = FrameReader(ser)
 
     print("=" * 60)
-    print("BCP wire benchmark (mirrors tests/tiny_bclibc_bench.py, over real CDC1)")
+    print(f"BCP wire benchmark (mirrors tests/tiny_bclibc_bench.py, over real CDC1, {'INTEGRATE_FAST' if fast else 'INTEGRATE'})")
     print("=" * 60)
 
     # Not timed -- INTEGRATE/INTEGRATE_AT need a cached profile first
@@ -146,14 +151,15 @@ def main():
     type_, seq, status, payload = reader.next_frame(time.time() + 5)
     assert status == STATUS_OK, (status, payload)
 
-    print("\n--- INTEGRATE (1 km, 10 m steps) over CDC1 ---")
-    r = bench_integrate(ser, reader, 1000.0 * FT_PER_M, 10.0 * FT_PER_M)
+    label = "INTEGRATE_FAST" if fast else "INTEGRATE"
+    print(f"\n--- {label} (1 km, 10 m steps) over CDC1 ---")
+    r = bench_integrate(ser, reader, 1000.0 * FT_PER_M, 10.0 * FT_PER_M, cmd=cmd)
     print(f"  Rows: {r['rows']}  Stop reason: {r['reason']}")
     print(f"  Avg: {r['avg_ms']:.2f} ms  Min: {r['min_ms']:.2f} ms  Max: {r['max_ms']:.2f} ms")
     print(f"  Iterations: {r['iterations']}")
 
-    print("\n--- INTEGRATE (3 km, 100 m steps) over CDC1 ---")
-    r = bench_integrate(ser, reader, 3000.0 * FT_PER_M, 100.0 * FT_PER_M)
+    print(f"\n--- {label} (3 km, 100 m steps) over CDC1 ---")
+    r = bench_integrate(ser, reader, 3000.0 * FT_PER_M, 100.0 * FT_PER_M, cmd=cmd)
     print(f"  Rows: {r['rows']}  Stop reason: {r['reason']}")
     print(f"  Avg: {r['avg_ms']:.2f} ms  Min: {r['min_ms']:.2f} ms  Max: {r['max_ms']:.2f} ms")
     print(f"  Iterations: {r['iterations']}")
