@@ -751,6 +751,30 @@ at all — a nice-to-have, not a blocker.
       dense-output/continuous-extension query (or locally capping step
       growth near a detected crossing) is real, bounded, but nontrivial
       follow-on work, not started.
+    - **Narrower fix candidate found, cheaper than a full dense-output
+      derivation:** the full C++ `bclibc` engine (a sibling to `tiny_bclibc`,
+      used by `cythonized_rk4_engine`) already has a correct cubic Hermite
+      primitive, `BCLIBC_hermite(x, xk, xk1, yk, yk1, mk, mk1)`
+      (`include/bclibc/interp.hpp`/`src/interp.cpp`) — but its only caller,
+      `BCLIBC_interpolate3pt()` (used by `traj_data.cpp` for row/event
+      interpolation), still *estimates* the slopes `mk`/`mk1` from finite
+      differences across the same 3 neighboring raw points
+      (`BCLIBC_PchipSlopes3`) — the same category of technique, and the
+      same weakness, as `tiny_bclibc`'s own filter. **Not already solved
+      there either.** But: `interpolate3pt` is called once per field
+      (`px`,`py`,`pz`,`vx`,`vy`,`vz`,`mach`) independently, so it re-derives
+      a position slope from position differences even though the *exact*
+      derivative of position is already sitting right there as the
+      velocity at each raw point — the integrator computes it every step
+      and it's currently thrown away for this purpose. Feeding
+      `BCLIBC_hermite()` the **true velocity at the two endpoints of a
+      single Cash-Karp step** directly, instead of `interpolate3pt`'s
+      finite-difference estimate across 3 separate raw steps, is a
+      standard, well-known "free" dense-output technique for
+      moderate-order RK methods (no new tableau-specific coefficients to
+      derive, no extra stage evaluations) — a much smaller, more concrete
+      fix than the general dense-output/step-capping options above.
+      Untested as of this writing; worth trying first.
     - **Speed, once accuracy-limited to what's actually usable:** 2.3-5.8x
       over RK4 baseline (vs. `cStepMultiplier=2.0`'s real, hardware-measured
       1.67x) — a bigger win *if* the interpolation blocker gets fixed, with
