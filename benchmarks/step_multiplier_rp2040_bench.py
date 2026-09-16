@@ -10,8 +10,11 @@ to report a few hundred ms of simulated device time), though its
 step_multiplier=0.5 result (346.77 ms) landed within ~2% of that real 353.75
 ms hardware number -- see BACKLOG.md's "RK4 step-size" section (under Epic 2)
 for the full sweep results (including real RP2350 hardware numbers) and the
-accuracy side (py-ballisticcalc's own pytest suite), and why
-cStepMultiplier=2.0 is the recommended safe target.
+accuracy side (py-ballisticcalc's own pytest suite -- checked against the
+clean double-precision baseline, not just single precision, since SP's own
+pre-existing failures can mask a real regression). cStepMultiplier=1.0 is
+the verified-zero-regression value; 2.0 is faster but a conscious
+accuracy/speed tradeoff, not a free win.
 
 Build + run:
     cd natmod && make ARCH=armv6m dist

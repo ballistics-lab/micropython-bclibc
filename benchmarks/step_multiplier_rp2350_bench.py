@@ -4,10 +4,13 @@ Same shot/request shape as tests/tiny_bclibc_bench.py's REQUEST_1KM, directly
 comparable to benchmarks/benches.md's RP2350 hardware-FPU row (15.99 ms at
 step_multiplier=0.5, the current TINY_BCLIBC_Config_default()). See
 BACKLOG.md's "RK4 step-size" section (under Epic 2) for the full sweep
-results (x64 pytest-suite accuracy check, RP2040 emulator, and this real
-RP2350 measurement) and why cStepMultiplier=2.0 is the recommended safe
-target -- confirmed here as a ~1.67x real speedup (14.92 ms -> 8.93 ms) with
-zero net new pytest failures.
+results (x64 pytest-suite accuracy check -- against the clean
+double-precision baseline, not just single precision -- RP2040 emulator,
+and this real RP2350 measurement). cStepMultiplier=1.0 is the
+verified-zero-regression value (~1.37x real speedup, 14.92 ms -> 10.91 ms);
+2.0 is faster still (~1.67x, 14.92 ms -> 8.93 ms) but introduces one small,
+real MACH-crossing-distance regression -- a conscious tradeoff, not a free
+win.
 
 Requires the armv7emsp natmod already loaded on the board as `tiny_bclibc`
 (see natmod/README or `make ARCH=armv7emsp RP2350=1 dist`).
