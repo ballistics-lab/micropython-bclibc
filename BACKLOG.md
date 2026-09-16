@@ -596,23 +596,41 @@ default than py-ballisticcalc's own** (`BaseEngineConfigDict.cStepMultiplier
 since `cStepMultiplier` is already a runtime config field threaded straight
 through by `examples/tiny_bclibc`'s ctypes engine
 (`TinyBclibcSingleIntegrationEngine`/`_common.py`:
-`cfg = b.Config(cStepMultiplier=self._config.cStepMultiplier, ...)`). Built
-that engine's single-precision `libtiny_bclibc.so` (matches the coprocessor
-firmware's precision) and ran a small local sweep of engine subclasses
-fixing `cStepMultiplier` at 0.5/1.0/2.0/4.0/8.0 against py-ballisticcalc's
-own correctness bar (not a bespoke test):
+`cfg = b.Config(cStepMultiplier=self._config.cStepMultiplier, ...)`).
 
-| `cStepMultiplier` | dt | pytest (375 total) | Trajectory mean (x64) | Zero mean (x64) |
-|---|---:|---|---:|---:|
-| 0.5 (**current FW default**) | 1.25 ms | 11 failed / 362 passed (baseline set — all pre-existing float32 precision effects, unrelated to step size) | 0.81 ms | 2.26 ms |
-| 1.0 | 2.5 ms | **same 11**, byte-identical set | 0.54 ms | 1.32 ms |
-| 2.0 | 5.0 ms | 11 failed, composition shifts (1 old passes, 1 new fails) — net unchanged | 0.41 ms | 0.83 ms |
-| 4.0 | 10 ms | **13 failed** — 2 genuinely new failures, incl. `test_path_g7[500_yards]` (real trajectory-shape error) | 0.35 ms | 0.59 ms |
-| 8.0 | 20 ms | 16 failed — clearly degrading, multiple new failure classes | — | — |
+**First pass (single precision, matches the coprocessor firmware) was
+methodologically flawed — corrected below, don't trust "net unchanged"
+framing from total counts alone.** SP has 11 pre-existing float32-precision
+failures at the 0.5 baseline (documented in `TinyBclibcSingleIntegrationEngine`'s
+own docstring, unrelated to step size). Sweeping `cStepMultiplier` against
+*only* the SP engine and comparing *total* fail counts is a trap: at 2.0,
+the total stayed at 11 (one of the 11 known failures happened to start
+passing, while a *new*, genuine step-size-driven failure appeared at the
+same time) — reading that as "net unchanged" is wrong, since it's actually
+one pre-existing precision quirk resolving *and* one new real regression
+appearing, which cancel out in the raw count but are not the same thing.
+The fix: **re-run against `TinyBclibcDoubleIntegrationEngine`**, whose 0.5
+baseline is a clean 375/375 with zero known failures — any failure that
+appears there as `cStepMultiplier` grows is unambiguously step-size-driven,
+with no float32 noise to hide behind or get confused with:
 
-(x64 unix, `-r 1000 -w 100`.) **Conclusion: `cStepMultiplier = 2.0` is the
-verified-safe target** — zero net new failures against the full suite. `4.0`
-is where real accuracy regresses — not recommended.
+| `cStepMultiplier` | dt | **DP pytest (clean baseline)** | SP pytest (11 pre-existing, noisier) | Trajectory mean (x64) |
+|---|---:|---|---|---:|
+| 0.5 (**current FW default**) | 1.25 ms | **0 failed / 373 passed / 2 skipped** | 11 failed (baseline set) | 0.81 ms |
+| 1.0 | 2.5 ms | **0 failed — still clean** | same 11, byte-identical set | 0.54 ms |
+| 2.0 | 5.0 ms | **1 failed** — `test_hitresult.py::test_flags`, MACH-crossing distance 963.59 yd vs expected 963.0±0.5 yd (real, ~0.09 yd over tolerance — small but genuine, not noise) | 11 failed (same total — coincidentally masks this) | 0.41 ms |
+| 4.0 | 10 ms | **2 failed** — adds `test_path_g7[500_yards]` (Mach number off by 0.005 at 500 yd, a real trajectory-shape drift) | 13 failed | 0.35 ms |
+| 8.0 | 20 ms | **5 failed** — clearly degrading, multiple new failure classes | 16 failed | — |
+
+(x64 unix, `-r 1000 -w 100` for benchmark numbers.) **Corrected conclusion:
+`cStepMultiplier = 1.0` is the actually-verified-safe target — zero failures
+against the clean double-precision baseline, not just "same total count" on
+a noisy one. `2.0` is not free: it introduces one small but real MACH-crossing
+detection regression (borderline, ~0.09 yd over a ±0.5 yd tolerance at
+~963 yd) — whether that's acceptable depends on how sensitive a given use
+case is to that specific flag; it is **not** the zero-regression option this
+section originally (incorrectly) claimed. `4.0`/`8.0` clearly regress
+further and are not recommended regardless.
 
 **RP2040 confirmed via the `rp2040py` emulator** (real ARM Cortex-M0+
 instruction timing, not x64 — the same emulator this repo's own CI uses for
@@ -667,26 +685,32 @@ against a 1-row (final-point-only) request at each multiplier:
 | 2.0 | 0.0997 | 0.0324 | 68% |
 | 4.0 | 0.0831 | 0.0180 | 78% |
 
-**Bottom line: `cStepMultiplier = 2.0` is now confirmed — not modeled — on
-the actual coprocessor target (RP2350) as a ~1.67× speedup (14.92 ms → 8.93
-ms) with zero net new pytest failures.** This is the recommended value.
-`4.0` gives only marginally more speed (1.88× vs 1.67×) while already
-crossing into real accuracy regression per the pytest sweep — not worth it.
+**Bottom line, corrected against the clean double-precision baseline:
+`cStepMultiplier = 1.0` is the verified-zero-regression target** — confirmed
+on real RP2350 hardware as a ~1.37× speedup (14.92 ms → 10.91 ms) with
+**zero** failures against the clean 375-test DP baseline (not just "same
+total" against a noisy SP one). `cStepMultiplier = 2.0` is a real option for
+more speed (1.67×, 8.93 ms) but is a genuine accuracy/speed *tradeoff*, not
+a free win — it introduces the one small MACH-crossing regression noted
+above. `4.0`/`8.0` are not recommended at all — real regressions grow from
+there.
 
-**No firmware change is actually required to get this today.** `LOAD_CONFIG`
-(PROTOCOL.md §4.2a, `bcp_handle_load_config()` in `bcp_dispatch_mp.h`) already
-writes `cStepMultiplier` straight from the wire payload (first 4 B, f32) into
-`bcp_state.shot.config`, and is listed as **hardware-verified** in this
-file's own "Status at a glance" section, not just unix-tested. So the
-practical advice for a host-side client, right now, on already-flashed
-firmware, with no rebuild: send `LOAD_CONFIG` with `cStepMultiplier=2.0`
-(and sensible values for the other five fields —
+**No firmware change is actually required to get either value today.**
+`LOAD_CONFIG` (PROTOCOL.md §4.2a, `bcp_handle_load_config()` in
+`bcp_dispatch_mp.h`) already writes `cStepMultiplier` straight from the wire
+payload (first 4 B, f32) into `bcp_state.shot.config`, and is listed as
+**hardware-verified** in this file's own "Status at a glance" section, not
+just unix-tested. So the practical advice for a host-side client, right
+now, on already-flashed firmware, with no rebuild: send `LOAD_CONFIG` with
+`cStepMultiplier=1.0` (and sensible values for the other five fields —
 `cZeroFindingAccuracy`/`cMinimumVelocity`/`cMaximumDrop`/
 `cGravityConstant`/`cMinimumAltitude`/`cMaxIterations`) once, before
-`LOAD_PROFILE`, and every subsequent `INTEGRATE`/`INTEGRATE_FAST` on that
-connection is ~1.67× faster for free. Changing `TINY_BCLIBC_Config_default()`
-itself (below) would only save that one client-side call for whoever doesn't
-bother sending `LOAD_CONFIG` at all — a nice-to-have, not a blocker.
+`LOAD_PROFILE`, for a free ~1.37× with zero accuracy cost — or
+`cStepMultiplier=2.0` instead, consciously, if the extra ~1.67× is worth
+the small MACH-crossing-distance tradeoff for that client's use case.
+Changing `TINY_BCLIBC_Config_default()` itself (below) would only save
+that one client-side call for whoever doesn't bother sending `LOAD_CONFIG`
+at all — a nice-to-have, not a blocker.
 
 **Not done / next steps:**
 - [ ] `TINY_BCLIBC_Config_default()`'s `cStepMultiplier` default (currently
@@ -700,8 +724,18 @@ bother sending `LOAD_CONFIG` at all — a nice-to-have, not a blocker.
       fixed-step multiplier — a bigger change (replaces the fixed 4-stage
       step with an adaptive 6-stage embedded step using the 4th/5th-order
       error estimate to grow/shrink dt), touching `tiny_bclibc__run_rk4`
-      itself in `bclibc`, not just a runtime parameter. Under separate
-      investigation; the fixed-per-row-overhead finding above is directly
+      itself in `bclibc`, not just a runtime parameter. A related, unfinished
+      prototype already exists for the *other* bclibc engine (the full C++
+      one `cythonized_rk4_engine` uses, not `tiny_bclibc`) on
+      `o-murphy/py-ballisticcalc`'s `rk45-dev` branch
+      (`py_ballisticcalc.exts/py_ballisticcalc_exts/src/rk45.cpp`) — an
+      RKF45 (not Cash-Karp specifically, a closely related sibling method)
+      with validated Butcher-tableau coefficients and a standard
+      accept/reject adaptive step-control law, but termination conditions
+      are still just placeholder comments there, and it targets the wrong
+      engine for this project's purposes — worth reusing the coefficients/
+      step-control shape, not the code as-is. Under separate investigation;
+      the fixed-per-row-overhead finding above is directly
       relevant to how much upside it can plausibly have (even a perfect
       adaptive stepper cannot shrink the ~45-78%-and-growing fixed slice of
       total time, only the variable RK4-stepping slice) — factor that in
