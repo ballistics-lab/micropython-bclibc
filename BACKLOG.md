@@ -720,27 +720,50 @@ at all — a nice-to-have, not a blocker.
       it should change unilaterally. Lower priority now that `LOAD_CONFIG`
       already gives any client the same result without a firmware change.
 - [ ] ESP32-S3 not yet re-measured with this sweep (only RP2040/RP2350 done).
-- [ ] **Cash-Karp (embedded adaptive RK45) raised as an alternative** to a
-      fixed-step multiplier — a bigger change (replaces the fixed 4-stage
-      step with an adaptive 6-stage embedded step using the 4th/5th-order
-      error estimate to grow/shrink dt), touching `tiny_bclibc__run_rk4`
-      itself in `bclibc`, not just a runtime parameter. A related, unfinished
-      prototype already exists for the *other* bclibc engine (the full C++
-      one `cythonized_rk4_engine` uses, not `tiny_bclibc`) on
-      `o-murphy/py-ballisticcalc`'s `rk45-dev` branch
-      (`py_ballisticcalc.exts/py_ballisticcalc_exts/src/rk45.cpp`) — an
-      RKF45 (not Cash-Karp specifically, a closely related sibling method)
-      with validated Butcher-tableau coefficients and a standard
-      accept/reject adaptive step-control law, but termination conditions
-      are still just placeholder comments there, and it targets the wrong
-      engine for this project's purposes — worth reusing the coefficients/
-      step-control shape, not the code as-is. Under separate investigation;
-      the fixed-per-row-overhead finding above is directly
-      relevant to how much upside it can plausibly have (even a perfect
-      adaptive stepper cannot shrink the ~45-78%-and-growing fixed slice of
-      total time, only the variable RK4-stepping slice) — factor that in
-      when judging whether it clears the bar `cStepMultiplier=2.0` already
-      sets for free.
+- [x] **Cash-Karp (embedded adaptive RK45) prototyped and evaluated —
+      real speedup, but a real, unresolved accuracy blocker; not ready to
+      ship.** Implemented `tiny_bclibc__run_cashkarp()` (standard
+      Numerical Recipes `rkck` tableau, standard accept/grow-shrink step
+      control) in a throwaway scratch copy of `engine.h` (never committed
+      anywhere), A/B'd against the real `tiny_bclibc` ctypes engine's
+      375-test pytest suite and a Trajectory/Zero benchmark matching
+      `scripts/benchmark.py`'s shape.
+    - **Dead end, load-bearing finding:** `tiny_bclibc__run_rk4`'s existing
+      "freeze `km = density_ratio * drag_by_mach(mach)` once per step,
+      reuse across all 4 substages" optimization **does not carry over to
+      adaptive stepping at all** — double-precision failures plateaued at
+      26-36/375 across a 1000x tolerance sweep (1e-4 to 1e-7), because the
+      embedded error estimator is blind to the model error from `km` going
+      stale as the adaptive step grows to 10-60x the base size; tightening
+      tolerance refines the wrong sub-problem. Fix: recompute drag *and*
+      atmosphere fresh at each of the 6 stages (6 lookups/step instead of
+      RK4's 1) — dropped double-precision failures to a floor of 5/375 at
+      rtol=1e-8. Independently corroborated by `rk45-dev`'s RKF45
+      prototype (see below), which does the same per-stage recompute.
+    - **Remaining, unresolved blocker:** even at that hard floor, 5
+      failures persist regardless of tolerance — a real ~7.5-yard
+      `ZERO_UP` distance miss, not float noise. Root cause: `tiny_bclibc`'s
+      event/row filter (RANGE-step, APEX/MACH/ZERO-crossing interpolation)
+      fits a curve through a **3-point sliding window of raw steps**,
+      which is fine at RK4's dense/uniform 1.25 ms spacing but breaks once
+      steps are sparse and irregular (confirmed: ~60x fewer raw points for
+      a typical shot). This is structural, not tunable — a proper
+      dense-output/continuous-extension query (or locally capping step
+      growth near a detected crossing) is real, bounded, but nontrivial
+      follow-on work, not started.
+    - **Speed, once accuracy-limited to what's actually usable:** 2.3-5.8x
+      over RK4 baseline (vs. `cStepMultiplier=2.0`'s real, hardware-measured
+      1.67x) — a bigger win *if* the interpolation blocker gets fixed, with
+      no runaway step-rejection thrashing observed even at the transonic
+      drag-curve kink (16 accepted / 1 rejected on a 1000 yd G7 shot).
+    - **Verdict: pursue further only if the event-interpolation rework is
+      separately budgeted — it is not a config tweak.** Until then,
+      `cStepMultiplier=1.0` (zero-risk, already validated on real RP2350
+      hardware, one `LOAD_CONFIG` call) remains the better near-term
+      recommendation. The fixed-per-row-overhead finding above still
+      applies as an upper bound regardless: even a perfect adaptive
+      stepper cannot shrink the fixed per-output-row slice of total time,
+      only the variable RK4-stepping slice.
 
 ## Epic 3 — Command/response frame
 
