@@ -577,6 +577,137 @@ assuming a real MicroPython/pico-sdk incompatibility.
       reference `drag_table`; not porting that for now — flag if a
       custom-reference base turns out to be needed.
 
+### RK4 step-size (`cStepMultiplier`) — accuracy/speed sweep, confirmed on real hardware
+
+**Motivation:** the compute-only "local" numbers in Epic 4's benches.md
+(15.99 ms for a 1 km/10 m-step trajectory on RP2350 hardware FPU) already
+dwarf the framing/dispatch overhead measured elsewhere in this backlog, but
+that number has slack — `tiny_bclibc__run_rk4`'s step is **fixed**, not
+adaptive: `calc_step = 0.0025 × cStepMultiplier`
+(`tiny_bclibc/include/tiny_bclibc/engine.h`). **The BCP coprocessor's own
+default is `cStepMultiplier = 0.5`** (`TINY_BCLIBC_Config_default()`,
+`base_types.h`) — dt = 1.25 ms, ~1000–1200 RK4 steps for a typical
+~1.3–1.5 s .308/2750 fps flight to 1 km. This is a **different, finer
+default than py-ballisticcalc's own** (`BaseEngineConfigDict.cStepMultiplier
+= 1.0`) — important not to confuse the two.
+
+**Accuracy: swept via py-ballisticcalc's own real pytest suite (375 tests) +
+`scripts/benchmark.py`** — no C changes, no hardware needed for this part,
+since `cStepMultiplier` is already a runtime config field threaded straight
+through by `examples/tiny_bclibc`'s ctypes engine
+(`TinyBclibcSingleIntegrationEngine`/`_common.py`:
+`cfg = b.Config(cStepMultiplier=self._config.cStepMultiplier, ...)`). Built
+that engine's single-precision `libtiny_bclibc.so` (matches the coprocessor
+firmware's precision) and ran a small local sweep of engine subclasses
+fixing `cStepMultiplier` at 0.5/1.0/2.0/4.0/8.0 against py-ballisticcalc's
+own correctness bar (not a bespoke test):
+
+| `cStepMultiplier` | dt | pytest (375 total) | Trajectory mean (x64) | Zero mean (x64) |
+|---|---:|---|---:|---:|
+| 0.5 (**current FW default**) | 1.25 ms | 11 failed / 362 passed (baseline set — all pre-existing float32 precision effects, unrelated to step size) | 0.81 ms | 2.26 ms |
+| 1.0 | 2.5 ms | **same 11**, byte-identical set | 0.54 ms | 1.32 ms |
+| 2.0 | 5.0 ms | 11 failed, composition shifts (1 old passes, 1 new fails) — net unchanged | 0.41 ms | 0.83 ms |
+| 4.0 | 10 ms | **13 failed** — 2 genuinely new failures, incl. `test_path_g7[500_yards]` (real trajectory-shape error) | 0.35 ms | 0.59 ms |
+| 8.0 | 20 ms | 16 failed — clearly degrading, multiple new failure classes | — | — |
+
+(x64 unix, `-r 1000 -w 100`.) **Conclusion: `cStepMultiplier = 2.0` is the
+verified-safe target** — zero net new failures against the full suite. `4.0`
+is where real accuracy regresses — not recommended.
+
+**RP2040 confirmed via the `rp2040py` emulator** (real ARM Cortex-M0+
+instruction timing, not x64 — the same emulator this repo's own CI uses for
+`test_bclibc.py`, `.github/workflows/natmod.yml`/`usermod.yml`). Built the
+`armv6m` natmod and ran the same `REQUEST_1KM` sweep under `rp2040py
+micropython --board pico --image v1.29.0 --littlefs <img>`. The
+`step_multiplier=0.5` baseline landed at **346.77 ms**, within ~2% of
+benches.md's real-hardware RP2040-Zero number (**353.75 ms**) — close enough
+to trust the rest as a real ARM-timing result, not an x64 extrapolation.
+Caveat worth recording: `rp2040py` is a cycle-accurate simulator, not
+real-time — the reported millisecond figures are simulated device time, not
+host wall-clock (the actual sweep took ~48.6 s of real host time to produce
+a result describing ~350 ms of simulated device time; confirmed with `time`,
+not assumed).
+
+| `cStepMultiplier` | RP2040 (`rp2040py` emulator) | vs. 0.5 baseline |
+|---|---:|---:|
+| 0.5 (real HW: 353.75 ms) | 346.77 ms | 1.0× |
+| 1.0 | 216.54 ms | 1.60× |
+| 2.0 | 151.63 ms | 2.29× |
+| 4.0 | 119.29 ms | 2.91× |
+
+**RP2350 confirmed on real hardware** (Pico2/RPI_PICO2, v1.29.0, single
+precision, over `mpremote` against the already-flashed `armv7emsp` natmod)
+— the actual coprocessor target, not an emulator or extrapolation:
+
+| `cStepMultiplier` | RP2350 (real hardware) | vs. 0.5 baseline |
+|---|---:|---:|
+| 0.5 (matches benches.md's 15.99 ms row) | 14.92 ms | 1.0× |
+| 1.0 | 10.91 ms | 1.37× |
+| 2.0 | 8.93 ms | **1.67×** |
+| 4.0 | 7.95 ms | 1.88× |
+
+**Real speedup on RP2350 is smaller than both the x64 pytest numbers (~2.0×
+at 2.0) and the RP2040 emulator (2.29× at 2.0) predicted** — confirms a
+real, measured diminishing-returns effect: `rows=101` stayed identical
+across every multiplier in every environment (row *output* count is tied to
+`range_step_ft`, not to the internal RK4 step count), so a growing share of
+total time as `cStepMultiplier` increases is the **fixed per-output-row**
+cost (PCHIP curve eval, `atan2`/`pow` for spin drift, Coriolis — once per
+emitted row, not per RK4 substep) rather than the **variable** RK4-stepping
+cost that actually shrinks with a bigger step. On RP2350's hardware FPU,
+raw stepping is already cheap (unlike RP2040's software-`sqrt`-bound
+substeps), so that fixed slice is proportionally *larger* of an already
+small budget — measured directly on x64 by comparing a 101-row request
+against a 1-row (final-point-only) request at each multiplier:
+
+| `cStepMultiplier` | manyrows (101, ms) | onerow (1, ms) | fixed-overhead share |
+|---|---:|---:|---:|
+| 0.5 | 0.2192 | 0.1214 | 45% |
+| 1.0 | 0.1387 | 0.0634 | 54% |
+| 2.0 | 0.0997 | 0.0324 | 68% |
+| 4.0 | 0.0831 | 0.0180 | 78% |
+
+**Bottom line: `cStepMultiplier = 2.0` is now confirmed — not modeled — on
+the actual coprocessor target (RP2350) as a ~1.67× speedup (14.92 ms → 8.93
+ms) with zero net new pytest failures.** This is the recommended value.
+`4.0` gives only marginally more speed (1.88× vs 1.67×) while already
+crossing into real accuracy regression per the pytest sweep — not worth it.
+
+**No firmware change is actually required to get this today.** `LOAD_CONFIG`
+(PROTOCOL.md §4.2a, `bcp_handle_load_config()` in `bcp_dispatch_mp.h`) already
+writes `cStepMultiplier` straight from the wire payload (first 4 B, f32) into
+`bcp_state.shot.config`, and is listed as **hardware-verified** in this
+file's own "Status at a glance" section, not just unix-tested. So the
+practical advice for a host-side client, right now, on already-flashed
+firmware, with no rebuild: send `LOAD_CONFIG` with `cStepMultiplier=2.0`
+(and sensible values for the other five fields —
+`cZeroFindingAccuracy`/`cMinimumVelocity`/`cMaximumDrop`/
+`cGravityConstant`/`cMinimumAltitude`/`cMaxIterations`) once, before
+`LOAD_PROFILE`, and every subsequent `INTEGRATE`/`INTEGRATE_FAST` on that
+connection is ~1.67× faster for free. Changing `TINY_BCLIBC_Config_default()`
+itself (below) would only save that one client-side call for whoever doesn't
+bother sending `LOAD_CONFIG` at all — a nice-to-have, not a blocker.
+
+**Not done / next steps:**
+- [ ] `TINY_BCLIBC_Config_default()`'s `cStepMultiplier` default (currently
+      `0.5`) lives in `bclibc` (`ballistics-lab/bclibc`), a separate repo
+      from this one — any change there needs its own PR against that repo,
+      not this one; flagging the recommendation here rather than assuming
+      it should change unilaterally. Lower priority now that `LOAD_CONFIG`
+      already gives any client the same result without a firmware change.
+- [ ] ESP32-S3 not yet re-measured with this sweep (only RP2040/RP2350 done).
+- [ ] **Cash-Karp (embedded adaptive RK45) raised as an alternative** to a
+      fixed-step multiplier — a bigger change (replaces the fixed 4-stage
+      step with an adaptive 6-stage embedded step using the 4th/5th-order
+      error estimate to grow/shrink dt), touching `tiny_bclibc__run_rk4`
+      itself in `bclibc`, not just a runtime parameter. Under separate
+      investigation; the fixed-per-row-overhead finding above is directly
+      relevant to how much upside it can plausibly have (even a perfect
+      adaptive stepper cannot shrink the ~45-78%-and-growing fixed slice of
+      total time, only the variable RK4-stepping slice) — factor that in
+      when judging whether it clears the bar `cStepMultiplier=2.0` already
+      sets for free.
+
 ## Epic 3 — Command/response frame
 
 > Byte-level layout (packet header, per-command struct fields, status
