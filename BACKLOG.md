@@ -820,6 +820,58 @@ at all — a nice-to-have, not a blocker.
 > of duplicated across backlog bullets. This epic tracks the *decisions*;
 > `PROTOCOL.md` is the *reference*.
 
+- [ ] **Next API/protocol refactor — make the calculator operations the BCP
+      boundary.** The library-level public vocabulary is now `zero(shot,
+      distance)`, `aim(shot, distance)`, and `fire(shot, request)`. BCP
+      should use corresponding small native helpers rather than compose a
+      solve from `find_zero_angle()` plus a separate integration:
+  - `LOAD_PROFILE` automatically runs **zero** for its profile's
+        `zero_distance`; cache the barrel elevation only after success.
+        `LOAD_CONFIG` and `LOAD_CONDITIONS` re-run that same zero operation.
+  - Add `AIM` as the primary single-target command. It accepts a target
+        distance and returns vertical hold relative to stored zero, windage,
+        and terminal-point velocity (with a small flags field if needed).
+        Its contract is high-level `aim`, retaining the winning solver point
+        instead of issuing a second trajectory pass.
+  - Keep `INTEGRATE`/`INTEGRATE_FAST` for range cards, grids, diagnostics,
+        and streaming. `FIRE` is the high-level name for that operation; no
+        new BCP object or engine data structure is required.
+  - Allocate a new `AIM` command id only when `PROTOCOL.md` is revised; do
+        not silently renumber the implemented v1 enum.
+
+- [ ] **Next wire revision — compact packed calculator payloads.** Wire
+      structs are protocol-only: never change `Shot`, `Request`,
+      `TrajectoryData`, `real_t`, or numerical integration. Define payloads
+      with `#pragma pack(push, 1)`/`#pragma pack(pop)` and field-by-field
+      encoding tests, never native-ABI memcpy or implicit padding. Derive
+      the smallest safe signedness, bit width, scale, and sentinel rules from
+      the authoritative ranges and fractional precision in
+      `~/pyproj/a7p/schema/a7p.schema.json` / its dimensions table; a7p is
+      input to that analysis, **not** a prescribed BCP field layout or scale.
+      Establish an accuracy/coverage table before freezing each BCP field:
+  - analyse request `range`/`step`, `AIM` correction angles and velocity, and
+        every profile field including BC, Cd, Mach, and breakpoint velocity;
+        use the actual field bounds plus ballistic error introduced by each
+        candidate quantisation.
+  - prefer integer/fixed-point fields where their verified error budget and
+        range permit them; use fewer than 16 bits or shared/exponent/delta
+        encodings where that is demonstrably sufficient, rather than treating
+        `uint16` or a7p's existing multiplier as a default.
+  - choose one documented unit table for requests and responses only after
+        that analysis; `FIRE`/stream rows reuse it, while a full-fidelity row
+        remains opt-in diagnostics.
+  - Add round-trip, boundary, overflow/rejection, and golden-physics tests
+        before updating `PROTOCOL.md`, host tools, and the command enum.
+  - **Performance acceptance target, enabled by this compact encoding:** over
+        a real 115200-baud 8N1 UART, sustain `FIRE` at 10 Hz and `AIM` at
+        5 Hz for the agreed representative profile/distance matrix, measured
+        end-to-end (encode, framing, wire, decode, and calculation). Raw line
+        capacity is about 11.52 kB/s, so the design budget is at most ~1152
+        transmitted bytes per `FIRE` at 10 Hz or ~2304 bytes per `AIM` at 5 Hz
+        before reserving framing and scheduling headroom; final per-command
+        budgets must be tighter and measured, not inferred from payload sizes
+        alone.
+
 - [x] **Resolved — wire format `00 COBS(packet) 00`, no `start_byte`, no
       `len`** (supersedes the earlier `<start_byte><cmd:1><len:2>...`
       draft). COBS guarantees no `0x00` inside the encoded bytes, so the
@@ -1572,6 +1624,13 @@ unchanged otherwise, for a clean single-variable test against the existing
       `tiny_bclibc_integrate_stream()` call -- `INTEGRATE_FAST` is a
       thinner wire projection of the same computed rows, not a cheaper
       computation, so it costs nothing extra on USB CDC1 either.
+- [ ] **Benchmark priority change — `AIM`, not a streamed single-point
+      trajectory, is the live-fire metric.** Once implemented, benchmark
+      end-to-end and dispatch-only `AIM` latency/rate by target distance on
+      RP2040, RP2350, and ESP32-S3. Record the zero-copy solver path
+      separately from `LOAD_PROFILE`/`LOAD_CONDITIONS` re-zero time, and
+      compare payload/frame count with the historical
+      `INTEGRATE_FAST(range_limit == range_step == target)` proxy.
 - [ ] **Ack scheme — still open, latency vs. reliability tradeoff not yet
       resolved.** Three candidates on the table:
   - **(a) Y-modem-style windowed ack** (current lean) — reliable, simple
