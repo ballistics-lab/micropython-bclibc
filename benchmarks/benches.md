@@ -2,20 +2,25 @@
 
 Reference: RP2040 Stock (125 MHz) `integrate()` 1 km avg = 1.0x.
 
-| Architecture / Chip                         | Mode                             | integrate(1 km) | integrate(3 km) | integrate_at() | find_zero_angle() | find_apex() | Shots/sec (1km) |     Speedup |
-| -------------------------------------------- | -------------------------------- | --------------: | --------------: | -------------: | ----------------: | ----------: | --------------: | -------------: |
+| Architecture / Chip                         | Mode                            | integrate(1 km) | integrate(3 km) | integrate_at() | find_zero_angle() | find_apex() | Shots/sec (1km) |         Speedup |
+| ------------------------------------------- | ------------------------------- | --------------: | --------------: | -------------: | ----------------: | ----------: | --------------: | --------------: |
 | RP2040 (armv6m)                             | Stock (125 MHz)                 |       353.75 ms |      2158.65 ms |       66.99 ms |         119.07 ms |    33.42 ms |             2.8 | 1.0x (baseline) |
-| RP2040 (armv6m)                             | OC (200 MHz)                    |       221.08 ms |      1349.12 ms |       41.88 ms |          74.43 ms |    20.90 ms |             4.5 |           1.6x |
-| RP2350 (armv7m, soft-float)                 | Stock (150 MHz)                 |       140.88 ms |       843.10 ms |       27.10 ms |          48.40 ms |    13.41 ms |             7.1 |           2.5x |
-| RP2350 (armv7m, soft-float)                 | OC (200 MHz)                    |       105.71 ms |       632.27 ms |       20.36 ms |          36.30 ms |    10.09 ms |             9.5 |           3.3x |
-| RP2350 (armv7emsp, hardware FPU)            | Stock (150 MHz)                 |        15.99 ms |        73.20 ms |        2.42 ms |           4.13 ms |     1.21 ms |            62.6 |          22.1x |
-| RP2350 (armv7emsp, hardware FPU)            | OC (200 MHz)                    |        11.98 ms |        54.91 ms |        1.81 ms |           3.10 ms |     0.91 ms |            83.6 |          29.5x |
-| ESP32-S3 (xtensawin, usermod, hardware FPU) | Stock (240 MHz, no OC headroom) |        14.85 ms |        66.88 ms |        2.51 ms |           4.01 ms |     1.48 ms |            67.4 |          23.8x |
+| RP2040 (armv6m)                             | OC (200 MHz)                    |       221.08 ms |      1349.12 ms |       41.88 ms |          74.43 ms |    20.90 ms |             4.5 |            1.6x |
+| RP2350 (armv7m, soft-float)                 | Stock (150 MHz)                 |       140.88 ms |       843.10 ms |       27.10 ms |          48.40 ms |    13.41 ms |             7.1 |            2.5x |
+| RP2350 (armv7m, soft-float)                 | OC (200 MHz)                    |       105.71 ms |       632.27 ms |       20.36 ms |          36.30 ms |    10.09 ms |             9.5 |            3.3x |
+| RP2350 (armv7emsp, hardware FPU)            | Stock (150 MHz)                 |        15.99 ms |        73.20 ms |        2.42 ms |           4.13 ms |     1.21 ms |            62.6 |           22.1x |
+| RP2350 (armv7emsp, hardware FPU)            | OC (200 MHz)                    |        11.98 ms |        54.91 ms |        1.81 ms |           3.10 ms |     0.91 ms |            83.6 |           29.5x |
+| ESP32-S3 (xtensawin, usermod, hardware FPU) | Stock (240 MHz, no OC headroom) |        14.85 ms |        66.88 ms |        2.51 ms |           4.01 ms |     1.48 ms |            67.4 |           23.8x |
+| RP2350 (armv7emsp, hardware FPU, RK45)      | Stock (150 MHz)                 |        20.05 ms |        11.86 ms |        2.48 ms |           4.28 ms |     1.24 ms |            49.9 |           17.6x |
+| RP2350 (armv7emsdp, hardware FPU, RK45)     | OC (200 MHz)                    |        15.04 ms |         8.90 ms |        1.86 ms |           3.21 ms |     0.93 ms |            66.5 |           23.5x |
+| RP2350 (armv7emsdp, hardware FPU, RK45)     | OC (220 MHz)                    |        13.67 ms |         8.09 ms |        1.69 ms |           2.92 ms |     0.85 ms |            73.2 |           25.9x |
+| RP2350 (armv7emsdp, hardware FPU, RK45)     | OC (240 MHz)                    |        12.54 ms |         7.42 ms |        1.56 ms |           2.68 ms |     0.78 ms |            79.8 |           28.2x |
 
 ## Stock
 
-### RP2040 (armv6m)
+### RP2040 (armv6m / RK4)
 
+```
 MPY: soft reboot
 ============================================================
 tiny_bclibc Performance Benchmark
@@ -70,10 +75,11 @@ Benchmark Summary
   Zero finding: 8.4 calls/sec
 ============================================================
 Benchmark complete.
-
+```
 
 ### RP2350 (armv7m)
 
+```
 MPY: soft reboot
 ============================================================
 tiny_bclibc Performance Benchmark
@@ -128,9 +134,9 @@ Benchmark Summary
   Zero finding: 20.7 calls/sec
 ============================================================
 Benchmark complete.
+```
 
-
-### RP2350 (armv7emsp)
+### RP2350 (armv7emsp / RK4)
 
 Fixed natmod/Makefile float-ABI mismatch first (see CHANGELOG / commit):
 dynruntime.mk builds armv7emsp natmod as -mfloat-abi=hard, but the actual
@@ -159,6 +165,7 @@ already out there). Complementary, not redundant: that PR only helps once
 users rebuild/reflash with pico-sdk >= 2.3.0; this natmod-side fix works
 against any already-deployed RP2350 firmware today.
 
+```
 MPY: soft reboot
 ============================================================
 tiny_bclibc Performance Benchmark
@@ -213,187 +220,9 @@ Benchmark Summary
   Zero finding: 242.1 calls/sec
 ============================================================
 Benchmark complete.
+```
 
-
-## Overclocked
-
-`machine.freq(200_000_000)` before each run (RP2040 default 125 MHz, RP2350 default 150 MHz).
-
-### RP2040 (armv6m)
-
-MPY: soft reboot
-============================================================
-tiny_bclibc Performance Benchmark
-============================================================
-Version: 1.2.1-5-g99641a8-sp
-
---- integrate() (1 km, 10 m steps) ---
-  Rows: 101
-  Stop reason: 1
-  Avg: 221.08 ms  (221077 µs)
-  Min: 220947 µs  Max: 221246 µs
-  Iterations: 10
-
---- integrate() (3 km, 100 m steps) ---
-  Rows: 31
-  Stop reason: 1
-  Avg: 1349.12 ms  (1349125 µs)
-  Min: 1349077 µs  Max: 1349197 µs
-  Iterations: 10
-
---- integrate_at() (single point interpolation) ---
-  Avg: 41.878 ms  (41878.3 µs)
-  Min: 6268 µs  Max: 83555 µs
-  Calls: 500
-  ~24 calls/sec
-
---- find_zero_angle() (300 m zero) ---
-  Avg: 74.425 ms  (74425.5 µs)
-  Min: 74411 µs  Max: 74507 µs
-  Elevation avg: 0.1434°
-  Iterations: 50
-
---- find_apex() ---
-  Avg: 20.899 ms  (20899.4 µs)
-  Min: 20885 µs  Max: 20965 µs
-  Apex: 532.1 ft, 0.6 ft
-  Iterations: 50
-
---- Memory usage (3 km trajectory) ---
-  Before: 76,752 B
-  After integrate: 86,832 B
-  After GC: 86,816 B
-  Peak allocation: 10,080 B
-  Rows: 31
-  Free memory: 156,976 B → 146,912 B
-
-============================================================
-Benchmark Summary
-============================================================
-  Trajectory (1 km, 10 m steps): 4.5 shots/sec
-  Interpolation: 23.9 calls/sec
-  Zero finding: 13.4 calls/sec
-============================================================
-Benchmark complete.
-
-
-### RP2350 (armv7m)
-
-MPY: soft reboot
-============================================================
-tiny_bclibc Performance Benchmark
-============================================================
-Version: 1.2.1-5-g99641a8-sp
-
---- integrate() (1 km, 10 m steps) ---
-  Rows: 101
-  Stop reason: 1
-  Avg: 105.71 ms  (105708 µs)
-  Min: 105590 µs  Max: 105840 µs
-  Iterations: 10
-
---- integrate() (3 km, 100 m steps) ---
-  Rows: 31
-  Stop reason: 1
-  Avg: 632.27 ms  (632267 µs)
-  Min: 632207 µs  Max: 632294 µs
-  Iterations: 10
-
---- integrate_at() (single point interpolation) ---
-  Avg: 20.359 ms  (20359.2 µs)
-  Min: 2917 µs  Max: 40747 µs
-  Calls: 500
-  ~49 calls/sec
-
---- find_zero_angle() (300 m zero) ---
-  Avg: 36.298 ms  (36298.2 µs)
-  Min: 36291 µs  Max: 36317 µs
-  Elevation avg: 0.1434°
-  Iterations: 50
-
---- find_apex() ---
-  Avg: 10.089 ms  (10089.4 µs)
-  Min: 10079 µs  Max: 10106 µs
-  Apex: 532.1 ft, 0.6 ft
-  Iterations: 50
-
---- Memory usage (3 km trajectory) ---
-  Before: 74,304 B
-  After integrate: 84,384 B
-  After GC: 84,368 B
-  Peak allocation: 10,080 B
-  Rows: 31
-  Free memory: 413,376 B → 403,312 B
-
-============================================================
-Benchmark Summary
-============================================================
-  Trajectory (1 km, 10 m steps): 9.5 shots/sec
-  Interpolation: 49.1 calls/sec
-  Zero finding: 27.5 calls/sec
-============================================================
-Benchmark complete.
-
-
-### RP2350 (armv7emsp)
-
-MPY: soft reboot
-============================================================
-tiny_bclibc Performance Benchmark
-============================================================
-Version: 1.2.1-5-g99641a8-sp
-
---- integrate() (1 km, 10 m steps) ---
-  Rows: 101
-  Stop reason: 1
-  Avg: 11.98 ms  (11975 µs)
-  Min: 11875 µs  Max: 12076 µs
-  Iterations: 10
-
---- integrate() (3 km, 100 m steps) ---
-  Rows: 31
-  Stop reason: 1
-  Avg: 54.91 ms  (54907 µs)
-  Min: 54836 µs  Max: 54951 µs
-  Iterations: 10
-
---- integrate_at() (single point interpolation) ---
-  Avg: 1.812 ms  (1812.5 µs)
-  Min: 324 µs  Max: 3555 µs
-  Calls: 500
-  ~552 calls/sec
-
---- find_zero_angle() (300 m zero) ---
-  Avg: 3.102 ms  (3102.1 µs)
-  Min: 3092 µs  Max: 3119 µs
-  Elevation avg: 0.1434°
-  Iterations: 50
-
---- find_apex() ---
-  Avg: 0.907 ms  (907.3 µs)
-  Min: 898 µs  Max: 925 µs
-  Apex: 532.1 ft, 0.6 ft
-  Iterations: 50
-
---- Memory usage (3 km trajectory) ---
-  Before: 70,224 B
-  After integrate: 80,304 B
-  After GC: 80,288 B
-  Peak allocation: 10,080 B
-  Rows: 31
-  Free memory: 417,456 B → 407,392 B
-
-============================================================
-Benchmark Summary
-============================================================
-  Trajectory (1 km, 10 m steps): 83.6 shots/sec
-  Interpolation: 551.8 calls/sec
-  Zero finding: 322.4 calls/sec
-============================================================
-Benchmark complete.
-
-
-## ESP32-S3 (xtensawin)
+### ESP32-S3 (xtensawin / RK4)
 
 Board: LilyGO T-Display-S3 (ESP32-S3R8, 16MB flash, 8MB Octal PSRAM).
 Firmware: official `ESP32_GENERIC_S3-SPIRAM_OCT` v1.29.0 build, `usermod`
@@ -464,6 +293,7 @@ xtensawin natmod regression already slipped past upstream CI once before,
 for the same reason -- QEMU-only testing, no real ESP32 hardware). No
 upstream issue filed for this yet as of this writing.
 
+```
 MPY: soft reboot
 ============================================================
 tiny_bclibc Performance Benchmark
@@ -518,4 +348,420 @@ Benchmark Summary
   Zero finding: 249.8 calls/sec
 ============================================================
 Benchmark complete.
+```
 
+### RP2350 (armv7emsp / RK45)
+
+```
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 3c7b13e-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 20.05 ms  (20048 µs)
+  Min: 19917 µs  Max: 20203 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 11.86 ms  (11855 µs)
+  Min: 11748 µs  Max: 11902 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 2.475 ms  (2475.4 µs)
+  Min: 426 µs  Max: 4876 µs
+  Calls: 500
+  ~404 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 4.282 ms  (4282.4 µs)
+  Min: 4275 µs  Max: 4293 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 1.238 ms  (1238.2 µs)
+  Min: 1236 µs  Max: 1257 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 66,896 B
+  After integrate: 76,976 B
+  After GC: 76,960 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 420,784 B → 410,720 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 49.9 shots/sec
+  Interpolation: 404.0 calls/sec
+  Zero finding: 233.5 calls/sec
+============================================================
+Benchmark complete.
+```
+
+## Overclocked
+
+`machine.freq(200_000_000)` before each run (RP2040 default 125 MHz, RP2350 default 150 MHz).
+
+### RP2040 (armv6m / RK4)
+
+```
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 1.2.1-5-g99641a8-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 221.08 ms  (221077 µs)
+  Min: 220947 µs  Max: 221246 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 1349.12 ms  (1349125 µs)
+  Min: 1349077 µs  Max: 1349197 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 41.878 ms  (41878.3 µs)
+  Min: 6268 µs  Max: 83555 µs
+  Calls: 500
+  ~24 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 74.425 ms  (74425.5 µs)
+  Min: 74411 µs  Max: 74507 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 20.899 ms  (20899.4 µs)
+  Min: 20885 µs  Max: 20965 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 76,752 B
+  After integrate: 86,832 B
+  After GC: 86,816 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 156,976 B → 146,912 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 4.5 shots/sec
+  Interpolation: 23.9 calls/sec
+  Zero finding: 13.4 calls/sec
+============================================================
+Benchmark complete.
+```
+
+### RP2350 (armv7m / RK4)
+
+```
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 1.2.1-5-g99641a8-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 105.71 ms  (105708 µs)
+  Min: 105590 µs  Max: 105840 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 632.27 ms  (632267 µs)
+  Min: 632207 µs  Max: 632294 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 20.359 ms  (20359.2 µs)
+  Min: 2917 µs  Max: 40747 µs
+  Calls: 500
+  ~49 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 36.298 ms  (36298.2 µs)
+  Min: 36291 µs  Max: 36317 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 10.089 ms  (10089.4 µs)
+  Min: 10079 µs  Max: 10106 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 74,304 B
+  After integrate: 84,384 B
+  After GC: 84,368 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 413,376 B → 403,312 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 9.5 shots/sec
+  Interpolation: 49.1 calls/sec
+  Zero finding: 27.5 calls/sec
+============================================================
+Benchmark complete.
+```
+
+### RP2350 (armv7emsp / RK4)
+
+```
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 1.2.1-5-g99641a8-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 11.98 ms  (11975 µs)
+  Min: 11875 µs  Max: 12076 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 54.91 ms  (54907 µs)
+  Min: 54836 µs  Max: 54951 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 1.812 ms  (1812.5 µs)
+  Min: 324 µs  Max: 3555 µs
+  Calls: 500
+  ~552 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 3.102 ms  (3102.1 µs)
+  Min: 3092 µs  Max: 3119 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.907 ms  (907.3 µs)
+  Min: 898 µs  Max: 925 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 70,224 B
+  After integrate: 80,304 B
+  After GC: 80,288 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 417,456 B → 407,392 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 83.6 shots/sec
+  Interpolation: 551.8 calls/sec
+  Zero finding: 322.4 calls/sec
+============================================================
+Benchmark complete.
+```
+
+### RP2350 (armv7emsdp / RK45)
+
+```
+MPY: soft reboot
+Freq: 200000000
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 3c7b13e-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 15.04 ms  (15041 µs)
+  Min: 14943 µs  Max: 15157 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 8.90 ms  (8899 µs)
+  Min: 8822 µs  Max: 8937 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 1.863 ms  (1862.9 µs)
+  Min: 327 µs  Max: 3662 µs
+  Calls: 500
+  ~537 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 3.214 ms  (3214.3 µs)
+  Min: 3208 µs  Max: 3233 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.931 ms  (931.0 µs)
+  Min: 929 µs  Max: 957 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 66,960 B
+  After integrate: 77,040 B
+  After GC: 77,024 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 420,720 B → 410,656 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 66.5 shots/sec
+  Interpolation: 536.8 calls/sec
+  Zero finding: 311.2 calls/sec
+============================================================
+Benchmark complete.
+```
+
+```
+MPY: soft reboot
+Freq: 220000000
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 3c7b13e-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 13.67 ms  (13673 µs)
+  Min: 13583 µs  Max: 13775 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 8.09 ms  (8089 µs)
+  Min: 8022 µs  Max: 8128 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 1.694 ms  (1693.6 µs)
+  Min: 298 µs  Max: 3329 µs
+  Calls: 500
+  ~590 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 2.922 ms  (2922.1 µs)
+  Min: 2916 µs  Max: 2939 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.846 ms  (846.4 µs)
+  Min: 844 µs  Max: 871 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 66,960 B
+  After integrate: 77,040 B
+  After GC: 77,024 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 420,720 B → 410,656 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 73.2 shots/sec
+  Interpolation: 590.5 calls/sec
+  Zero finding: 342.3 calls/sec
+============================================================
+Benchmark complete.
+```
+
+```
+MPY: soft reboot
+Freq: 240000000
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 3c7b13e-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 12.54 ms  (12539 µs)
+  Min: 12455 µs  Max: 12631 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 7.42 ms  (7420 µs)
+  Min: 7365 µs  Max: 7455 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 1.555 ms  (1554.9 µs)
+  Min: 276 µs  Max: 3055 µs
+  Calls: 500
+  ~643 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 2.680 ms  (2680.0 µs)
+  Min: 2674 µs  Max: 2702 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.777 ms  (777.4 µs)
+  Min: 775 µs  Max: 801 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 66,960 B
+  After integrate: 77,040 B
+  After GC: 77,024 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 420,720 B → 410,656 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 79.8 shots/sec
+  Interpolation: 643.2 calls/sec
+  Zero finding: 373.2 calls/sec
+============================================================
+Benchmark complete.
+```
