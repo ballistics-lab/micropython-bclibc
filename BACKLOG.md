@@ -290,10 +290,11 @@ whole loop -- proven for real (see below), not just reasoned about.
   (a real, if here non-load-bearing, gap: nothing was pumping the USB
   stack mid-stream before this), but it made no measurable difference on
   its own, confirming the pyserial read pattern was the whole story.
-  **Real, clean numbers** (same-session local baseline via the plain
-  `tiny_bclibc` Python API on the *same* flashed firmware, not
-  `benches.md`'s older/different-build numbers, for a true
-  wire-vs-no-wire comparison):
+  **Historical CDC-only baseline (pre-RK45):** same-session local baseline
+  via the plain `tiny_bclibc` Python API on the *same* flashed firmware,
+  not `benches.md`'s older/different-build numbers. This timing included
+  `LOAD_PROFILE`, so it is retained for its original CDC comparison only;
+  it is not the UART/RK45 matrix below.
 
   | Board           | local (REPL, no wire) | CDC1 wire | overhead | ratio |
   | --------------- | --------------------: | --------: | -------: | ----: |
@@ -316,6 +317,29 @@ whole loop -- proven for real (see below), not just reasoned about.
   configure; `CDCInterface.init(baudrate=...)` only ever affects the
   reported line coding, never actual throughput (see `usb-device-cdc`'s
   own `cdc.py` docstring on this).
+  **Current RK45 transport matrix — CDC vs hardware UART:** current RP2350/Pico 2
+  firmware was run with the same `INTEGRATE_FAST` 1 km/10 m request (101
+  rows; 8 rows per `MORE` frame). `LOAD_PROFILE` is intentionally performed
+  before the timer; the figures below are request/response time only. CDC1
+  and UART use 2048 B RX/TX buffers. The local baseline is the same RK45
+  firmware's direct `dispatch()` call (200 iterations, no COBS, stream, or
+  syscalls); each wire row is 10 iterations. UART1 is the RP2350 hardware
+  USART on GP4/GP5, connected through an FT232R USB-FTDI bridge.
+
+  | transport | line rate | avg | wire overhead vs local | ratio |
+  | --- | ---: | ---: | ---: | ---: |
+  | local `dispatch()` | — | 18.18 ms | — | 1.00× |
+  | USB CDC1 | virtual (baud-independent) | 55.67 ms | +37.49 ms | 3.06× |
+  | UART1 via FT232R | 115200 | 161.97 ms | +143.79 ms | 8.91× |
+  | UART1 via FT232R | 921600 | **23.91 ms** | **+5.73 ms** | **1.32×** |
+
+  The 115200 result closely follows the serial bit-time floor for the
+  roughly 1.8 KB streamed response. At 921600, hardware UART is not merely
+  usable: it is 2.33× faster than this CDC1 measurement and leaves only
+  ~5.7 ms beyond direct dispatch. `bcp_wire_bench.py` now accepts an
+  optional third `baudrate` argument, so UART runs are explicit, e.g.
+  `python3 benchmarks/bcp_wire_bench.py /dev/ttyUSB0 10 921600`; the
+  default remains 115200 for compatibility.
   **Not yet done:** the same real-hardware wire check on ESP32-S3 (only
   RP2040/RP2350 tested); placing `run()` on a second core/thread so CDC0
   stays responsive while it runs (Epic 7); and wiring Epic 6's
@@ -1646,14 +1670,15 @@ unchanged otherwise, for a clean single-variable test against the existing
         what drives RK4 integration cost, since the engine has to step the
         whole way from the muzzle out to wherever it's asked. Re-measured
         with `zero_distance_ft` fixed at 100 m and the query target varied
-        -- **and the command choice turned out not to matter at all**:
+        -- **on the historical fixed-step RK4 path, the command choice
+        turned out not to matter at all**:
         `INTEGRATE_AT` (bracketing/interception search) and
         `INTEGRATE_FAST` with `range_limit_ft == range_step_ft == target`
         (direct one-shot stream to that one distance) cost the same to
         within measurement noise at every distance tested -- the
         bottleneck is the RK4 stepping itself, not which command shape
-        reaches it. Full curve (`INTEGRATE_AT`, G7/168gr/2750fps,
-        zero=100 m, real CDC1 round trip including framing/USB):
+        reaches it. Historical **RK4** curve (`INTEGRATE_AT`, G7/168gr/
+        2750fps, zero=100 m, real CDC1 round trip including framing/USB):
 
 | target | RP2350 avg | RP2350 req/s | RP2040 avg | RP2040 req/s |
 | ------ | ---------: | -----------: | ---------: | -----------: |
@@ -1665,7 +1690,7 @@ unchanged otherwise, for a clean single-variable test against the existing
 
 ```mermaid
 xychart-beta
-    title "RP2350: single-point query rate vs target distance (30 Hz line for reference)"
+    title "RP2350 RK4: single-point query rate vs target distance (30 Hz line for reference)"
     x-axis [300, 500, 1000, 2000, 3000]
     y-axis "req/s" 0 --> 250
     line "RP2350 req/s" [244.5, 182.0, 97.2, 31.7, 16.4]
@@ -1674,30 +1699,93 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "RP2040: single-point query rate vs target distance (30 Hz line for reference)"
+    title "RP2040 RK4: single-point query rate vs target distance (30 Hz line for reference)"
     x-axis [300, 500, 1000, 2000, 3000]
     y-axis "req/s" 0 --> 30
     line "RP2040 req/s" [17.3, 10.4, 4.4, 1.1, 0.6]
     line "30 Hz target" [30, 30, 30, 30, 30]
 ```
 
-        **Growth is faster than linear in distance on both boards** (RP2350
+        **RK45 correction (RP2350/Pico 2 only):** the first purported
+        "RK45" curve above was wrong: it sent `INTEGRATE_AT`, whose
+        `tiny_bclibc_integrate_at()` implementation still calls
+        `tiny_bclibc__run_rk4()`. The actual RK45 BCP path is
+        `INTEGRATE_FAST` → `tiny_bclibc_integrate_stream()` →
+        `tiny_bclibc__run_cashkarp()`. Re-ran it through real CDC1 with the
+        same G7/168gr/2750 fps shot and `zero_distance=100 m`, using
+        `range_limit == range_step == target` and 40 requests per target.
+        Each response contains the initial plus target row (`rows=2`); the
+        host uses the target row, so this is the correct single-target RK45
+        query path.
+
+| target | RK45 avg | RK45 req/s |
+| ------ | -------: | ---------: |
+| 300 m  | 3.859 ms |      259.1 |
+| 500 m  | 4.219 ms |      237.0 |
+| 1000 m | 4.306 ms |      232.2 |
+| 2000 m | 6.310 ms |      158.5 |
+| 3000 m | 8.846 ms |      113.0 |
+
+```mermaid
+xychart-beta
+    title "RP2350 RK45 INTEGRATE_FAST: single-target query rate vs distance"
+    x-axis [300, 500, 1000, 2000, 3000]
+    y-axis "req/s" 0 --> 275
+    line [259.1, 237.0, 232.2, 158.5, 113.0]
+```
+
+        **Wire-free solve-rate comparison — RK4 vs RK45:** this is the
+        missing counterpart to the wire charts above. The same
+        `INTEGRATE_FAST` single-target request (`range_limit == range_step
+        == target`, G7/168gr/2750 fps, zero=100 m) was sent directly to
+        BCP `dispatch()` on the RP2350/Pico 2: no COBS, CDC/UART, host
+        scheduling, or serial buffers. `LOAD_PROFILE` is outside the timer;
+        each cell is 100 requests. It measures local BCP dispatch plus the
+        solver and streaming-row construction, rather than pretending that
+        only the numerical loop exists. RK4 is the saved `1.2.3-sp`
+        firmware at commit `7505d52`; RK45 is current `561ee58-sp`. Both
+        were run at the board's stock 150 MHz.
+
+| target | RK4 local avg | RK4 solve req/s | RK45 local avg | RK45 solve req/s | RK45 speedup |
+| ------ | ------------: | --------------: | -------------: | ---------------: | -----------: |
+| 300 m  |      2.070 ms |           483.1 |       0.733 ms |          1364.2 |        2.82× |
+| 500 m  |      3.436 ms |           291.0 |       0.833 ms |          1200.4 |        4.13× |
+| 1000 m |      8.076 ms |           123.8 |       1.173 ms |           852.2 |        6.88× |
+| 2000 m |     30.442 ms |            32.8 |       3.147 ms |           317.8 |        9.67× |
+| 3000 m |     60.669 ms |            16.5 |       5.699 ms |           175.5 |       10.65× |
+
+```mermaid
+xychart-beta
+    title "RP2350 local BCP solve: RK45 speedup over RK4 vs target distance"
+    x-axis [300, 500, 1000, 2000, 3000]
+    y-axis "speedup (RK4 time / RK45 time)" 0 --> 11
+    line [2.82, 4.13, 6.88, 9.67, 10.65]
+```
+
+        The speedup rises with distance: RK45 needs only 5.699 ms at 3 km,
+        while the retained fixed-step RK4 path needs 60.669 ms. This is why
+        the RK45 wire curve stays above 100 req/s at 3 km even after the
+        small CDC round-trip cost, whereas the historical RK4 curve reaches
+        only 16.5 local req/s there.
+
+        **The historical RK4 curve grows faster than linear in distance on both boards** (RP2350
         300→1000 m: 3.3× the distance costs only 2.5× the time; 1000→3000 m:
         3× the distance costs ~6× the time) -- consistent with the
         transonic/subsonic drag region needing smaller adaptive steps the
         longer a projectile flies, not just "more of the same" stepping.
         **Conclusions:**
-        - **RP2040 (no hardware FPU) cannot hit 30 Hz for a from-scratch
-          single-point query at any realistic hunting/sniping distance** --
-          it's already under 30 Hz at 300 m (17.3 req/s) and falls to just
-          0.6 req/s by 3000 m. This is a hard engine/CPU floor, not a wire
-          or protocol cost (framing overhead is a couple ms at most, per
-          Epic 4's own numbers) -- no command shape, batch size, or
-          transport swap fixes it.
-        - **RP2350/ESP32-S3 (hardware FPU) comfortably clear 30 Hz out to
-          ~1.5-2 km**, but **also fail past there** (31.7 req/s at 2000 m
-          is already borderline; 16.4 req/s at 3000 m is a clear miss). Not
-          a RP2040-only problem once the target is far enough out.
+        - **The historical RP2040 fixed-step RK4 build cannot hit 30 Hz for
+          a from-scratch single-point query at any realistic
+          hunting/sniping distance** -- it is already under 30 Hz at 300 m
+          (17.3 req/s) and falls to 0.6 req/s by 3000 m. That establishes
+          the RK4 engine/CPU floor, not a wire or protocol limit; RK45 has
+          not yet been measured on RP2040, so this result must not be
+          generalized to its new streaming path.
+        - **On RP2350, the RK45 streaming path changes that result
+          materially:** it clears 30 Hz at every tested distance through
+          3000 m (113.0 req/s at 3000 m). The historical RK4
+          `INTEGRATE_AT` curve remains borderline at 2000 m and misses at
+          3000 m; it must not be used as an RK45 performance estimate.
         - **The only architecture that actually guarantees 30 Hz display
           refresh at arbitrary target distance, on any of these three
           boards, is decoupling physics recompute from display refresh**:

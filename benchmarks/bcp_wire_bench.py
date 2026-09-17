@@ -1,8 +1,8 @@
 # ruff: noqa
 
 """
-BCP wire-round-trip benchmark: `INTEGRATE_FAST` over a real USB CDC1
-connection to a board running `bclibc_bcp.start(cdc1)` (see BACKLOG.md
+BCP wire-round-trip benchmark: `INTEGRATE_FAST` over a real byte-stream
+connection to a board running `bclibc_bcp.start(stream)` (see BACKLOG.md
 Epic 4's "Status at a glance" writeup for how the loop itself is built and
 verified). Host-side only -- run with a normal desktop Python 3 + pyserial,
 against a real flashed board, not on the device itself.
@@ -34,7 +34,9 @@ Usage:
        (this call does not return -- run it via `mpremote ... run` in the
        background, or on a second core/thread once Epic 7 lands)
     2. From the host: `python3 benchmarks/bcp_wire_bench.py /dev/ttyACM1 10`
-       (port = the CDC1 device that appeared, not the REPL's CDC0)
+       (port = the CDC1 device that appeared, not the REPL's CDC0).  An
+       optional third argument selects the baud rate for UART streams, e.g.
+       `python3 benchmarks/bcp_wire_bench.py /dev/ttyUSB0 10 921600`.
 
 A real, hard-learned gotcha this script exists to not repeat: pyserial's
 `Serial.read(N)` blocks for the *entire* configured timeout if fewer than
@@ -218,7 +220,8 @@ def run_once(ser, reader):
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM1"
     iterations = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-    ser = serial.Serial(port, 115200, timeout=0.2)
+    baudrate = int(sys.argv[3]) if len(sys.argv) > 3 else 115200
+    ser = serial.Serial(port, baudrate, timeout=0.2)
     time.sleep(0.3)
     reader = FrameReader(ser)
 
@@ -235,7 +238,7 @@ def main():
 
     avg = sum(times) / len(times)
     print()
-    print(f"INTEGRATE_FAST over real CDC1, 1 km/10 m steps, {iterations} iterations:")
+    print(f"INTEGRATE_FAST over {port} at {baudrate} baud, 1 km/10 m steps, {iterations} iterations:")
     print(f"  avg={avg * 1000:.2f} ms  min={min(times) * 1000:.2f} ms  max={max(times) * 1000:.2f} ms")
 
 
