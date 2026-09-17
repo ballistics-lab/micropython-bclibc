@@ -70,6 +70,7 @@ try:
         integrate_at as _integrate_at,
         integrate_stream as _integrate_stream,
         find_zero_angle as _find_zero_angle,
+        zero_point as _zero_point,
         find_apex as _find_apex,
         find_max_range as _find_max_range,
         build_multibc as _build_multibc,
@@ -87,7 +88,7 @@ except ImportError:
     # this build doesn't leak them onto tiny_bclibc where the usermod build
     # never would.
     #
-    # integrate/integrate_at/integrate_stream/find_zero_angle/find_apex/
+    # integrate/integrate_at/integrate_stream/find_zero_angle/zero_point/find_apex/
     # find_max_range/build_multibc collide with this file's own wrapper
     # functions of the same name below -- capture each native global under
     # its private alias *before* the matching `def` executes and overwrites
@@ -99,6 +100,7 @@ except ImportError:
     _integrate_at = integrate_at
     _integrate_stream = integrate_stream
     _find_zero_angle = find_zero_angle
+    _zero_point = zero_point
     _find_apex = find_apex
     _find_max_range = find_max_range
     _build_multibc = build_multibc
@@ -109,54 +111,58 @@ except ImportError:
 # reportUnusedImport both respect __all__), instead of scattering
 # per-line suppression comments.
 __all__ = [
-    "Wind",
-    "Config",
-    "Shot",
-    "Request",
-    "version",
-    "integrate",
-    "integrate_at",
-    "integrate_stream",
-    "find_zero_angle",
-    "find_apex",
-    "find_max_range",
-    "MultiBC",
+    "DRAG_CUSTOM",
     "DRAG_G1",
     "DRAG_G7",
-    "DRAG_CUSTOM",
-    "TRAJ_FLAG_NONE",
-    "TRAJ_FLAG_RANGE",
-    "TRAJ_FLAG_ZERO",
-    "TRAJ_FLAG_ZERO_UP",
-    "TRAJ_FLAG_ZERO_DOWN",
-    "TRAJ_FLAG_MACH",
-    "TRAJ_FLAG_APEX",
-    "TRAJ_FLAG_MRT",
-    "TRAJ_FLAG_ALL",
-    "T_TIME",
-    "T_DISTANCE",
-    "T_VELOCITY",
-    "T_MACH",
-    "T_HEIGHT",
-    "T_SLANT_HEIGHT",
-    "T_DROP_ANGLE",
-    "T_WINDAGE",
-    "T_WINDAGE_ANGLE",
-    "T_SLANT_DISTANCE",
-    "T_ANGLE",
-    "T_DENSITY_RATIO",
-    "T_DRAG",
-    "T_ENERGY",
-    "T_OGW",
-    "T_FLAG",
-    "INTERP_TIME",
     "INTERP_MACH",
     "INTERP_POS_X",
     "INTERP_POS_Y",
     "INTERP_POS_Z",
+    "INTERP_TIME",
     "INTERP_VEL_X",
     "INTERP_VEL_Y",
     "INTERP_VEL_Z",
+    "TRAJ_FLAG_ALL",
+    "TRAJ_FLAG_APEX",
+    "TRAJ_FLAG_MACH",
+    "TRAJ_FLAG_MRT",
+    "TRAJ_FLAG_NONE",
+    "TRAJ_FLAG_RANGE",
+    "TRAJ_FLAG_ZERO",
+    "TRAJ_FLAG_ZERO_DOWN",
+    "TRAJ_FLAG_ZERO_UP",
+    "T_ANGLE",
+    "T_DENSITY_RATIO",
+    "T_DISTANCE",
+    "T_DRAG",
+    "T_DROP_ANGLE",
+    "T_ENERGY",
+    "T_FLAG",
+    "T_HEIGHT",
+    "T_MACH",
+    "T_OGW",
+    "T_SLANT_DISTANCE",
+    "T_SLANT_HEIGHT",
+    "T_TIME",
+    "T_VELOCITY",
+    "T_WINDAGE",
+    "T_WINDAGE_ANGLE",
+    "Config",
+    "MultiBC",
+    "Request",
+    "Shot",
+    "Wind",
+    "aim",
+    "find_apex",
+    "find_max_range",
+    "find_zero_angle",
+    "fire",
+    "integrate",
+    "integrate_at",
+    "integrate_stream",
+    "version",
+    "zero",
+    "zero_point",
 ]
 
 _NaN = float("nan")
@@ -419,6 +425,34 @@ def integrate_stream(shot, req, cb):
 
 def find_zero_angle(shot, dist_ft):
     return _find_zero_angle(shot.buf, shot.holder, dist_ft)
+
+
+def zero_point(shot, dist_ft):
+    """Return the solver's (zero angle, terminal trajectory point)."""
+    return _zero_point(shot.buf, shot.holder, dist_ft)
+
+
+def zero(shot, dist_ft):
+    """Set ``shot``'s barrel elevation for dist_ft and return it in radians."""
+    angle, _point = zero_point(shot, dist_ft)
+    shot.s.props.barrel_elevation_rad = angle
+    return angle
+
+
+def aim(shot, dist_ft):
+    """Return (vertical_hold_rad, windage_rad, point) for a target distance.
+
+    ``point`` is retained by the zero solver; no second trajectory pass is
+    made.  The vertical hold is relative to the barrel elevation currently
+    stored in ``shot`` (normally set by :func:`zero`).
+    """
+    angle, point = zero_point(shot, dist_ft)
+    return angle - shot.s.props.barrel_elevation_rad, point[T_WINDAGE_ANGLE], point
+
+
+def fire(shot, req):
+    """Calculate and return ``(trajectory_rows, stop_reason)``."""
+    return integrate(shot, req)
 
 
 def find_apex(shot):

@@ -16,7 +16,7 @@ MicroPython — choose the one that fits your target and deployment constraints:
 | **FFI** (`libtiny_bclibc.so`) | `ffimod/`  | any unix port arch                             | `import _tiny_bclibc` from `ffimod/`  |
 
 All three expose the same Python API: `Shot`, `Request`, `Wind`, `Config`,
-`integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`, `find_max_range`,
+`integrate`, `integrate_stream`, `find_zero_angle`, `zero`, `aim`, `fire`, `find_apex`, `find_max_range`,
 and all flag / index constants.
 
 ---
@@ -651,7 +651,7 @@ Both skip automatically on 32-bit platforms (pointer size ≠ 8 bytes).
 
 `ffimod/_tiny_bclibc.py` supports both `single` and `double` precision via
 `MP_BCLIBC_PRECISION` and provides the same API as the natmod: `Shot`, `Request`,
-`Wind`, `Config`, `integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`,
+`Wind`, `Config`, `integrate`, `integrate_stream`, `find_zero_angle`, `zero`, `aim`, `fire`, `find_apex`,
 `find_max_range`, and all flag / index constants.
 
 ## Test (QEMU — Cortex-M3 / armv7m)
@@ -720,6 +720,11 @@ total, stop_reason = bc.integrate_stream(shot, req, on_point)
 
 # ── Zero-angle search ─────────────────────────────────────────────────────────
 elevation_rad = bc.find_zero_angle(shot, zero_distance_ft)
+
+# ── High-level calculator helpers ────────────────────────────────────────────
+elevation_rad = bc.zero(shot, zero_distance_ft)
+vertical_hold_rad, windage_rad, point = bc.aim(shot, target_distance_ft)
+rows, reason = bc.fire(shot, req)
 
 # ── Maximum range (golden-section search over [low_rad, high_rad]) ────────────
 range_ft, angle_rad = bc.find_max_range(shot, low_rad, high_rad)
@@ -798,9 +803,11 @@ for row in rows:
 
 ### 2. Zero + corrections
 
-`find_zero_angle` returns the barrel elevation in radians but does **not** store it in the
-shot automatically. You must write it to `shot._s.barrel_elevation_rad` before calling
-`integrate`. Without this step the shot flies with 0° barrel elevation.
+`zero` is the simple equivalent of `Calculator.set_weapon_zero`: it writes the
+solved barrel elevation directly into the existing zero-copy `Shot` buffer.
+`aim` returns the vertical hold relative to that stored zero, windage, and the
+terminal solver point without a second integration. `fire` is the high-level
+name for calculating a request's trajectory.
 
 ```python
 import tiny_bclibc as bc
@@ -811,16 +818,17 @@ shot = bc.Shot(
     diameter_inch=0.308, twist_inch=11.0, sight_height_ft=0.125,
 )
 
-# Step 1 — find zero angle at 100 m
+# Step 1 — set zero at 100 m
 zero_dist_ft = 100 / 0.3048           # 100 m → ft
-zero_angle = bc.find_zero_angle(shot, zero_dist_ft)
+zero_angle = bc.zero(shot, zero_dist_ft)
 
-# Step 2 — store in shot (equivalent to set_weapon_zero in py_ballisticcalc)
-shot._s.barrel_elevation_rad = zero_angle
+# Step 2 — calculate a hold at a target distance
+target_dist_ft = 500 / 0.3048
+vertical_hold_rad, windage_rad, point = bc.aim(shot, target_dist_ft)
 
-# Step 3 — integrate to target distance
+# Step 3 — calculate the trajectory
 req = bc.Request(range_limit_ft=500 / 0.3048, range_step_ft=500 / 0.3048)
-rows, _ = bc.integrate(shot, req)
+rows, _ = bc.fire(shot, req)
 
 # Step 4 — read correction from the last row
 row = rows[-1]

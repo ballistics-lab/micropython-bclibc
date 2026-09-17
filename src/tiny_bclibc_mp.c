@@ -10,6 +10,7 @@
  *   bclibc.integrate(shot._buf, shot._holder, req._buf)              -> (list[tuple], int)
  *   bclibc.integrate_stream(shot._buf, shot._holder, req._buf, cb)  -> (int total, int reason)
  *   bclibc.find_zero_angle(shot._buf, shot._holder, dist_ft)        -> float
+ *   bclibc.zero_point(shot._buf, shot._holder, dist_ft)             -> (float, tuple)
  *   bclibc.find_apex(shot._buf, shot._holder)                       -> tuple
  *   bclibc.find_max_range(shot._buf, shot._holder, lo, hi)          -> (float_ft, float_rad)
  *   bclibc.integrate_at(shot._buf, shot._holder, key, target)       -> (tuple_base, tuple_full)
@@ -455,6 +456,23 @@ static mp_obj_t mp_bclibc_find_zero_angle(mp_obj_t shot_arg, mp_obj_t holder_arg
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(mp_bclibc_find_zero_angle_obj, mp_bclibc_find_zero_angle);
 
+static mp_obj_t mp_bclibc_zero_point(mp_obj_t shot_arg, mp_obj_t holder_arg, mp_obj_t dist_arg)
+{
+    TINY_BCLIBC_ShotProps props;
+    int32_t rc = build_props_buf(shot_arg, holder_arg, &props);
+    if (rc != TINY_BCLIBC_OK)
+        _RAISE_BCLIBC_ERROR(_tiny_bclibc_err_str(rc));
+    TINY_BCLIBC_ZeroPointResult out;
+    rc = tiny_bclibc_find_zero_point(&props, (real_t)mp_obj_get_float(dist_arg), &out);
+    if (rc != TINY_BCLIBC_OK)
+        _RAISE_BCLIBC_ERROR(_tiny_bclibc_err_str(rc));
+    /* `out.point` is the terminal point retained by the winning zero-solver
+     * iteration; do not call integrate_at() here or in a wrapper. */
+    mp_obj_t items[2] = {mp_obj_new_float(out.angle_rad), traj_to_tuple(&out.point)};
+    return mp_obj_new_tuple(2, items);
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(mp_bclibc_zero_point_obj, mp_bclibc_zero_point);
+
 static mp_obj_t mp_bclibc_find_apex(mp_obj_t shot_arg, mp_obj_t holder_arg)
 {
     TINY_BCLIBC_ShotProps props;
@@ -593,6 +611,7 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_integrate, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_obj));
     mp_store_global(MP_QSTR_integrate_stream, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_stream_obj));
     mp_store_global(MP_QSTR_find_zero_angle, MP_OBJ_FROM_PTR(&mp_bclibc_find_zero_angle_obj));
+    mp_store_global(MP_QSTR_zero_point, MP_OBJ_FROM_PTR(&mp_bclibc_zero_point_obj));
     mp_store_global(MP_QSTR_find_apex, MP_OBJ_FROM_PTR(&mp_bclibc_find_apex_obj));
     mp_store_global(MP_QSTR_find_max_range, MP_OBJ_FROM_PTR(&mp_bclibc_find_max_range_obj));
     mp_store_global(MP_QSTR_integrate_at, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_at_obj));
@@ -713,6 +732,7 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_integrate), MP_ROM_PTR(&mp_bclibc_integrate_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_stream), MP_ROM_PTR(&mp_bclibc_integrate_stream_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_zero_angle), MP_ROM_PTR(&mp_bclibc_find_zero_angle_obj)},
+    {MP_ROM_QSTR(MP_QSTR_zero_point), MP_ROM_PTR(&mp_bclibc_zero_point_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_apex), MP_ROM_PTR(&mp_bclibc_find_apex_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_max_range), MP_ROM_PTR(&mp_bclibc_find_max_range_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_at), MP_ROM_PTR(&mp_bclibc_integrate_at_obj)},

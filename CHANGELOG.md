@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- High-level `zero(shot, distance_ft)`, `aim(shot, distance_ft)`, and
+  `fire(shot, request)` across the natmod, usermod, and unix FFI variants.
+  They operate on the existing zero-copy `Shot`/`Request` buffers; `aim()`
+  retains the terminal point from the winning zero-solver iteration rather
+  than re-integrating it.
+
 ## [2.0.0-beta.1] - 2026-09-17
 
 #### `usermod/manifest.py`, `usermod/micropython.mk`, `usermod/micropython.cmake`, `src/bclibc_bcp.py` — `BCLIBC_BCP=1` build flag (BACKLOG Epic 1)
