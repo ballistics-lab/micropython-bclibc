@@ -92,11 +92,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch_label: x64
+          - arch_label: x64glibc
             identifier: v1.29.0-manylinux_2_28_x86_64
             runs_on: ubuntu-latest
-          - arch_label: x86
+          - arch_label: x86glibc
             identifier: v1.29.0-manylinux_2_28_i686
+            runs_on: ubuntu-latest
+          - arch_label: x86musl
+            identifier: v1.29.0-musllinux_1_2_i686
             runs_on: ubuntu-latest
           - arch_label: aarch64
             identifier: v1.29.0-manylinux_2_28_aarch64

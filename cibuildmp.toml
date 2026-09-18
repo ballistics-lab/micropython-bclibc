@@ -57,6 +57,9 @@ user-c-modules = "usermod"
 [override."v1.29.0-manylinux_2_31_armv7l"]
 extra-make-args = ["LDFLAGS_EXTRA=-static"]
 
+[override."v1.29.0-musllinux_1_2_i686"]
+extra-make-args = ["LDFLAGS_EXTRA=-static"]
+
 # webassembly's own manifest problem: ports/webassembly has no boards/, only
 # variants/, so the plain top-level `manifest` above never pulls in the
 # pyscript variant's own default (variants/pyscript/manifest.py -- asyncio
