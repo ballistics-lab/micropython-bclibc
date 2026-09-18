@@ -2,17 +2,18 @@
 
 Each `N×` is relative to the RP2040 Stock (125 MHz) result for that same operation.
 
-| Architecture / Chip     | FPU        | Method      | Mode                            | integrate(1 km, 101 rows) | integrate(3 km, 31 rows) | integrate_at()        | find_zero_angle()       | find_apex()         |
-| ----------------------- | ---------- | ----------- | ------------------------------- | ----------------------: | ------------------------: | --------------------: | ----------------------: | ------------------: |
-| RP2040 (armv6m)         | soft-float | RK4         | Stock (125 MHz)                 |      353.75 ms / 1.0×   |     2158.65 ms / 1.0×     |     66.99 ms / 1.0×   |     119.07 ms / 1.0×    |    33.42 ms / 1.0× |
-| RP2040 (armv6m)         | soft-float | RK4         | OC (200 MHz)                    |      221.08 ms / 1.6×   |     1349.12 ms / 1.6×     |     41.88 ms / 1.6×   |      74.43 ms / 1.6×    |    20.90 ms / 1.6× |
-| RP2350 (armv7m)         | soft-float | RK4         | Stock (150 MHz)                 |      140.88 ms / 2.5×   |      843.10 ms / 2.6×     |     27.10 ms / 2.5×   |      48.40 ms / 2.5×    |    13.41 ms / 2.5× |
-| RP2350 (armv7m)         | soft-float | RK4         | OC (200 MHz)                    |      105.71 ms / 3.3×   |      632.27 ms / 3.4×     |     20.36 ms / 3.3×   |      36.30 ms / 3.3×    |    10.09 ms / 3.3× |
-| RP2350 (armv7emsp)      | hardware   | RK4         | Stock (150 MHz)                 |       15.99 ms / 22.1×  |       73.20 ms / 29.5×    |      2.42 ms / 27.7×  |       4.13 ms / 28.8×   |     1.21 ms / 27.6× |
-| RP2350 (armv7emsp)      | hardware   | RK4         | OC (200 MHz)                    |       11.98 ms / 29.5×  |       54.91 ms / 39.3×    |      1.81 ms / 37.0×  |       3.10 ms / 38.4×   |     0.91 ms / 36.7× |
-| ESP32-S3 (xtensawin)    | hardware   | RK4         | Stock (240 MHz, no OC headroom) |       14.85 ms / 23.8×  |       66.88 ms / 32.3×    |      2.51 ms / 26.7×  |       4.01 ms / 29.7×   |     1.48 ms / 22.6× |
-| RP2350 (armv7emsp)      | hardware   | RK45        | Stock (150 MHz)                 |       20.05 ms / 17.6×  |       11.86 ms / 182.0×   |      2.48 ms / 27.0×  |       4.28 ms / 27.8×   |     1.24 ms / 27.0× |
-| RP2350 (armv7emsp)      | hardware   | RK45 + RMS  | Stock (150 MHz)                 |       20.90 ms / 16.9×  |       11.67 ms / 185.0×   |      2.25 ms / 29.8×  |       3.79 ms / 31.4×   |     1.21 ms / 27.6× |
+| Architecture / Chip  | FPU        | Method                    | Mode                            | integrate(1 km, 101 rows) | integrate(3 km, 31 rows) |  integrate_at() | find_zero_angle() |     find_apex() |
+| -------------------- | ---------- | ------------------------- | ------------------------------- | ------------------------: | -----------------------: | --------------: | ----------------: | --------------: |
+| RP2040 (armv6m)      | soft-float | RK4                       | Stock (125 MHz)                 |          353.75 ms / 1.0× |        2158.65 ms / 1.0× | 66.99 ms / 1.0× |  119.07 ms / 1.0× | 33.42 ms / 1.0× |
+| RP2040 (armv6m)      | soft-float | RK4                       | OC (200 MHz)                    |          221.08 ms / 1.6× |        1349.12 ms / 1.6× | 41.88 ms / 1.6× |   74.43 ms / 1.6× | 20.90 ms / 1.6× |
+| RP2350 (armv7m)      | soft-float | RK4                       | Stock (150 MHz)                 |          140.88 ms / 2.5× |         843.10 ms / 2.6× | 27.10 ms / 2.5× |   48.40 ms / 2.5× | 13.41 ms / 2.5× |
+| RP2350 (armv7m)      | soft-float | RK4                       | OC (200 MHz)                    |          105.71 ms / 3.3× |         632.27 ms / 3.4× | 20.36 ms / 3.3× |   36.30 ms / 3.3× | 10.09 ms / 3.3× |
+| RP2350 (armv7emsp)   | hardware   | RK4                       | Stock (150 MHz)                 |          15.99 ms / 22.1× |         73.20 ms / 29.5× | 2.42 ms / 27.7× |   4.13 ms / 28.8× | 1.21 ms / 27.6× |
+| RP2350 (armv7emsp)   | hardware   | RK4                       | OC (200 MHz)                    |          11.98 ms / 29.5× |         54.91 ms / 39.3× | 1.81 ms / 37.0× |   3.10 ms / 38.4× | 0.91 ms / 36.7× |
+| ESP32-S3 (xtensawin) | hardware   | RK4                       | Stock (240 MHz, no OC headroom) |          14.85 ms / 23.8× |         66.88 ms / 32.3× | 2.51 ms / 26.7× |   4.01 ms / 29.7× | 1.48 ms / 22.6× |
+| RP2350 (armv7emsp)   | hardware   | RK4 + RK45 (hybrid)       | Stock (150 MHz)                 |          20.05 ms / 17.6× |        11.86 ms / 182.0× | 2.48 ms / 27.0× |   4.28 ms / 27.8× | 1.24 ms / 27.0× |
+| RP2350 (armv7emsp)   | hardware   | RK4 + RK45 + RMS (hybrid) | Stock (150 MHz)                 |          20.90 ms / 16.9× |        11.67 ms / 185.0× | 2.25 ms / 29.8× |   3.79 ms / 31.4× | 1.21 ms / 27.6× |
+| RP2350 (armv7emsp)   | hardware   | RK45 + RMS                | Stock (150 MHz)                 |          21.53 ms / 16.4× |        14.31 ms / 150.9× | 0.91 ms / 73.4× |   1.46 ms / 81.5× | 0.65 ms / 51.4× |
 
 ## Stock
 
@@ -348,7 +349,7 @@ Benchmark Summary
 Benchmark complete.
 ```
 
-### RP2350 (armv7emsp / RK45)
+### RP2350 (armv7emsp / RK4 + RK45)
 
 ```
 MPY: soft reboot
@@ -407,7 +408,7 @@ Benchmark Summary
 Benchmark complete.
 ```
 
-### RP2350 (armv7emsp / RK45 + RMS)
+### RP2350 (armv7emsp / RK4 + RK45 + RMS)
 
 ```
 MPY: soft reboot
@@ -462,6 +463,65 @@ Benchmark Summary
   Trajectory (1 km, 10 m steps): 47.9 shots/sec
   Interpolation: 443.7 calls/sec
   Zero finding: 263.9 calls/sec
+============================================================
+Benchmark complete.
+```
+
+### RP2350 (armv7emsp / RK45 + RMS)
+
+```
+MPY: soft reboot
+============================================================
+tiny_bclibc Performance Benchmark
+============================================================
+Version: 432864.0.0-sp
+
+--- integrate() (1 km, 10 m steps) ---
+  Rows: 101
+  Stop reason: 1
+  Avg: 21.53 ms  (21531 µs)
+  Min: 21401 µs  Max: 21803 µs
+  Iterations: 10
+
+--- integrate() (3 km, 100 m steps) ---
+  Rows: 31
+  Stop reason: 1
+  Avg: 14.31 ms  (14308 µs)
+  Min: 14230 µs  Max: 14426 µs
+  Iterations: 10
+
+--- integrate_at() (single point interpolation) ---
+  Avg: 0.913 ms  (913.3 µs)
+  Min: 706 µs  Max: 1154 µs
+  Calls: 500
+  ~1095 calls/sec
+
+--- find_zero_angle() (300 m zero) ---
+  Avg: 1.462 ms  (1462.0 µs)
+  Min: 1439 µs  Max: 1663 µs
+  Elevation avg: 0.1434°
+  Iterations: 50
+
+--- find_apex() ---
+  Avg: 0.649 ms  (648.9 µs)
+  Min: 638 µs  Max: 797 µs
+  Apex: 532.1 ft, 0.6 ft
+  Iterations: 50
+
+--- Memory usage (3 km trajectory) ---
+  Before: 34,160 B
+  After integrate: 44,240 B
+  After GC: 44,224 B
+  Peak allocation: 10,080 B
+  Rows: 31
+  Free memory: 453,392 B → 443,328 B
+
+============================================================
+Benchmark Summary
+============================================================
+  Trajectory (1 km, 10 m steps): 46.4 shots/sec
+  Interpolation: 1096.1 calls/sec
+  Zero finding: 687.4 calls/sec
 ============================================================
 Benchmark complete.
 ```
