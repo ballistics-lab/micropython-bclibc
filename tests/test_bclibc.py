@@ -370,6 +370,24 @@ try:
 except Exception as ex:
     _fail("find_zero_angle", ex)
 
+# -- high-level zero / aim / fire ---------------------------------------------
+print("\n--- zero / aim / fire (300 m zero) ---")
+try:
+    zero_angle = bc.zero(SHOT, ZERO_DIST_FT)
+    hold, windage, zero = bc.aim(SHOT, ZERO_DIST_FT)
+    fired_rows, fired_reason = bc.fire(SHOT, Request(range_limit_ft=ZERO_DIST_FT, range_step_ft=ZERO_DIST_FT))
+    _pass("zero elev_rad={:.6f}  point_dist_ft={:.3f}".format(zero_angle, zero[1]))
+    if abs(zero_angle - _ZERO_300M_REF) > _ZERO_300M_TOL:
+        _fail("zero angle", "expected ~{:.6f} rad, got {:.6f} rad".format(_ZERO_300M_REF, zero_angle))
+    if abs(zero[1] - ZERO_DIST_FT) > 1e-3:
+        _fail("aim distance", "expected {:.3f} ft, got {:.3f} ft".format(ZERO_DIST_FT, zero[1]))
+    if abs(hold) > _ZERO_300M_TOL:
+        _fail("aim hold", "expected zero hold after zero(), got {:.6f} rad".format(hold))
+    if not fired_rows:
+        _fail("fire", "expected at least one trajectory row")
+except Exception as ex:
+    _fail("zero / aim / fire", ex)
+
 # -- find_zero_angle at 100 m -------------------------------------------------
 print("\n--- find_zero_angle (100 m zero) ---")
 try:

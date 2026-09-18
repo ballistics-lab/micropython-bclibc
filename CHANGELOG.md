@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- High-level `zero(shot, distance_ft)`, `aim(shot, distance_ft)`, and
+  `fire(shot, request)` across the natmod, usermod, and unix FFI variants.
+  They operate on the existing zero-copy `Shot`/`Request` buffers; `aim()`
+  retains the terminal point from the winning zero-solver iteration rather
+  than re-integrating it.
+
+## [2.0.0-beta.1] - 2026-09-17
+
+#### `usermod/manifest.py`, `usermod/micropython.mk`, `usermod/micropython.cmake`, `src/bclibc_bcp.py` — `BCLIBC_BCP=1` build flag (BACKLOG Epic 1)
+
+First step towards the Ballistic Co-Processor (BCP) firmware — a
+`tiny_bclibc` build that serves calls to a host over a framed command
+protocol (see [`BACKLOG.md`](BACKLOG.md)). Off by default; without the flag
+neither the marker nor the application is built in.
+
+`BCLIBC_BCP=1`, on the make command line or in the environment, switches
+both halves at once: `usermod/manifest.py` reads it from `os.environ` and
+freezes `src/bclibc_bcp.py` (a placeholder for now), and
+`usermod/micropython.mk`/`.cmake` compile the native module with
+`BCLIBC_BCP` defined, which adds a `_tiny_bclibc.BCP` marker that
+`bclibc_bcp.py` imports — a firmware with the `.py` half but not the C half
+fails at `import bclibc_bcp` instead of running half-built. The environment,
+not a `makemanifest.py` `-v` variable, because those are path substitutions
+only; GNU make exports command-line variables to the recipes that run
+`makemanifest.py` and, on rp2/esp32, `cmake`, so `make BCLIBC_BCP=1` needs no
+further plumbing. The CMake side also appends the define to
+`MICROPY_CPP_DEF_EXTRA`: `py/mkrules.cmake`'s QSTR preprocessing does not see
+usermod INTERFACE definitions, and without it RPI_PICO2 failed with
+`MP_QSTR_* undeclared`. A separate manifest adding the C half via
+`c_module()` was tried first and dropped: `py/manifest.mk` (v1.29.0) merges
+those paths with a plain `USER_C_MODULES :=`, which GNU make ignores when
+`USER_C_MODULES` is on the command line, silently losing the C half on every
+Make port.
+
+Through cibuildmp, `CIBMP_EXTRA_MAKE_ARGS="BCLIBC_BCP=1"` (same mechanism as
+`natmod.yml`'s `RP2350=1`). Verified: unix with and without the flag
+(`tests/test_bclibc.py` 18/18 PASS both ways, marker and module present only
+with it), rp2 RPI_PICO2 locally with the flag from the environment and from
+the make command line, and in cibuildmp's Docker for
+`v1.29.0-qemu-MPS2_AN385` (`bclibc_module_globals_table` 360 B vs 352 B
+without the marker, `bclibc_bcp` frozen) and `v1.29.0-rp2-RPI_PICO2`
+(`bclibc_bcp` frozen). No CI job builds it yet. Switching the flag needs a
+fresh build directory — Make does not rebuild on a `CFLAGS` change, CMake
+reads the environment at configure time only. See
+[`README.md`](README.md#bcp-build-bclibc_bcp1-work-in-progress).
+
 ## [1.2.3] - 2026-09-14
 
 ### Fixed
@@ -944,6 +992,7 @@ available as a built-in at every boot.
 
 
 [Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...HEAD
+[2.0.0-beta-1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta-1
 [1.2.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...v1.2.1

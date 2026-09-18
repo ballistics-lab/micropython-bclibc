@@ -10,6 +10,7 @@
  *   bclibc.integrate(shot._buf, shot._holder, req._buf)              -> (list[tuple], int)
  *   bclibc.integrate_stream(shot._buf, shot._holder, req._buf, cb)  -> (int total, int reason)
  *   bclibc.find_zero_angle(shot._buf, shot._holder, dist_ft)        -> float
+ *   bclibc.zero_point(shot._buf, shot._holder, dist_ft)             -> (float, tuple)
  *   bclibc.find_apex(shot._buf, shot._holder)                       -> tuple
  *   bclibc.find_max_range(shot._buf, shot._holder, lo, hi)          -> (float_ft, float_rad)
  *   bclibc.integrate_at(shot._buf, shot._holder, key, target)       -> (tuple_base, tuple_full)
@@ -87,7 +88,7 @@ static const char *_tiny_bclibc_err_str(int32_t rc)
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
 
-#define MAX_DRAG_PTS 128
+#define MAX_DRAG_PTS 200
 #define MAX_WINDS 16
 #define MAX_BC_POINTS 16
 
@@ -146,8 +147,16 @@ static void _wrf(uint8_t *p, uint32_t off, float v)
 /* Linear interpolation of BC at a single Mach value; bc_mach[]/bc_val[] must
  * be sorted ascending by bc_mach. Clamps outside the point range (returns
  * the nearest endpoint's value), matching py-ballisticcalc's
- * linear_interpolation() boundary behavior. */
-static real_t _interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
+ * linear_interpolation() boundary behavior.
+ *
+ * Kept `static` (not exported) despite the descriptive
+ * `tiny_bclibc_mp_`-prefixed name: bcp_dispatch_mp.h reuses this exact
+ * interpolate-against-a-reference-table math for LOAD_PROFILE's
+ * *_MULTIBC handling (same as Epic 2's MultiBC()/build_multibc()), but
+ * that header is `#include`d into this same translation unit (see its
+ * own top comment for why), not compiled separately -- no `extern`
+ * needed, just a function defined earlier in the same file. */
+static real_t tiny_bclibc_mp_interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n, real_t mach)
 {
     if (mach <= bc_mach[0])
         return bc_val[0];
@@ -167,8 +176,9 @@ static real_t _interp_bc(const real_t *bc_mach, const real_t *bc_val, int32_t n,
 }
 
 /* Insertion sort by mach ascending; n is small (<= MAX_BC_POINTS), so O(n^2)
- * is fine and this avoids pulling in qsort(). */
-static void _sort_bc_points(real_t *mach, real_t *val, int32_t n)
+ * is fine and this avoids pulling in qsort(). Kept `static` -- see
+ * tiny_bclibc_mp_interp_bc()'s own comment just above. */
+static void tiny_bclibc_mp_sort_bc_points(real_t *mach, real_t *val, int32_t n)
 {
     for (int32_t i = 1; i < n; i++)
     {
@@ -222,7 +232,7 @@ static mp_obj_t mp_bclibc_build_multibc(size_t n_args, const mp_obj_t *args)
         bc_mach[i] = (real_t)_rdf(pp, (uint32_t)i * 8u);
         bc_val[i] = (real_t)_rdf(pp, (uint32_t)i * 8u + 4u);
     }
-    _sort_bc_points(bc_mach, bc_val, n_pts);
+    tiny_bclibc_mp_sort_bc_points(bc_mach, bc_val, n_pts);
 
     const real_t *ref_mach = (drag_type == 0u) ? g1_mach : g7_mach;
     const real_t *ref_cd = (drag_type == 0u) ? g1_cd : g7_cd;
@@ -235,7 +245,7 @@ static mp_obj_t mp_bclibc_build_multibc(size_t n_args, const mp_obj_t *args)
     uint8_t *co = (uint8_t *)cbi.buf;
     for (int32_t i = 0; i < ref_n; i++)
     {
-        real_t bc_at = _interp_bc(bc_mach, bc_val, n_pts, ref_mach[i]);
+        real_t bc_at = tiny_bclibc_mp_interp_bc(bc_mach, bc_val, n_pts, ref_mach[i]);
         _wrf(mo, (uint32_t)i * 4u, (float)ref_mach[i]);
         _wrf(co, (uint32_t)i * 4u, (float)(ref_cd[i] / bc_at));
     }
@@ -446,6 +456,23 @@ static mp_obj_t mp_bclibc_find_zero_angle(mp_obj_t shot_arg, mp_obj_t holder_arg
 }
 static MP_DEFINE_CONST_FUN_OBJ_3(mp_bclibc_find_zero_angle_obj, mp_bclibc_find_zero_angle);
 
+static mp_obj_t mp_bclibc_zero_point(mp_obj_t shot_arg, mp_obj_t holder_arg, mp_obj_t dist_arg)
+{
+    TINY_BCLIBC_ShotProps props;
+    int32_t rc = build_props_buf(shot_arg, holder_arg, &props);
+    if (rc != TINY_BCLIBC_OK)
+        _RAISE_BCLIBC_ERROR(_tiny_bclibc_err_str(rc));
+    TINY_BCLIBC_ZeroPointResult out;
+    rc = tiny_bclibc_find_zero_point(&props, (real_t)mp_obj_get_float(dist_arg), &out);
+    if (rc != TINY_BCLIBC_OK)
+        _RAISE_BCLIBC_ERROR(_tiny_bclibc_err_str(rc));
+    /* `out.point` is the terminal point retained by the winning zero-solver
+     * iteration; do not call integrate_at() here or in a wrapper. */
+    mp_obj_t items[2] = {mp_obj_new_float(out.angle_rad), traj_to_tuple(&out.point)};
+    return mp_obj_new_tuple(2, items);
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(mp_bclibc_zero_point_obj, mp_bclibc_zero_point);
+
 static mp_obj_t mp_bclibc_find_apex(mp_obj_t shot_arg, mp_obj_t holder_arg)
 {
     TINY_BCLIBC_ShotProps props;
@@ -584,6 +611,7 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_integrate, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_obj));
     mp_store_global(MP_QSTR_integrate_stream, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_stream_obj));
     mp_store_global(MP_QSTR_find_zero_angle, MP_OBJ_FROM_PTR(&mp_bclibc_find_zero_angle_obj));
+    mp_store_global(MP_QSTR_zero_point, MP_OBJ_FROM_PTR(&mp_bclibc_zero_point_obj));
     mp_store_global(MP_QSTR_find_apex, MP_OBJ_FROM_PTR(&mp_bclibc_find_apex_obj));
     mp_store_global(MP_QSTR_find_max_range, MP_OBJ_FROM_PTR(&mp_bclibc_find_max_range_obj));
     mp_store_global(MP_QSTR_integrate_at, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_at_obj));
@@ -633,16 +661,78 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
 
 #else /* usermod — static ROM dict registered via MP_REGISTER_MODULE */
 
+/* ── BCP: co-processor wire codec/dispatch (BCLIBC_BCP=1 only) ────────────
+ * `#include`d here, not compiled/registered as their own separate usermod
+ * source files or Python modules -- everything BCP adds lives in this
+ * same `_tiny_bclibc` native module (bclibc_module_globals_table below),
+ * behind #ifdef BCLIBC_BCP, exactly like the existing `BCP` marker just
+ * below. `_tiny_bclibc` (native) + `tiny_bclibc.py` (thin Python wrapper)
+ * is this project's one established pattern for exposing C to Python;
+ * BCP doesn't get a second one (`_bcp` or similar) just because its code
+ * happens to live in separate source files -- bcp_frame_mp.h/
+ * bcp_dispatch_mp.h are `#include`d for the same reason as before (see
+ * bcp_frame_mp.h's own top comment: keeps their internal helpers
+ * `static`, one line here instead of touching usermod/micropython.mk +
+ * .cmake for every new BCP source file). Order matters: bcp_dispatch_mp.h
+ * uses bcp_frame_mp.h's BCP_STATUS_* enum and reuses
+ * tiny_bclibc_mp_interp_bc()/tiny_bclibc_mp_sort_bc_points() defined
+ * earlier in this same file (both `static`, already in scope here).
+ * BCLIBC_BCP can never reach a natmod build (only usermod/
+ * micropython.mk/.cmake define it), so this is inert there regardless of
+ * already being inside the usermod-only branch. */
+#ifdef BCLIBC_BCP
+#include "bcp/bcp_frame_mp.h"
+#include "bcp/bcp_dispatch_mp.h"
+#endif
+
 static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR__tiny_bclibc)},
     /* size constants */
     {MP_ROM_QSTR(MP_QSTR_SHOT_HOLDER_SIZE), MP_ROM_INT(sizeof(ShotHolder))},
     {MP_ROM_QSTR(MP_QSTR_TRAJ_DATA_SIZE), MP_ROM_INT(sizeof(TINY_BCLIBC_TrajectoryData))},
+#ifdef BCLIBC_BCP
+    /* coprocessor build marker -- BCLIBC_BCP=1 build, see usermod/manifest.py;
+     * absent from plain usermod and natmod builds */
+    {MP_ROM_QSTR(MP_QSTR_BCP), MP_ROM_TRUE},
+    /* bcp_frame_mp.h -- wire framing (PROTOCOL.md §1-§2) */
+    {MP_ROM_QSTR(MP_QSTR_crc16), MP_ROM_PTR(&mp_bcp_crc16_obj)},
+    {MP_ROM_QSTR(MP_QSTR_cobs_encode), MP_ROM_PTR(&mp_bcp_cobs_encode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_cobs_decode), MP_ROM_PTR(&mp_bcp_cobs_decode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_build_frame), MP_ROM_PTR(&mp_bcp_build_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_parse_frame), MP_ROM_PTR(&mp_bcp_parse_frame_obj)},
+    {MP_ROM_QSTR(MP_QSTR_drop_count), MP_ROM_PTR(&mp_bcp_drop_count_obj)},
+    {MP_ROM_QSTR(MP_QSTR_HEADER_SIZE), MP_ROM_INT(BCP_HEADER_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_CRC_SIZE), MP_ROM_INT(BCP_CRC_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_MIN_PACKET_SIZE), MP_ROM_INT(BCP_MIN_PACKET_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_OK), MP_ROM_INT(BCP_STATUS_OK)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_MORE), MP_ROM_INT(BCP_STATUS_MORE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_INTERRUPTED), MP_ROM_INT(BCP_STATUS_INTERRUPTED)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_SIZE), MP_ROM_INT(BCP_STATUS_ERR_BAD_SIZE)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_BAD_ARG), MP_ROM_INT(BCP_STATUS_ERR_BAD_ARG)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_NOT_LOADED), MP_ROM_INT(BCP_STATUS_ERR_NOT_LOADED)},
+    {MP_ROM_QSTR(MP_QSTR_STATUS_ERR_INTERNAL), MP_ROM_INT(BCP_STATUS_ERR_INTERNAL)},
+    /* bcp_dispatch_mp.h -- command dispatch (PROTOCOL.md §4) */
+    {MP_ROM_QSTR(MP_QSTR_dispatch), MP_ROM_PTR(&mp_bcp_dispatch_obj)},
+    {MP_ROM_QSTR(MP_QSTR_run), MP_ROM_PTR(&mp_bcp_run_obj)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_PROFILE), MP_ROM_INT(BCP_CMD_LOAD_PROFILE)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONFIG), MP_ROM_INT(BCP_CMD_LOAD_CONFIG)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_LOAD_CONDITIONS), MP_ROM_INT(BCP_CMD_LOAD_CONDITIONS)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE), MP_ROM_INT(BCP_CMD_INTEGRATE)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_FAST), MP_ROM_INT(BCP_CMD_INTEGRATE_FAST)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_INTEGRATE_AT), MP_ROM_INT(BCP_CMD_INTEGRATE_AT)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_RESET), MP_ROM_INT(BCP_CMD_RESET)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_IDENT), MP_ROM_INT(BCP_CMD_IDENT)},
+    {MP_ROM_QSTR(MP_QSTR_CMD_ABORT), MP_ROM_INT(BCP_CMD_ABORT)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_WINDS), MP_ROM_INT(BCP_MAX_WINDS)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_DRAG_PTS), MP_ROM_INT(BCP_MAX_DRAG_PTS)},
+    {MP_ROM_QSTR(MP_QSTR_MAX_BC_POINTS), MP_ROM_INT(BCP_MAX_BC_POINTS)},
+#endif
     /* functions */
     {MP_ROM_QSTR(MP_QSTR_version), MP_ROM_PTR(&mp_bclibc_version_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate), MP_ROM_PTR(&mp_bclibc_integrate_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_stream), MP_ROM_PTR(&mp_bclibc_integrate_stream_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_zero_angle), MP_ROM_PTR(&mp_bclibc_find_zero_angle_obj)},
+    {MP_ROM_QSTR(MP_QSTR_zero_point), MP_ROM_PTR(&mp_bclibc_zero_point_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_apex), MP_ROM_PTR(&mp_bclibc_find_apex_obj)},
     {MP_ROM_QSTR(MP_QSTR_find_max_range), MP_ROM_PTR(&mp_bclibc_find_max_range_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_at), MP_ROM_PTR(&mp_bclibc_integrate_at_obj)},

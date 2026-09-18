@@ -66,6 +66,7 @@ _f_integ    = _lib.func("i", "tiny_bclibc_integrate",         "PPPiPPP")
 _f_at       = _lib.func("i", "tiny_bclibc_integrate_at",      "Pi" + _R + "PP")
 _f_apex     = _lib.func("i", "tiny_bclibc_find_apex",         "PP")
 _f_zero     = _lib.func("i", "tiny_bclibc_find_zero_angle",   "P" + _R + "P")
+_f_zero_point = _lib.func("i", "tiny_bclibc_find_zero_point", "P" + _R + "P")
 _f_maxrange = _lib.func("i", "tiny_bclibc_find_max_range",    "P" + _R + _R + "PP")
 _f_err      = _lib.func("s", "tiny_bclibc_last_error",        "")
 
@@ -509,6 +510,11 @@ def _pack_req_c(req):
 def _parse_traj(buf, idx=0):
     """Parse TINY_BCLIBC_TrajectoryData at slot idx → 16-tuple."""
     off = idx * _TRAJ_C_SIZE
+    return _parse_traj_at(buf, off)
+
+
+def _parse_traj_at(buf, off):
+    """Parse TINY_BCLIBC_TrajectoryData at byte offset off → 16-tuple."""
     v = struct.unpack_from("<15" + _R, buf, off)
     flag = struct.unpack_from("<i", buf, off + 15 * _RS)[0]
     return (v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7],
@@ -575,6 +581,34 @@ def find_zero_angle(shot, dist_ft):
     if rc != 0:
         raise ValueError("find_zero_angle rc={}: {}".format(rc, _f_err()))
     return struct.unpack_from("<" + _R, out)[0]
+
+
+def zero_point(shot, dist_ft):
+    """Return the solver's (zero angle, terminal trajectory point) without re-integration."""
+    props_c, _alive = _build_props(shot.buf)
+    out = bytearray(_RS + _TRAJ_C_SIZE)
+    rc = _f_zero_point(props_c, float(dist_ft), out)
+    if rc != 0:
+        raise ValueError("zero_point rc={}: {}".format(rc, _f_err()))
+    return struct.unpack_from("<" + _R, out)[0], _parse_traj_at(out, _RS)
+
+
+def zero(shot, dist_ft):
+    """Set ``shot``'s barrel elevation for dist_ft and return it in radians."""
+    angle, _point = zero_point(shot, dist_ft)
+    shot.s.props.barrel_elevation_rad = angle
+    return angle
+
+
+def aim(shot, dist_ft):
+    """Return (vertical_hold_rad, windage_rad, point) for a target distance."""
+    angle, point = zero_point(shot, dist_ft)
+    return angle - shot.s.props.barrel_elevation_rad, point[T_WINDAGE_ANGLE], point
+
+
+def fire(shot, req):
+    """Calculate and return ``(trajectory_rows, stop_reason)``."""
+    return integrate(shot, req)
 
 
 def find_apex(shot):

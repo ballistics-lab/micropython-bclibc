@@ -1,0 +1,486 @@
+# BCP wire protocol
+
+> [!WARNING]
+> **Draft, work in progress.** This documents the design decisions recorded
+> in `BACKLOG.md` (Epics 3 and 8) as a single reference instead of scattered
+> backlog bullets. Anything not marked "Resolved" in `BACKLOG.md` is still
+> open and may change. Every command in §4's table has a real dispatch
+> handler now (`src/bcp/bcp_dispatch_mp.h`) and is exercised by
+> `tests/test_bcp_dispatch_native.py` on a unix usermod build -- see that
+> file's own header comment for exactly which commands are additionally
+> hardware-verified versus unix-only so far. What's still missing is the
+> transport itself (Epic 4: USB CDC1, the real read/decode/dispatch/write
+> loop) and, once that exists, wiring Epic 6's cooperative-abort/
+> `INTERRUPTED` handling into it for real -- see `BACKLOG.md`'s "Status at
+> a glance" section for the up-to-date picture. The framing layer (COBS +
+> CRC16) is implemented in C (`src/bcp/bcp_frame_mp.h`) and exercised by
+> `tests/test_bcp_frame_native.py`'s known-answer vectors and framing
+> failure scenarios; the earlier pure-Python design-iteration
+> implementation this was ported from (`src/bcp_frame.py` /
+> `tests/test_bcp_frame.py`) has been removed now that the C port is the
+> only implementation and the wire format itself is settled -- see
+> `BACKLOG.md` Epic 3.
+
+All multi-byte integers and floats are **little-endian**. All floats are
+**IEEE-754 binary32** (`f32`) on the wire regardless of the on-device build's
+own `real_t` (single or double precision) -- the dispatcher converts, and a
+host never needs to know the device's build precision to decode a
+request/response. **Exception:** `INTEGRATE`/`INTEGRATE_FAST`'s trajectory
+rows and `INTEGRATE_AT`'s response (§4.4/§4.4a/§4.5) are the one place this
+doesn't hold -- `TrajectoryData`/`BaseTrajData` are a raw copy of the
+on-device struct in its native `real_t`, sized per the build's actual
+precision, *not* converted to `f32`. A host decodes those specifically using
+`IDENT`'s own `real_size`/`traj_row_size`/`base_traj_size` (§4.6) rather than
+assuming `f32`; `FastTrajData` (§4.5a, `INTEGRATE_FAST` only) is the
+exception to the exception -- it's fixed `f32` on every build, since it has
+no double-precision-only fields to lose by converting.
+
+## 1. Framing
+
+Wire bytes: `00 COBS(packet) 00`.
+
+There is no separate start byte and no length field. COBS guarantees the
+encoded bytes contain no `0x00`, so the leading/trailing zero alone
+delimits a frame; a merged or truncated frame is caught by CRC16 plus a
+per-command payload size check (§4), not by a length field. See
+`BACKLOG.md` Epic 3 for the full rationale (what a lost frame-start, a lost
+delimiter, leading garbage, and an over-long undelimited run each do).
+
+Decoding a chunk of transport bytes:
+
+```
+buf = bytearray()
+for byte in incoming_bytes:
+    if byte == 0:
+        if buf:                      # ignore 00 00 (empty segment)
+            packet = cobs_decode(buf)          # raises on malformed COBS
+            if len(packet) >= 6:                # HEADER_SIZE(4) + CRC_SIZE(2)
+                body, crc = packet[:-2], packet[-2:]
+                if crc16(body) == u16_le(crc):
+                    handle(body)        # header + payload, CRC verified
+                # else: silently drop -- seq inside `body` cannot be trusted
+        buf = bytearray()
+    else:
+        buf.append(byte)
+        if len(buf) > MAX_FRAME_SIZE:  # bounded RX buffer, no delimiter seen
+            buf = bytearray()           # drop, resync on the next 0x00
+```
+
+Reference implementation: `src/bcp/bcp_frame_mp.h`'s `parse_frame()`.
+
+Encoding a packet for the wire: `src/bcp/bcp_frame_mp.h`'s `build_frame(type_, seq, status, payload)`.
+
+## 2. Packet header (4 bytes)
+
+| offset | field | type | meaning |
+|---|---|---|---|
+| 0 | `type` | `u8` | command id in a request; `cmd \| 0x80` in the matching response |
+| 1 | `seq` | `u8` | set by the host, echoed back unchanged in the response |
+| 2 | `status` | `u8` | `0` in a request; one of §3 in a response |
+| 3 | `rsvd` | `u8` | reserved, `0` |
+
+Followed by the command's payload (§4), followed by a 2-byte CRC16 (§2.1)
+over everything from offset 0 through the end of the payload.
+
+Putting the 4-byte header first keeps the payload 4-byte aligned, so a
+`uctypes.struct` can be laid directly over the decoded packet body without
+a copy.
+
+### 2.1 CRC16
+
+CRC-16/CCITT-FALSE: poly `0x1021`, init `0xFFFF`, no input/output
+reflection, xorout `0x0000`. 256-entry table-driven. Check value:
+`crc16(b"123456789") == 0x29B1` (the standard catalogue vector for this
+variant).
+
+Measured on real hardware (Waveshare RP2040-Zero, RP2040, MicroPython
+1.29.0, plain bytecode) at **~12.6 µs/byte** -- 2x faster than a 16-entry
+nibble table and 7x faster than a bitwise loop. The table is computed
+once at import (not a frozen flash constant), so its cost is **RAM**, not
+ROM: stored as `array('H', ...)` rather than a plain `list` (a list of
+256 ints is really a 256-pointer object array) -- measured **528 B**
+versus **1040 B** for the same 256 values, ~5% slower, noise next to the
+table-size choice itself. See `BACKLOG.md` Epic 3 for the full comparison
+table. Worst-case framing cost (COBS + CRC16 together, the ~1.6 KB
+`LOAD_PROFILE` frame -- a full 200-point `CUSTOM` drag curve, §4.2) ≈ 49 ms
+-- negligible next to how rarely that frame is sent (once per rifle/ammo
+setup) and to actual integration compute time for everything
+else.
+
+## 3. Response status codes
+
+| value | name | meaning |
+|---|---|---|
+| 0 | `OK` | command completed; payload (if any) is valid |
+| 1 | `MORE` | one chunk of a streamed response (`INTEGRATE`); more frames follow, terminated by a final `OK` |
+| 2 | `INTERRUPTED` | this generation was preempted by a later command before it finished (Epic 6) -- payload (if any) is not meaningful |
+| 3 | `ERR_BAD_SIZE` | payload length doesn't match the size computed from its own count field(s) (§4.1) |
+| 4 | `ERR_BAD_ARG` | a count field, enum value, or numeric argument is out of range |
+| 5 | `ERR_NOT_LOADED` | command needs a cached profile (and/or conditions) that hasn't been loaded yet |
+| 6 | `ERR_INTERNAL` | the underlying `tiny_bclibc` call failed (bad bracket, no convergence, etc.) |
+
+A frame that fails CRC never gets a response at all (§1) -- these codes
+only cover frames that passed framing but failed at the command layer.
+
+## 4. Commands
+
+| id | name | request payload | response payload |
+|---|---|---|---|
+| 1 | `LOAD_PROFILE` | §4.2 | `barrel_elevation_rad:f32` |
+| 2 | `LOAD_CONFIG` | §4.2a | `barrel_elevation_rad:f32` |
+| 3 | `LOAD_CONDITIONS` | §4.3 | `barrel_elevation_rad:f32` |
+| 4 | `INTEGRATE` | `Request` (§4.4) | stream of `MORE` rows (full `TrajectoryData`), then `total:u32, reason:i32` |
+| 5 | `INTEGRATE_FAST` | `Request` (§4.4, same struct) | stream of `MORE` rows (compact `FastTrajData`, §4.5a), then `total:u32, reason:i32` |
+| 6 | `INTEGRATE_AT` | `key:u8, rsvd:u8[3], target:f32` | `BaseTrajData` + `TrajectoryData` (§4.5) |
+| 7 | `RESET` | *(none)* | `OK` |
+| 8 | `IDENT` | *(none)* | §4.6 |
+| 9 | `ABORT` | *(none)* | `OK` (see note below) |
+
+Numeric ids above are final, matching `src/bcp/bcp_dispatch_mp.h`'s `BCP_CMD_*`
+enum exactly. Every one of them now has a real handler (an unrecognized
+`type_` outside this table still raises `NotImplementedError`, a
+development-time signal, not a gap in this table) -- `IDENT`, `LOAD_CONFIG`
+and `LOAD_PROFILE` are hardware-verified on real RP2040 hardware;
+`LOAD_CONDITIONS`, `INTEGRATE`/`INTEGRATE_FAST`, `INTEGRATE_AT`, `RESET`
+and `ABORT` are verified on a unix usermod build only so far, not yet run
+on real RP2040/RP2350/ESP32-S3 hardware. See `BACKLOG.md`'s "Status at a
+glance" section for the exact verification detail per command.
+
+`FIND_ZERO_ANGLE` and `STREAM_START`/`STREAM_END` are **not** wire
+commands -- see `BACKLOG.md` Epic 3/8: zero-solving is internal and
+auto-triggered by `LOAD_PROFILE`/`LOAD_CONDITIONS` (§4.2/§4.3), and
+`INTEGRATE` streams on its own via `MORE` frames. **`FIND_APEX` and
+`FIND_MAX_RANGE` are not wire commands either** -- both are
+trajectory-shape analysis (max ordinate, max achievable range), not part
+of the live-shot holdover workflow this protocol targets
+(`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` once, then
+`INTEGRATE_AT`/`INTEGRATE(_FAST)` per actual range). `FIND_APEX` is
+redundant with `INTEGRATE` besides -- a host already streaming full rows
+can find the max-height row itself, no dedicated command needed. Both
+remain ordinary `tiny_bclibc`/`tiny_bclibc.py` library functions outside
+BCP; revisit only if a real diagnostics/analysis use case shows up.
+
+### 4.1 Array-count rule
+
+Every variable-length part of a payload (a drag table, a wind array, a
+version string) is preceded by its own count/length at a fixed position.
+The receiver:
+
+1. checks each count against its cap (`drag_count ≤ 200` for `drag_type`
+   `CUSTOM`, `≤ 5` for `*_MULTIBC`, `wind_count ≤ 5`) -- BCP's own chosen
+   limits, matching the real precedent of the established `.a7p` profile
+   format's schema (`coef_rows` maxItems: 200 for `CUSTOM`, 5 for
+   G1/G7 multi-point rows) rather than picked arbitrarily. **The `CUSTOM`
+   cap of 200 exceeds `tiny_bclibc`'s previous internal limit** (was
+   `_MAX_DRAG_PTS`/`MAX_DRAG_PTS`=128) -- raised to 200 in the library
+   itself (`src/tiny_bclibc.py`, `src/tiny_bclibc_mp.c`), not just at the
+   wire layer, see Epic 2's follow-up below. `*_MULTIBC`'s cap of 5 and
+   `wind_count`'s cap of 5 both stay well within the library's own
+   existing limits (`MAX_BC_POINTS`=16, `_MAX_WINDS`=16) and needed no
+   library change;
+2. computes the expected payload size from the fixed fields + counts;
+3. requires that size to **equal** the payload length carried by the frame.
+
+A count over its cap → `ERR_BAD_ARG`. A size mismatch → `ERR_BAD_SIZE`.
+This replaces a length field in the packet header (§1) and also catches a
+merged/truncated frame that happened to pass CRC16 (~1/65536 chance).
+
+### 4.2 `LOAD_PROFILE`
+
+Rifle + ammo + the zero **distance** (not a pre-solved angle -- see
+below). Solver tuning lives in the separate `LOAD_CONFIG` (§4.2a) --
+split out because it changes even less often than the rifle/ammo data,
+essentially never in normal use (see below). Cached until the next
+`LOAD_PROFILE` or `RESET`.
+
+| offset | field | type |
+|---|---|---|
+| 0 | `bc` | `f32` |
+| 4 | `weight_grain` | `f32` |
+| 8 | `diameter_inch` | `f32` |
+| 12 | `length_inch` | `f32` |
+| 16 | `muzzle_velocity_fps` | `f32` |
+| 20 | `sight_height_ft` | `f32` |
+| 24 | `twist_inch` | `f32` |
+| 28 | `zero_distance_ft` | `f32` |
+| 32 | `drag_type` | `u8` -- see table below |
+| 33 | `rsvd` | `u8` |
+| 34 | `drag_count` | `u16` -- meaning depends on `drag_type`, see below |
+| 36 | `drag_points` | `drag_count × {mach:f32, second:f32}` -- shape and cap
+      depend on `drag_type`, see below |
+
+`drag_type` values -- **not just a table selector, a tagged union over
+what `drag_points`/`bc` mean**:
+
+| `drag_type` | name | `drag_points` holds | cap | `bc` field (offset 0) |
+|---|---|---|---|---|
+| 0 | G1 | *(ignored, `drag_count` must be 0)* | -- | used normally |
+| 1 | G7 | *(ignored, `drag_count` must be 0)* | -- | used normally |
+| 2 | CUSTOM | `drag_count × {mach:f32, cd:f32}` -- a hand-built drag curve fed straight to the engine | ≤ 200 (matches `.a7p`'s own `CUSTOM` `coef_rows` cap; library's `_MAX_DRAG_PTS` raised to 200 to match) | used normally |
+| 3 | G1_MULTIBC | `drag_count × {mach:f32, bc:f32}` -- BC/Mach breakpoints, device runs `build_multibc()` against the **G1** table | ≤ 5 (BCP cap; library's own `MAX_BC_POINTS`=16) | **ignored** |
+| 4 | G7_MULTIBC | same, against the **G7** table | ≤ 5 (BCP cap; library's own `MAX_BC_POINTS`=16) | **ignored** |
+
+**Epic 2's `MultiBC()`/`build_multibc()` had no wire exposure until now** --
+`drag_type` 0/1/2 only covered "static reference table" or "a curve the
+client already computed," never "BC/Mach breakpoints the *device* should
+fold into a curve," which is the whole point of Epic 2. `G1_MULTIBC`/
+`G7_MULTIBC` close that gap: the dispatcher runs the same
+`build_multibc()` call `MultiBC()` does today, producing a curve of
+exactly the reference table's own length (`G1_N`/`G7_N` -- **not**
+`drag_count`, which is only the *input* breakpoint count), then constructs
+the profile with `bc` forced to `1.0` internally, matching `MultiBC()`'s
+own documented contract (the BC-ratio scaling is already baked into the
+curve, so the scalar has to be `1.0` or it would be applied twice).
+
+**Why `bc` (offset 0) is ignored in `*_MULTIBC` mode, not repurposed or
+removed:** once a curve carries multiple BC/Mach breakpoints there is no
+single scalar BC left to hold in a fixed field, but restructuring the
+payload so offset 0 shifts by `drag_type` would make every other field's
+offset conditional too -- not worth it for 4 don't-care bytes. Contract:
+the dispatcher does not read or validate this field in `*_MULTIBC` mode;
+by convention (not enforced) a client sends `1.0` there anyway, purely so
+a packet capture reads sensibly to a human.
+
+Fixed part: 36 B. Max payload is still the `CUSTOM` case (200-point curve
+-- `*_MULTIBC`'s own cap of 5 points, 40 B, is much smaller): 36 + 200·8 =
+1636 B.
+
+**Zero handling (resolved, see `BACKLOG.md` Epic 8):** the client supplies
+a *distance*, not an angle -- the elevation needed to hit that distance
+depends on the current atmosphere and solver tuning, so it can't be
+supplied once and cached verbatim. The dispatcher internally solves for
+`barrel_elevation_rad` against whatever conditions and config are cached
+(or the §4.2a/§4.3 defaults, for whichever hasn't been loaded yet) and
+stores it before replying. A zero-solve failure (no bracket, no
+convergence) is reported as `ERR_INTERNAL` on **this** response -- there
+is no separate `FIND_ZERO_ANGLE` response to carry it.
+
+Response payload: `barrel_elevation_rad:f32` -- the solved zero, echoed
+back as telemetry so the host doesn't need a separate query round-trip.
+
+### 4.2a `LOAD_CONFIG`
+
+Solver tuning -- RK4 step size, zero-finding tolerance, integration
+cutoffs. Split from `LOAD_PROFILE` (not bundled with rifle/ammo data, and
+**not** reset by a new `LOAD_PROFILE`): these values are essentially
+never touched in normal use, most clients will never send this command
+at all and just run on the built-in defaults below. Cached until the
+next `LOAD_CONFIG` or `RESET`; orthogonal to whichever profile happens
+to be loaded.
+
+| offset | field | type | default |
+|---|---|---|---|
+| 0 | `step_multiplier` | `f32` | `0.5` |
+| 4 | `zero_finding_accuracy` | `f32` | `0.001` |
+| 8 | `minimum_velocity` | `f32` | `50.0` |
+| 12 | `maximum_drop` | `f32` | `-15000.0` |
+| 16 | `gravity_constant` | `f32` | `-32.17405` |
+| 20 | `minimum_altitude` | `f32` | `-1500.0` |
+| 24 | `max_iterations` | `i32` | `50` |
+
+Fixed part: 28 B, no variable-length part -- matches `tiny_bclibc.py`'s
+internal `_CFG_DESC`/`_CFG_SIZE` exactly, this is a direct passthrough.
+Defaults are `Config()`'s existing Python-side defaults, same pattern as
+`LOAD_CONDITIONS`'s fallback (§4.3): applied on-device before the first
+`LOAD_CONFIG`, not a new set of numbers invented for the wire protocol.
+
+Response payload: `barrel_elevation_rad:f32`, same as `LOAD_PROFILE`/
+`LOAD_CONDITIONS` -- solver tuning affects the zero-angle solve too (step
+size, convergence tolerance, cutoffs), so `LOAD_CONFIG` re-triggers it
+against the cached profile/conditions exactly like the other two.
+`ERR_NOT_LOADED` if no profile is cached yet (nothing to solve a zero
+for). `ERR_INTERNAL` on a zero-solve failure.
+
+### 4.3 `LOAD_CONDITIONS`
+
+Atmosphere + shot geometry + wind. Expected to change every few shots.
+
+| offset | field | type |
+|---|---|---|
+| 0 | `temp_c` | `f32` |
+| 4 | `pressure_hpa` | `f32` |
+| 8 | `altitude_ft` | `f32` |
+| 12 | `humidity` | `f32` |
+| 16 | `look_angle_rad` | `f32` |
+| 20 | `barrel_azimuth_rad` | `f32` |
+| 24 | `cant_angle_rad` | `f32` |
+| 28 | `latitude_deg` | `f32` |
+| 32 | `azimuth_deg` | `f32` |
+| 36 | `wind_count` | `u8` (≤ 5, BCP cap; library's own `_MAX_WINDS`=16) |
+| 37 | `rsvd` | `u8[3]` |
+| 40 | `winds` | `wind_count × {velocity_fps:f32, direction_from_rad:f32, until_distance_ft:f32, max_distance_ft:f32}` |
+
+Fixed part: 40 B. Max payload (5 winds): 40 + 5·16 = 120 B.
+
+**If no `LOAD_CONDITIONS` has been sent yet**, `INTEGRATE(_FAST)`/
+`INTEGRATE_AT`/the `LOAD_PROFILE` zero-solve above fall back to `Shot()`'s
+existing Python-side defaults: ICAO standard atmosphere, no wind, zero
+cant/look angle -- same defaults, just applied on-device.
+
+Response payload: `barrel_elevation_rad:f32` -- `LOAD_CONDITIONS`
+re-solves the cached profile's zero against the new conditions (and
+cached config, §4.2a), so it echoes the same field. `ERR_NOT_LOADED` if
+no profile is cached yet (there is no `zero_distance_ft` to solve
+against). `ERR_INTERNAL` on a zero-solve failure.
+
+### 4.4 `INTEGRATE`
+
+Request (`Request`, 16 B, unchanged by the profile/conditions split --
+it already carried only per-call parameters):
+
+| offset | field | type |
+|---|---|---|
+| 0 | `range_limit_ft` | `f32` |
+| 4 | `range_step_ft` | `f32` |
+| 8 | `time_step` | `f32` |
+| 12 | `filter_flags` | `i32` |
+
+`ERR_NOT_LOADED` if no profile is cached.
+
+Response: zero or more `status=MORE` frames, each:
+
+| offset | field | type |
+|---|---|---|
+| 0 | `row_idx` | `u16` |
+| 2 | `count` | `u8` |
+| 3 | `rsvd` | `u8` |
+| 4 | `rows` | `count × TrajectoryData` (§4.5), size `traj_row_size` from `IDENT` |
+
+followed by a final `status=OK` frame:
+
+| offset | field | type |
+|---|---|---|
+| 0 | `total` | `u32` |
+| 4 | `reason` | `i32` (`tiny_bclibc_integrate`'s stop reason) |
+
+### 4.4a `INTEGRATE_FAST`
+
+Same request struct and semantics as `INTEGRATE` (§4.4) -- same
+`Request`, same `filter_flags`, same stream/final-frame shape, same
+`ERR_NOT_LOADED` rule. The only difference is the row struct carried by
+each `MORE` frame: `FastTrajData` (§4.5a) instead of the full
+`TrajectoryData`.
+
+**Why a second command instead of a flag on `INTEGRATE`:** most callers
+only need a handful of fields per row (holdover angles for a
+scope/reticle), and **per-point latency, not just total bandwidth, is
+the point** -- this matters most on the UART transport planned for a
+later epic (out of phase-1 scope per the non-goals above, but the frame
+layer is designed transport-agnostic from the start, §0). On a serial
+link, unlike USB CDC, *byte transmission time itself* is the bottleneck,
+not CPU-side COBS/CRC cost -- at a common 115200 baud (8N1, 10 bits/byte
+≈ 86.8 µs/byte), sending one full-precision double-build row (124 B)
+takes **~10.8 ms** versus **~1.4 ms** for the 16 B fast row; even at
+921600 baud that's ~1.35 ms vs ~0.17 ms. Both are well above the ~12.6
+µs/byte CRC16 cost measured in §2.1 -- on UART the wire itself, not the
+framing math, sets the pace, so shrinking the row is the only lever that
+actually shortens the delay before the next point lands. Both commands
+run the exact same underlying `tiny_bclibc_integrate_stream()` call;
+`INTEGRATE_FAST` is purely a thinner wire projection of the same computed
+rows, not a cheaper computation -- no engine-level change needed, and it
+costs nothing extra on USB CDC1 either.
+
+Response `MORE` frame:
+
+| offset | field | type |
+|---|---|---|
+| 0 | `row_idx` | `u16` |
+| 2 | `count` | `u8` |
+| 3 | `rsvd` | `u8` |
+| 4 | `rows` | `count × FastTrajData` (§4.5a, fixed 16 B each) |
+
+Final frame identical to `INTEGRATE`'s (`total:u32, reason:i32`).
+
+### 4.5a `FastTrajData` (compact row, `INTEGRATE_FAST` only)
+
+| offset | field | type |
+|---|---|---|
+| 0 | `distance_ft` | `f32` |
+| 4 | `drop_angle_rad` | `f32` |
+| 8 | `windage_angle_rad` | `f32` |
+| 12 | `velocity_fps` | `f32` |
+
+Angles rather than raw `height_ft`/`windage_ft`, since these map directly
+to a scope/reticle's holdover and windage clicks without the host needing
+`sight_height_ft`/range to convert; `velocity_fps` alongside them for
+energy/stability context at that range.
+
+Always **16 B on the wire, on every build** -- unlike `TrajectoryData`
+below, `FastTrajData`'s size does not depend on the device's `real_t`
+precision (all wire floats are `f32` regardless of build, §0; this
+struct just happens to have no double-precision-only internal fields to
+worry about). A host does not need `IDENT`'s `real_size` to decode it.
+
+### 4.5 Trajectory row structs
+
+`TrajectoryData` (full row -- `INTEGRATE_AT`, `INTEGRATE`'s
+`MORE` frames), 15 `real_t` fields + 1 `i32`, in this order: `time,
+distance_ft, velocity_fps, mach, height_ft, slant_height_ft,
+drop_angle_rad, windage_ft, windage_angle_rad, slant_distance_ft,
+angle_rad, density_ratio, drag, energy_ft_lb, ogw_lb, flag`. Size is
+**64 B on a single-precision build, 124 B on double precision** --
+report both this size and which build is running via `real_size` in
+`IDENT` (§4.6); a host must not assume one without checking.
+
+`BaseTrajData` (`INTEGRATE_AT`'s raw interpolated point, paired with a
+full `TrajectoryData`), 8 `real_t` fields: `time, px, py, pz, vx, vy, vz,
+mach`. Size 32 B (sp) / 64 B (dp).
+
+`INTEGRATE_AT`'s `key:u8` selects which field of `BaseTrajData` the
+`target:f32` is interpolated against (`0`=time, `1`=mach, `2..4`=pos
+x/y/z, `5..7`=vel x/y/z -- `TINY_BCLIBC_KEY_*` in
+`bclibc/tiny_bclibc/include/tiny_bclibc/traj_data.h`).
+
+### 4.6 `IDENT`
+
+No request payload. Response (fixed part, `struct` format `<BBHHBHBIB`):
+
+| offset | field | type | meaning |
+|---|---|---|---|
+| 0 | `proto_ver` | `u8` | this protocol's version |
+| 1 | `real_size` | `u8` | `4` (single) or `8` (double precision build) |
+| 2 | `traj_row_size` | `u16` | `TrajectoryData` size in bytes (64 or 124) |
+| 4 | `base_traj_size` | `u16` | `BaseTrajData` size in bytes (32 or 64) |
+| 6 | `max_winds` | `u8` | cap for `LOAD_CONDITIONS`'s wind array (5) |
+| 7 | `max_drag_pts` | `u16` | cap for `LOAD_PROFILE`'s `CUSTOM` drag table (200) |
+| 9 | `max_bc_points` | `u8` | cap for `LOAD_PROFILE`'s `*_MULTIBC` breakpoints (5) |
+| 10 | `drop_count` | `u32` | frames dropped for bad CRC/size since boot (optional telemetry, §1) |
+| 14 | `version_len` | `u8` | length of the version string that follows |
+| 15 | `version` | `bytes[version_len]` | `tiny_bclibc.version()` passthrough, e.g. `"0.x.y-sp"` |
+
+### 4.7 `RESET`
+
+No request/response payload beyond `OK`. Per `BACKLOG.md` Epic 8: an
+**application soft-reset**, not a targeted data-clearer (every
+`LOAD_PROFILE`/`LOAD_CONFIG`/`LOAD_CONDITIONS` already fully overwrites,
+so that's redundant) and not an MCU reboot (out of scope -- that's a
+CDC0 REPL/firmware-update concern). Clears cached profile, cached
+config, cached conditions/zero, and dispatcher bookkeeping (drop
+counters; command-generation/stream-state tracking once Epic 4/6's
+transport loop actually has any to track) -- all three `LOAD_*` caches
+together, not just profile/conditions. Implies the same preemption
+`ABORT` does: per Epic 6's now-cooperative (not kill/relaunch -- see
+that epic's own "Superseded" note) model, stop whatever's running at its
+next checkpoint first, then clear state.
+
+Implemented: `src/bcp/bcp_dispatch_mp.h`'s `bcp_handle_reset()`
+`memset`s the whole persistent `bcp_state` and re-runs
+`bcp_state_ensure_init()` on it, plus resets `drop_count`.
+
+### 4.8 `ABORT`
+
+No payload. Per the no-queue preemption rule (Epic 6), any new valid
+frame already preempts whatever is running -- `ABORT` is just the case
+where nothing replaces it. **Two responses may be in flight for two
+different `seq` values:** the preempted command's original request gets
+a `status=INTERRUPTED` response (under *its own* `seq`), and the
+`ABORT` command itself gets a plain `status=OK` response (under
+`ABORT`'s `seq`).
+
+Implemented: `dispatch()` answers `OK` unconditionally today. With no
+C read/write loop or persisted in-flight state yet (Epic 4), nothing is
+ever actually in flight for `ABORT` to preempt -- the two-response
+behavior above needs that transport work first, plus wiring Epic 6's
+cooperative checkpoint (already a no-op "always continue" inside
+`INTEGRATE`/`INTEGRATE_FAST`'s row callback, `bcp_stream_row_cb`) into
+that loop for real.

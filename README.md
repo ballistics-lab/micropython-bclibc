@@ -16,7 +16,7 @@ MicroPython — choose the one that fits your target and deployment constraints:
 | **FFI** (`libtiny_bclibc.so`) | `ffimod/`  | any unix port arch                             | `import _tiny_bclibc` from `ffimod/`  |
 
 All three expose the same Python API: `Shot`, `Request`, `Wind`, `Config`,
-`integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`, `find_max_range`,
+`integrate`, `integrate_stream`, `find_zero_angle`, `zero`, `aim`, `fire`, `find_apex`, `find_max_range`,
 and all flag / index constants.
 
 ---
@@ -28,6 +28,7 @@ and all flag / index constants.
 ├── src/                        # Shared C + Python source
 │   ├── tiny_bclibc_mp.c        # MicroPython C extension (natmod + usermod)
 │   ├── tiny_bclibc.py          # Python API wrapper (frozen into firmware)
+│   ├── bclibc_bcp.py           # Ballistic Co-Processor app (frozen only with BCLIBC_BCP=1)
 │   ├── drag_tables.h           # Built-in G1/G7 drag curve tables
 │   └── math_shim.c             # math shim for x64/x86 natmod builds
 │
@@ -40,7 +41,8 @@ and all flag / index constants.
 ├── usermod/                    # Usermod (baked-into-firmware) build
 │   ├── micropython.mk          # Picked up by py.mk via USER_C_MODULES (Make ports)
 │   ├── micropython.cmake       # Picked up by CMake via USER_C_MODULES (RP2040 / pico-sdk)
-│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release + CI)
+│   ├── manifest.py             # Freezes tiny_bclibc.py into firmware (release + CI),
+│                               # plus bclibc_bcp.py when BCLIBC_BCP=1
 │   └── ci/run_qemu.py          # QEMU UART bridge for usermod CI tests
 │                               # No usermod/Makefile — build directly against the
 │                               # port's own Makefile/CMakeLists, same as a7p's usermod.
@@ -314,6 +316,46 @@ ports like RP2040). `usermod/micropython.mk` / `usermod/micropython.cmake` are t
 Always single precision here too — `usermod/micropython.mk` and `usermod/micropython.cmake`
 both build `tiny_bclibc` single-precision unconditionally, with no knob to override it
 (see `natmod/Makefile`'s own "Precision" header for why).
+
+### BCP build (`BCLIBC_BCP=1`, work in progress)
+
+`BCLIBC_BCP=1` builds the **Ballistic Co-Processor** firmware: the same usermod plus a
+frozen application (`src/bclibc_bcp.py`) that will serve `tiny_bclibc` calls to a host
+over a framed command protocol — see [BACKLOG.md](BACKLOG.md). Today it is a placeholder
+that only proves the build plumbing. Off by default; a plain build is unchanged.
+
+One variable switches both halves: `usermod/manifest.py` freezes `bclibc_bcp.py`, and
+`usermod/micropython.mk` / `usermod/micropython.cmake` compile the native module with
+`BCLIBC_BCP` defined (which adds the `_tiny_bclibc.BCP` marker). Pass it on the make
+command line or in the environment — GNU make exports command-line variables to the
+recipes that run `makemanifest.py` and, on rp2/esp32, `cmake`:
+
+```bash
+# Make port
+make -C ports/unix BCLIBC_BCP=1 \
+    USER_C_MODULES=/path/to/micropython-bclibc \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+
+# CMake port (rp2 Makefile wraps cmake)
+make -C ports/rp2 BOARD=RPI_PICO2 BCLIBC_BCP=1 \
+    USER_C_MODULES=/path/to/micropython-bclibc/usermod/micropython.cmake \
+    FROZEN_MANIFEST=/path/to/micropython-bclibc/usermod/manifest.py
+
+# cibuildmp (no generic env passthrough into its containers; extra-make-args is it).
+# Replaces the config's extra-make-args, [override]s included.
+CIBMP_EXTRA_MAKE_ARGS="BCLIBC_BCP=1" cibuildmp --build "v1.29.0-rp2-RPI_PICO2"
+```
+
+```python
+>>> import bclibc_bcp
+>>> bclibc_bcp.BCP
+True
+```
+
+Use a **fresh build directory** when switching the flag: Make does not rebuild objects on
+a `CFLAGS` change, and CMake reads the environment at configure time only. A build that
+froze `bclibc_bcp.py` without the C half fails loudly at `import bclibc_bcp`
+(`can't import name BCP`) rather than running half-built.
 
 ### AArch64 / ARMhf / MIPS LE (unix binary)
 
@@ -609,7 +651,7 @@ Both skip automatically on 32-bit platforms (pointer size ≠ 8 bytes).
 
 `ffimod/_tiny_bclibc.py` supports both `single` and `double` precision via
 `MP_BCLIBC_PRECISION` and provides the same API as the natmod: `Shot`, `Request`,
-`Wind`, `Config`, `integrate`, `integrate_stream`, `find_zero_angle`, `find_apex`,
+`Wind`, `Config`, `integrate`, `integrate_stream`, `find_zero_angle`, `zero`, `aim`, `fire`, `find_apex`,
 `find_max_range`, and all flag / index constants.
 
 ## Test (QEMU — Cortex-M3 / armv7m)
@@ -678,6 +720,11 @@ total, stop_reason = bc.integrate_stream(shot, req, on_point)
 
 # ── Zero-angle search ─────────────────────────────────────────────────────────
 elevation_rad = bc.find_zero_angle(shot, zero_distance_ft)
+
+# ── High-level calculator helpers ────────────────────────────────────────────
+elevation_rad = bc.zero(shot, zero_distance_ft)
+vertical_hold_rad, windage_rad, point = bc.aim(shot, target_distance_ft)
+rows, reason = bc.fire(shot, req)
 
 # ── Maximum range (golden-section search over [low_rad, high_rad]) ────────────
 range_ft, angle_rad = bc.find_max_range(shot, low_rad, high_rad)
@@ -756,9 +803,11 @@ for row in rows:
 
 ### 2. Zero + corrections
 
-`find_zero_angle` returns the barrel elevation in radians but does **not** store it in the
-shot automatically. You must write it to `shot._s.barrel_elevation_rad` before calling
-`integrate`. Without this step the shot flies with 0° barrel elevation.
+`zero` is the simple equivalent of `Calculator.set_weapon_zero`: it writes the
+solved barrel elevation directly into the existing zero-copy `Shot` buffer.
+`aim` returns the vertical hold relative to that stored zero, windage, and the
+terminal solver point without a second integration. `fire` is the high-level
+name for calculating a request's trajectory.
 
 ```python
 import tiny_bclibc as bc
@@ -769,16 +818,17 @@ shot = bc.Shot(
     diameter_inch=0.308, twist_inch=11.0, sight_height_ft=0.125,
 )
 
-# Step 1 — find zero angle at 100 m
+# Step 1 — set zero at 100 m
 zero_dist_ft = 100 / 0.3048           # 100 m → ft
-zero_angle = bc.find_zero_angle(shot, zero_dist_ft)
+zero_angle = bc.zero(shot, zero_dist_ft)
 
-# Step 2 — store in shot (equivalent to set_weapon_zero in py_ballisticcalc)
-shot._s.barrel_elevation_rad = zero_angle
+# Step 2 — calculate a hold at a target distance
+target_dist_ft = 500 / 0.3048
+vertical_hold_rad, windage_rad, point = bc.aim(shot, target_dist_ft)
 
-# Step 3 — integrate to target distance
+# Step 3 — calculate the trajectory
 req = bc.Request(range_limit_ft=500 / 0.3048, range_step_ft=500 / 0.3048)
-rows, _ = bc.integrate(shot, req)
+rows, _ = bc.fire(shot, req)
 
 # Step 4 — read correction from the last row
 row = rows[-1]

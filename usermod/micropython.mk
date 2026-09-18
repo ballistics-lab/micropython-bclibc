@@ -50,3 +50,16 @@ CFLAGS_USERMOD += \
 CFLAGS_USERMOD += \
     -DTINY_BCLIBC_SINGLE_PRECISION \
     -DTINY_BCLIBC_FAST_ZERO_FIND
+
+# ── BCLIBC_BCP: ballistic co-processor (BCP) build (default off) ──────────────
+# `make BCLIBC_BCP=1 ...` or BCLIBC_BCP=1 in the environment. manifest.py reads
+# the same variable to freeze the application's .py files. CFLAGS_USERMOD
+# also feeds QSTR extraction on Make ports, so no extra step is needed for
+# qstrs used under #ifdef BCLIBC_BCP. Make does not rebuild on a CFLAGS
+# change: switch the flag in a clean BUILD directory.
+ifeq ($(BCLIBC_BCP),1)
+CFLAGS_USERMOD += -DBCLIBC_BCP=1
+endif
+# No SRC_USERMOD_C entries for bcp_frame_mp.h/bcp_dispatch_mp.h -- they are
+# `#include`d directly into tiny_bclibc_mp.c (see that file's own comment,
+# and bcp_frame_mp.h's), not separately compiled usermod sources.
