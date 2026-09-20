@@ -624,6 +624,8 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_bench_lat_sp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_lat_sp_obj));
     mp_store_global(MP_QSTR_bench_thr_dp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_thr_dp_obj));
     mp_store_global(MP_QSTR_bench_thr_sp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_thr_sp_obj));
+    mp_store_global(MP_QSTR_bench_peak_dp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_peak_dp_obj));
+    mp_store_global(MP_QSTR_bench_peak_sp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_peak_sp_obj));
 
     /* Trajectory flag constants */
     mp_store_global(MP_QSTR_TRAJ_FLAG_NONE, MP_OBJ_NEW_SMALL_INT(TINY_BCLIBC_TRAJ_FLAG_NONE));
@@ -749,6 +751,8 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_bench_lat_sp), MP_ROM_PTR(&mp_bclibc_bench_lat_sp_obj)},
     {MP_ROM_QSTR(MP_QSTR_bench_thr_dp), MP_ROM_PTR(&mp_bclibc_bench_thr_dp_obj)},
     {MP_ROM_QSTR(MP_QSTR_bench_thr_sp), MP_ROM_PTR(&mp_bclibc_bench_thr_sp_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_peak_dp), MP_ROM_PTR(&mp_bclibc_bench_peak_dp_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_peak_sp), MP_ROM_PTR(&mp_bclibc_bench_peak_sp_obj)},
     /* trajectory flags */
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_NONE), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_NONE)},
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_ZERO_UP), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_ZERO_UP)},

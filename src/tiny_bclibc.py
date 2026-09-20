@@ -80,6 +80,8 @@ try:
         bench_lat_sp as _bench_lat_sp,
         bench_thr_dp as _bench_thr_dp,
         bench_thr_sp as _bench_thr_sp,
+        bench_peak_dp as _bench_peak_dp,
+        bench_peak_sp as _bench_peak_sp,
     )
 except ImportError:
     # Merged natmod build (see natmod/Makefile) -- no separate _tiny_bclibc
@@ -114,6 +116,8 @@ except ImportError:
     _bench_lat_sp = bench_lat_sp
     _bench_thr_dp = bench_thr_dp
     _bench_thr_sp = bench_thr_sp
+    _bench_peak_dp = bench_peak_dp
+    _bench_peak_sp = bench_peak_sp
     del (
         SHOT_HOLDER_SIZE,
         TRAJ_DATA_SIZE,
@@ -121,6 +125,8 @@ except ImportError:
         bench_lat_sp,
         bench_thr_dp,
         bench_thr_sp,
+        bench_peak_dp,
+        bench_peak_sp,
     )
 
 # Public API -- marks the re-exported native constants/version as
@@ -523,10 +529,10 @@ def _bench_run(label, fn, n, ops):
 
 
 def bench():
-    """Print a native-C FPU latency/throughput micro-benchmark (MFLOPS).
+    """Print a native-C FPU latency/throughput/peak micro-benchmark (MFLOPS).
 
-    Runs the lat_dp/lat_sp/thr_dp/thr_sp loops built into this module (see
-    src/bench_mp.h) -- no separate .mpy to build or deploy:
+    Runs the lat_dp/lat_sp/thr_dp/thr_sp/peak_dp/peak_sp loops built into
+    this module (see src/bench_mp.h) -- no separate .mpy to build or deploy:
 
         from tiny_bclibc import bench
         bench()
@@ -537,7 +543,10 @@ def bench():
     print("\nLatency-bound (volatile, sequential chain):")
     _bench_run("DP", _bench_lat_dp, _BENCH_N_LAT, 4)
     _bench_run("SP", _bench_lat_sp, _BENCH_N_LAT, 4)
-    print("\nThroughput (8 independent accumulators):")
+    print("\nThroughput (8 independent accumulators, volatile operands):")
     _bench_run("DP", _bench_thr_dp, _BENCH_N_THR, 16)
     _bench_run("SP", _bench_thr_sp, _BENCH_N_THR, 16)
+    print("\nPeak (8 independent accumulators, register-resident, add-only):")
+    _bench_run("DP", _bench_peak_dp, _BENCH_N_THR, 8)
+    _bench_run("SP", _bench_peak_sp, _BENCH_N_THR, 8)
     print("=" * 52)

@@ -88,7 +88,8 @@ __all__ = [
     "version", "integrate", "integrate_at", "integrate_stream",
     "find_zero_angle", "zero_point", "zero", "aim", "fire",
     "find_apex", "find_max_range", "build_multibc", "MultiBC",
-    "bench_lat_dp", "bench_lat_sp", "bench_thr_dp", "bench_thr_sp", "bench",
+    "bench_lat_dp", "bench_lat_sp", "bench_thr_dp", "bench_thr_sp",
+    "bench_peak_dp", "bench_peak_sp", "bench",
 ]
 
 
@@ -133,6 +134,8 @@ _f_bench_lat_dp = _lib.func("d", "tiny_bclibc_bench_lat_dp", "q")
 _f_bench_lat_sp = _lib.func("d", "tiny_bclibc_bench_lat_sp", "q")
 _f_bench_thr_dp = _lib.func("d", "tiny_bclibc_bench_thr_dp", "q")
 _f_bench_thr_sp = _lib.func("d", "tiny_bclibc_bench_thr_sp", "q")
+_f_bench_peak_dp = _lib.func("d", "tiny_bclibc_bench_peak_dp", "q")
+_f_bench_peak_sp = _lib.func("d", "tiny_bclibc_bench_peak_sp", "q")
 
 # ── C struct sizes — x64/aarch64, verified with gcc offsetof() ───────────────
 # Sizes differ only between sp (real_t=float) and dp (real_t=double).
@@ -810,6 +813,14 @@ def bench_thr_sp(n):
     return _f_bench_thr_sp(n)
 
 
+def bench_peak_dp(n):
+    return _f_bench_peak_dp(n)
+
+
+def bench_peak_sp(n):
+    return _f_bench_peak_sp(n)
+
+
 _BENCH_N_LAT = 500_000  # x4 ops/iter
 _BENCH_N_THR = 100_000  # x16 ops/iter
 
@@ -839,7 +850,7 @@ def _bench_run(label, fn, n, ops):
 
 
 def bench():
-    """Print a native-C FPU latency/throughput micro-benchmark (MFLOPS).
+    """Print a native-C FPU latency/throughput/peak micro-benchmark (MFLOPS).
 
     Same loop bodies as natmod/usermod's bench() (src/bench_mp.h), here
     compiled straight into this backend's .so (bench_shim.c) and called
@@ -851,7 +862,10 @@ def bench():
     print("\nLatency-bound (volatile, sequential chain):")
     _bench_run("DP", bench_lat_dp, _BENCH_N_LAT, 4)
     _bench_run("SP", bench_lat_sp, _BENCH_N_LAT, 4)
-    print("\nThroughput (8 independent accumulators):")
+    print("\nThroughput (8 independent accumulators, volatile operands):")
     _bench_run("DP", bench_thr_dp, _BENCH_N_THR, 16)
     _bench_run("SP", bench_thr_sp, _BENCH_N_THR, 16)
+    print("\nPeak (8 independent accumulators, register-resident, add-only):")
+    _bench_run("DP", bench_peak_dp, _BENCH_N_THR, 8)
+    _bench_run("SP", bench_peak_sp, _BENCH_N_THR, 8)
     print("=" * 52)
