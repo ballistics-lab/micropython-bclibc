@@ -17,10 +17,12 @@ static mp_obj_t lat_sp(mp_obj_t n_obj) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(lat_sp_obj, lat_sp);
 
-/* Throughput: 8 independent accumulators; compiler can interleave ops */
+/* Throughput: 8 independent accumulators; compiler can interleave ops.
+ * a, b volatile: otherwise a*b is a compile-time constant and gets
+ * folded out of the loop entirely (no mul executed at all). */
 static mp_obj_t thr_dp(mp_obj_t n_obj) {
     mp_int_t n = mp_obj_get_int(n_obj);
-    double a = 1.00001, b = 1.00002;
+    volatile double a = 1.00001, b = 1.00002;
     double c0=1,c1=2,c2=3,c3=4,c4=5,c5=6,c6=7,c7=8;
     for (mp_int_t i = 0; i < n; i++) {
         c0+=a*b; c1+=a*b; c2+=a*b; c3+=a*b;
@@ -33,7 +35,7 @@ static MP_DEFINE_CONST_FUN_OBJ_1(thr_dp_obj, thr_dp);
 
 static mp_obj_t thr_sp(mp_obj_t n_obj) {
     mp_int_t n = mp_obj_get_int(n_obj);
-    float a = 1.00001f, b = 1.00002f;
+    volatile float a = 1.00001f, b = 1.00002f;
     float c0=1,c1=2,c2=3,c3=4,c4=5,c5=6,c6=7,c7=8;
     for (mp_int_t i = 0; i < n; i++) {
         c0+=a*b; c1+=a*b; c2+=a*b; c3+=a*b;

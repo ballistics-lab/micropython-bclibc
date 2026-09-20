@@ -597,6 +597,10 @@ static mp_obj_t mp_bclibc_integrate_at(size_t n_args, const mp_obj_t *args)
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_bclibc_integrate_at_obj, 4, 4, mp_bclibc_integrate_at);
 
+/* bench() support -- see bench_mp.h's own top comment for why this is a
+ * `.h` #include rather than inlined here or compiled separately. */
+#include "bench_mp.h"
+
 /* ── Module entry point ──────────────────────────────────────────────────── */
 
 #ifdef BCLIBC_BUILD_NATMOD
@@ -616,6 +620,10 @@ mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *a
     mp_store_global(MP_QSTR_find_max_range, MP_OBJ_FROM_PTR(&mp_bclibc_find_max_range_obj));
     mp_store_global(MP_QSTR_integrate_at, MP_OBJ_FROM_PTR(&mp_bclibc_integrate_at_obj));
     mp_store_global(MP_QSTR_build_multibc, MP_OBJ_FROM_PTR(&mp_bclibc_build_multibc_obj));
+    mp_store_global(MP_QSTR_bench_lat_dp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_lat_dp_obj));
+    mp_store_global(MP_QSTR_bench_lat_sp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_lat_sp_obj));
+    mp_store_global(MP_QSTR_bench_thr_dp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_thr_dp_obj));
+    mp_store_global(MP_QSTR_bench_thr_sp, MP_OBJ_FROM_PTR(&mp_bclibc_bench_thr_sp_obj));
 
     /* Trajectory flag constants */
     mp_store_global(MP_QSTR_TRAJ_FLAG_NONE, MP_OBJ_NEW_SMALL_INT(TINY_BCLIBC_TRAJ_FLAG_NONE));
@@ -737,6 +745,10 @@ static const mp_rom_map_elem_t bclibc_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_find_max_range), MP_ROM_PTR(&mp_bclibc_find_max_range_obj)},
     {MP_ROM_QSTR(MP_QSTR_integrate_at), MP_ROM_PTR(&mp_bclibc_integrate_at_obj)},
     {MP_ROM_QSTR(MP_QSTR_build_multibc), MP_ROM_PTR(&mp_bclibc_build_multibc_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_lat_dp), MP_ROM_PTR(&mp_bclibc_bench_lat_dp_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_lat_sp), MP_ROM_PTR(&mp_bclibc_bench_lat_sp_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_thr_dp), MP_ROM_PTR(&mp_bclibc_bench_thr_dp_obj)},
+    {MP_ROM_QSTR(MP_QSTR_bench_thr_sp), MP_ROM_PTR(&mp_bclibc_bench_thr_sp_obj)},
     /* trajectory flags */
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_NONE), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_NONE)},
     {MP_ROM_QSTR(MP_QSTR_TRAJ_FLAG_ZERO_UP), MP_ROM_INT(TINY_BCLIBC_TRAJ_FLAG_ZERO_UP)},

@@ -12,17 +12,19 @@ Usage:
         lambda row: None)   # return truthy to stop early
 """
 
-import uctypes
-from micropython import const
+import time
 from collections import namedtuple as _namedtuple
 
+import uctypes
+from micropython import const
+
 try:
-    import ustruct as _struct
+    import ustruct as _struct  # type: ignore
 except ImportError:
     import struct as _struct
 
 try:
-    from _tiny_bclibc import (
+    from _tiny_bclibc import (  # noqa: I001 # type: ignore
         # Trajectory filter flags
         TRAJ_FLAG_NONE,
         TRAJ_FLAG_RANGE,
@@ -74,6 +76,10 @@ try:
         find_apex as _find_apex,
         find_max_range as _find_max_range,
         build_multibc as _build_multibc,
+        bench_lat_dp as _bench_lat_dp,
+        bench_lat_sp as _bench_lat_sp,
+        bench_thr_dp as _bench_thr_dp,
+        bench_thr_sp as _bench_thr_sp,
     )
 except ImportError:
     # Merged natmod build (see natmod/Makefile) -- no separate _tiny_bclibc
@@ -104,7 +110,18 @@ except ImportError:
     _find_apex = find_apex
     _find_max_range = find_max_range
     _build_multibc = build_multibc
-    del SHOT_HOLDER_SIZE, TRAJ_DATA_SIZE
+    _bench_lat_dp = bench_lat_dp
+    _bench_lat_sp = bench_lat_sp
+    _bench_thr_dp = bench_thr_dp
+    _bench_thr_sp = bench_thr_sp
+    del (
+        SHOT_HOLDER_SIZE,
+        TRAJ_DATA_SIZE,
+        bench_lat_dp,
+        bench_lat_sp,
+        bench_thr_dp,
+        bench_thr_sp,
+    )
 
 # Public API -- marks the re-exported native constants/version as
 # intentionally unreferenced within this file (ruff F401 / pyright
@@ -153,6 +170,7 @@ __all__ = [
     "Shot",
     "Wind",
     "aim",
+    "bench",
     "find_apex",
     "find_max_range",
     "find_zero_angle",
@@ -487,3 +505,39 @@ def MultiBC(bc_points, drag_type=DRAG_G7):
     cd_buf = bytearray(_MAX_DRAG_PTS * 4)
     count = _build_multibc(drag_type, pts_buf, mach_buf, cd_buf)
     return mach_buf, cd_buf, count
+
+
+# ── bench: native FPU FLOPS micro-benchmark ────────────────────────────────
+
+_BENCH_N_LAT = const(500_000)  # x4 ops/iter
+_BENCH_N_THR = const(100_000)  # x16 ops/iter
+
+
+def _bench_run(label, fn, n, ops):
+    fn(n // 10)  # warmup
+    t0 = time.ticks_us()
+    fn(n)
+    dt = time.ticks_diff(time.ticks_us(), t0) / 1e6
+    mflops = n * ops / dt / 1e6
+    print("  {:8s}: {:9.2f} MFLOPS   dt={:.3f}s".format(label, mflops, dt))
+
+
+def bench():
+    """Print a native-C FPU latency/throughput micro-benchmark (MFLOPS).
+
+    Runs the lat_dp/lat_sp/thr_dp/thr_sp loops built into this module (see
+    src/bench_mp.h) -- no separate .mpy to build or deploy:
+
+        from tiny_bclibc import bench
+        bench()
+    """
+    print("=" * 52)
+    print("tiny_bclibc FPU FLOPS Benchmark")
+    print("=" * 52)
+    print("\nLatency-bound (volatile, sequential chain):")
+    _bench_run("DP", _bench_lat_dp, _BENCH_N_LAT, 4)
+    _bench_run("SP", _bench_lat_sp, _BENCH_N_LAT, 4)
+    print("\nThroughput (8 independent accumulators):")
+    _bench_run("DP", _bench_thr_dp, _BENCH_N_THR, 16)
+    _bench_run("SP", _bench_thr_sp, _BENCH_N_THR, 16)
+    print("=" * 52)
