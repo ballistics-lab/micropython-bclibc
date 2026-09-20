@@ -1,40 +1,95 @@
 # ruff: noqa
 
-"""tiny_bclibc_mp_ffi — MicroPython unix FFI backend for tiny_bclibc.
+"""_tiny_bclibc (ffimod) — MicroPython unix FFI backend for tiny_bclibc.
 
 Drop-in replacement for ``tiny_bclibc`` on unix MicroPython (x64 / aarch64).
 Calls libtiny_bclibc.so via the built-in ``ffi`` module instead of loading
-the native .mpy.  The public API is identical to tiny_bclibc.py.
+the native .mpy.
+
+Named ``_tiny_bclibc`` (not ``tiny_bclibc``) so it can be injected as
+``tiny_bclibc`` directly (see tests/test_ffi.py: ``sys.modules["tiny_bclibc"]
+= _ffi_mod``) -- this file defines the *complete* high-level API itself
+(Shot/Request/Config/Wind/integrate/find_apex/MultiBC/bench/...), unlike
+natmod/usermod's own ``_tiny_bclibc``, which is low-level-only (raw
+buffers) and relies on the separate ``src/tiny_bclibc.py`` facade on top.
+That facade is *not* reused here: its ``integrate(shot, req)`` etc. expect
+a low-level ``_integrate(shot_buf, holder_buf, req_buf, traj_buf)`` under
+the hood, a different signature than this file's own high-level
+``integrate(shot, req)`` of the same name -- the two can't coexist under
+one name in one module, so this backend owns the whole stack instead.
+ffimod/Makefile's packaged ``tiny_bclibc.py`` is accordingly just
+``from _tiny_bclibc import *`` (see ``__all__`` below), not a copy of
+src/tiny_bclibc.py.
 
 Usage::
 
-    import tiny_bclibc_mp_ffi as bc            # instead of: import tiny_bclibc as bc
+    import tiny_bclibc as bc            # or: import _tiny_bclibc as bc
     shot = bc.Shot(bc=0.310, weight_grain=168.0, muzzle_velocity_fps=2750.0)
     req  = bc.Request(range_limit_ft=3000.0, range_step_ft=100.0)
     rows, reason = bc.integrate(shot, req)
 
+Also runs under plain CPython (64-bit), via this directory's own ``ffi.py``
+(ctypes-based shim of MicroPython's ``ffi`` module) and ``uctypes.py``
+(ditto for ``uctypes``) -- put this directory on ``sys.path`` ahead of
+anything else and both `import ffi` / `import uctypes` above resolve to
+those shims instead of erroring out under CPython, which has neither
+built in. No code path in this file branches on which one is loaded;
+the shims exist purely so the exact same source runs unmodified on both.
+(This file needs nothing from MicroPython's own ``micropython`` module --
+unlike src/tiny_bclibc.py, it does not use ``const()``.)
+
 The .so path is resolved as (first match wins):
     1. ``TINY_BCLIBC_SO`` environment variable
-    2. ``<this file's directory>/../../tiny_bclibc/build-shared/libtiny_bclibc.so``
+    2. ``<this file's directory>/libtiny_bclibc.so`` (ffimod/Makefile's
+       own build output -- named with the "lib" prefix, not bare
+       "tiny_bclibc.so", specifically so it never collides with
+       ``tiny_bclibc.py`` sitting in the same directory: CPython's
+       import machinery resolves a same-named ``.so`` before a ``.py``
+       for `import tiny_bclibc`, and a plain data/C library with no
+       ``PyInit_*`` entry point fails that load outright)
+    3. ``<this file's directory>/../bclibc/tiny_bclibc/build-shared/libtiny_bclibc.so``
+       (the submodule's own out-of-tree build location)
 
 Precision is selected via the ``TINY_BCLIBC_PRECISION`` environment variable:
     - ``double`` (default) — matches ``-DTINY_BCLIBC_SINGLE_PRECISION`` off
     - ``single``           — matches ``-DTINY_BCLIBC_SINGLE_PRECISION`` on
 
-Requires 64-bit MicroPython unix with ffi + uctypes (standard build).
-32-bit MicroPython is not supported (different pointer/struct layout).
+Requires a 64-bit interpreter (MicroPython unix or CPython, x64 / aarch64).
+32-bit is not supported (different pointer/struct layout).
 """
 
 import struct
 import array
 import os
+import time
 
 import ffi
 import uctypes
 from collections import namedtuple as _namedtuple
 
 if struct.calcsize("P") != 8:
-    raise ImportError("tiny_bclibc_mp_ffi requires 64-bit MicroPython (x64 / aarch64)")
+    raise ImportError("_tiny_bclibc (ffimod) requires a 64-bit interpreter (x64 / aarch64)")
+
+# Controls `from _tiny_bclibc import *` -- what ffimod/Makefile's generated
+# tiny_bclibc.py re-exports. Without this, `import *` would also leak this
+# file's own plain `import struct` / `import array` / `import os` / `import
+# time` / `import ffi` / `import uctypes` names onto the result.
+__all__ = [
+    "DRAG_G1", "DRAG_G7", "DRAG_CUSTOM",
+    "TRAJ_FLAG_NONE", "TRAJ_FLAG_ZERO_UP", "TRAJ_FLAG_ZERO_DOWN", "TRAJ_FLAG_ZERO",
+    "TRAJ_FLAG_MACH", "TRAJ_FLAG_RANGE", "TRAJ_FLAG_APEX", "TRAJ_FLAG_MRT", "TRAJ_FLAG_ALL",
+    "T_TIME", "T_DISTANCE", "T_VELOCITY", "T_MACH", "T_HEIGHT", "T_SLANT_HEIGHT",
+    "T_DROP_ANGLE", "T_WINDAGE", "T_WINDAGE_ANGLE", "T_SLANT_DISTANCE", "T_ANGLE",
+    "T_DENSITY_RATIO", "T_DRAG", "T_ENERGY", "T_OGW", "T_FLAG",
+    "INTERP_TIME", "INTERP_MACH", "INTERP_POS_X", "INTERP_POS_Y", "INTERP_POS_Z",
+    "INTERP_VEL_X", "INTERP_VEL_Y", "INTERP_VEL_Z",
+    "SHOT_HOLDER_SIZE", "TRAJ_DATA_SIZE",
+    "Wind", "Config", "Shot", "Request",
+    "version", "integrate", "integrate_at", "integrate_stream",
+    "find_zero_angle", "zero_point", "zero", "aim", "fire",
+    "find_apex", "find_max_range", "build_multibc", "MultiBC",
+    "bench_lat_dp", "bench_lat_sp", "bench_thr_dp", "bench_thr_sp", "bench",
+]
 
 
 def _rel(rel_path):
@@ -52,7 +107,7 @@ _RS = 4   if _SP else 8     # sizeof(real_t)
 # ── .so location ──────────────────────────────────────────────────────────────
 _SO = os.getenv("TINY_BCLIBC_SO")
 if not _SO:
-    _local = _rel("tiny_bclibc.so")
+    _local = _rel("libtiny_bclibc.so")
     try:
         os.stat(_local)
         _SO = _local
@@ -69,6 +124,15 @@ _f_zero     = _lib.func("i", "tiny_bclibc_find_zero_angle",   "P" + _R + "P")
 _f_zero_point = _lib.func("i", "tiny_bclibc_find_zero_point", "P" + _R + "P")
 _f_maxrange = _lib.func("i", "tiny_bclibc_find_max_range",    "P" + _R + _R + "PP")
 _f_err      = _lib.func("s", "tiny_bclibc_last_error",        "")
+
+# bench_shim.c -- native FPU FLOPS loops, same shapes as src/bench_mp.h
+# (natmod/usermod), compiled straight into this .so (see ffimod/Makefile).
+# Not part of libtiny_bclibc.so / the bclibc submodule: this benchmark has
+# nothing to do with the ballistics engine it ships.
+_f_bench_lat_dp = _lib.func("d", "tiny_bclibc_bench_lat_dp", "q")
+_f_bench_lat_sp = _lib.func("d", "tiny_bclibc_bench_lat_sp", "q")
+_f_bench_thr_dp = _lib.func("d", "tiny_bclibc_bench_thr_dp", "q")
+_f_bench_thr_sp = _lib.func("d", "tiny_bclibc_bench_thr_sp", "q")
 
 # ── C struct sizes — x64/aarch64, verified with gcc offsetof() ───────────────
 # Sizes differ only between sp (real_t=float) and dp (real_t=double).
@@ -115,6 +179,12 @@ def _ptr(buf):
 
 
 # ── Built-in drag tables — type matches real_t ────────────────────────────────
+# Kept in sync with src/drag_tables.h (the natmod/usermod canonical copy) by
+# hand -- these must be regenerated from it whenever it changes. The G7
+# table here previously drifted (missing the Mach 2.85/2.95 points, 82
+# entries instead of 84), caught by tests/test_ffi.py's MultiBC checks
+# after ffimod gained its own build_multibc(); see that fix's commit for
+# the discrepancy this produced in G7 trajectories on this backend only.
 _G7_MACH = array.array(_R, [
     0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45,
     0.50, 0.55, 0.60, 0.65, 0.70, 0.725, 0.75, 0.775, 0.80, 0.825,
@@ -122,9 +192,9 @@ _G7_MACH = array.array(_R, [
     1.10, 1.125, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.50, 1.55,
     1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 2.00, 2.05,
     2.10, 2.15, 2.20, 2.25, 2.30, 2.35, 2.40, 2.45, 2.50, 2.55,
-    2.60, 2.65, 2.70, 2.75, 2.80, 2.90, 3.00, 3.10, 3.20, 3.30,
-    3.40, 3.50, 3.60, 3.70, 3.80, 3.90, 4.00, 4.20, 4.40, 4.60,
-    4.80, 5.00,
+    2.60, 2.65, 2.70, 2.75, 2.80, 2.85, 2.90, 2.95, 3.00, 3.10,
+    3.20, 3.30, 3.40, 3.50, 3.60, 3.70, 3.80, 3.90, 4.00, 4.20,
+    4.40, 4.60, 4.80, 5.00,
 ])
 _G7_CD = array.array(_R, [
     0.1198, 0.1197, 0.1196, 0.1194, 0.1193, 0.1194, 0.1194, 0.1194,
@@ -135,9 +205,9 @@ _G7_CD = array.array(_R, [
     0.3315, 0.3260, 0.3209, 0.3160, 0.3117, 0.3078, 0.3042, 0.3010,
     0.2980, 0.2951, 0.2922, 0.2892, 0.2864, 0.2835, 0.2807, 0.2779,
     0.2752, 0.2725, 0.2697, 0.2670, 0.2643, 0.2615, 0.2588, 0.2561,
-    0.2534, 0.2481, 0.2429, 0.2379, 0.2330, 0.2283, 0.2238, 0.2194,
-    0.2151, 0.2110, 0.2070, 0.2032, 0.1995, 0.1924, 0.1858, 0.1794,
-    0.1732, 0.1672,
+    0.2533, 0.2506, 0.2479, 0.2451, 0.2424, 0.2368, 0.2313, 0.2258,
+    0.2205, 0.2154, 0.2106, 0.2060, 0.2017, 0.1975, 0.1935, 0.1861,
+    0.1793, 0.1730, 0.1672, 0.1618,
 ])
 _G1_MACH = array.array(_R, [
     0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45,
@@ -210,7 +280,7 @@ INTERP_VEL_Z = 7
 _NaN  = float("nan")
 _INF  = 1e8
 _MAX_WINDS    = 16
-_MAX_DRAG_PTS = 128
+_MAX_DRAG_PTS = 200
 _SHOT_SIZE    = 100
 _WIND_SIZE    = 16
 _DRAG_SIZE    = 8
@@ -218,6 +288,13 @@ _CFG_SIZE     = 28
 _REQ_SIZE     = 16
 _SHOT_HOLDER_SIZE = 1       # not used; kept for API compatibility
 _TRAJ_DATA_SIZE   = _TRAJ_C_SIZE  # rows in req.traj match C struct size
+
+# Public aliases -- natmod/usermod's native _tiny_bclibc module exposes
+# these under the plain (non-underscore) names; src/tiny_bclibc.py's own
+# `from _tiny_bclibc import SHOT_HOLDER_SIZE as _SHOT_HOLDER_SIZE, ...`
+# needs them to exist under that name on *this* backend too.
+SHOT_HOLDER_SIZE = _SHOT_HOLDER_SIZE
+TRAJ_DATA_SIZE = _TRAJ_DATA_SIZE
 
 # ── uctypes descriptors (float32, little-endian) — same as tiny_bclibc.py ────
 _F32 = uctypes.FLOAT32
@@ -347,6 +424,7 @@ def Shot(
     drag_type=DRAG_G7,
     drag_mach=None,
     drag_cd=None,
+    drag_count=None,
     winds=None,
     config=None,
 ):
@@ -354,8 +432,19 @@ def Shot(
     winds = winds or []
     wc = min(len(winds), _MAX_WINDS)
     dc = 0
+    # "packed" drag input is a raw bytes-like buffer of interleaved-free,
+    # parallel float32 arrays (what MultiBC() returns) -- copied by byte
+    # range below instead of unpacked element-by-element through uctypes.
+    # Mirrors src/tiny_bclibc.py's Shot() exactly (same buffer layout).
+    packed = False
     if drag_type == DRAG_CUSTOM and drag_mach and drag_cd:
-        dc = min(len(drag_mach), len(drag_cd), _MAX_DRAG_PTS)
+        packed = isinstance(drag_mach, (bytes, bytearray, memoryview))
+        if drag_count is not None:
+            dc = min(drag_count, _MAX_DRAG_PTS)
+        elif packed:
+            dc = min(len(drag_mach) // 4, len(drag_cd) // 4, _MAX_DRAG_PTS)
+        else:
+            dc = min(len(drag_mach), len(drag_cd), _MAX_DRAG_PTS)
 
     buf = bytearray(_SHOT_SIZE + wc * _WIND_SIZE + dc * _DRAG_SIZE)
     base = uctypes.addressof(buf)
@@ -388,11 +477,18 @@ def Shot(
         buf[off : off + _WIND_SIZE] = winds[i].buf
         off += _WIND_SIZE
 
-    for i in range(dc):
-        sd = uctypes.struct(base + off, _DRAG_DESC, uctypes.LITTLE_ENDIAN)
-        sd.mach = drag_mach[i]
-        sd.cd = drag_cd[i]
-        off += _DRAG_SIZE
+    if packed:
+        for i in range(dc):
+            o = off + i * _DRAG_SIZE
+            buf[o : o + 4] = drag_mach[i * 4 : i * 4 + 4]
+            buf[o + 4 : o + 8] = drag_cd[i * 4 : i * 4 + 4]
+        off += dc * _DRAG_SIZE
+    else:
+        for i in range(dc):
+            sd = uctypes.struct(base + off, _DRAG_DESC, uctypes.LITTLE_ENDIAN)
+            sd.mach = drag_mach[i]
+            sd.cd = drag_cd[i]
+            off += _DRAG_SIZE
 
     return _Shot(buf, s, bytearray(_SHOT_HOLDER_SIZE))
 
@@ -628,3 +724,134 @@ def find_max_range(shot, lo, hi):
     if rc != 0:
         raise ValueError("find_max_range rc={}: {}".format(rc, _f_err()))
     return struct.unpack_from("<" + _R, out_range)[0], struct.unpack_from("<" + _R, out_angle)[0]
+
+
+# ── build_multibc / MultiBC ────────────────────────────────────────────────
+# No libtiny_bclibc.so export for this -- natmod/usermod's build_multibc is
+# MP-specific logic living only in src/tiny_bclibc_mp.c (interp + sort over
+# the G1/G7 tables), never part of the portable tiny_bclibc C library. Pure
+# Python here mirrors that same algorithm exactly (tiny_bclibc_mp_interp_bc /
+# tiny_bclibc_mp_sort_bc_points) against this file's own _G1_*/_G7_* tables
+# -- no native call needed, correctness only, not a hot path.
+
+def _interp_bc(bc_mach, bc_val, mach):
+    n = len(bc_mach)
+    if mach <= bc_mach[0]:
+        return bc_val[0]
+    if mach >= bc_mach[n - 1]:
+        return bc_val[n - 1]
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if bc_mach[mid] <= mach:
+            lo = mid
+        else:
+            hi = mid
+    t = (mach - bc_mach[lo]) / (bc_mach[hi] - bc_mach[lo])
+    return bc_val[lo] + t * (bc_val[hi] - bc_val[lo])
+
+
+def build_multibc(drag_type, bc_points_buf, out_mach_buf, out_cd_buf):
+    """Low-level primitive -- matches natmod/usermod's build_multibc() signature."""
+    n_pts = len(bc_points_buf) // 8
+    pts = sorted(
+        (struct.unpack_from("<ff", bc_points_buf, i * 8) for i in range(n_pts)),
+        key=lambda p: p[0],
+    )
+    bc_mach = [p[0] for p in pts]
+    bc_val = [p[1] for p in pts]
+
+    # Matches tiny_bclibc_mp.c's own branch exactly: 0=G1, anything else=G7
+    # (DRAG_CUSTOM included) -- not a three-way switch.
+    ref_mach, ref_cd = (_G1_MACH, _G1_CD) if drag_type == DRAG_G1 else (_G7_MACH, _G7_CD)
+
+    n = len(ref_mach)
+    for i in range(n):
+        bc_at = _interp_bc(bc_mach, bc_val, ref_mach[i])
+        struct.pack_into("<f", out_mach_buf, i * 4, ref_mach[i])
+        struct.pack_into("<f", out_cd_buf, i * 4, ref_cd[i] / bc_at)
+    return n
+
+
+def MultiBC(bc_points, drag_type=DRAG_G7):
+    """Fold multiple (mach, bc) points into a single custom drag curve.
+
+    Same contract as src/tiny_bclibc.py's MultiBC() -- see its docstring.
+    """
+    pts = list(bc_points)
+    pts_buf = bytearray(len(pts) * 8)
+    for i, (mach, bc_val) in enumerate(pts):
+        struct.pack_into("<ff", pts_buf, i * 8, mach, bc_val)
+    mach_buf = bytearray(_MAX_DRAG_PTS * 4)
+    cd_buf = bytearray(_MAX_DRAG_PTS * 4)
+    count = build_multibc(drag_type, pts_buf, mach_buf, cd_buf)
+    return mach_buf, cd_buf, count
+
+
+# ── bench: native FPU FLOPS micro-benchmark ────────────────────────────────
+# Low-level bench_lat_dp/lat_sp/thr_dp/thr_sp match natmod/usermod's own
+# names (bench_mp.h); bench() below mirrors src/tiny_bclibc.py's bench()
+# so `tiny_bclibc.bench()` behaves identically when this module is used
+# directly as `tiny_bclibc` (see tests/test_ffi.py).
+
+def bench_lat_dp(n):
+    return _f_bench_lat_dp(n)
+
+
+def bench_lat_sp(n):
+    return _f_bench_lat_sp(n)
+
+
+def bench_thr_dp(n):
+    return _f_bench_thr_dp(n)
+
+
+def bench_thr_sp(n):
+    return _f_bench_thr_sp(n)
+
+
+_BENCH_N_LAT = 500_000  # x4 ops/iter
+_BENCH_N_THR = 100_000  # x16 ops/iter
+
+# time.ticks_us()/ticks_diff() are MicroPython-only; plain CPython's `time`
+# has neither. A local time.py shim (like ffi.py/uctypes.py) is not an
+# option here -- it would shadow the *real* stdlib `time` for everything
+# else on sys.path, not just this file. So: fall back to perf_counter(),
+# scoped to this module only.
+try:
+    _ticks_us = time.ticks_us
+    _ticks_diff = time.ticks_diff
+except AttributeError:
+    def _ticks_us():
+        return int(time.perf_counter() * 1e6)
+
+    def _ticks_diff(a, b):
+        return a - b
+
+
+def _bench_run(label, fn, n, ops):
+    fn(n // 10)  # warmup
+    t0 = _ticks_us()
+    fn(n)
+    dt = _ticks_diff(_ticks_us(), t0) / 1e6
+    mflops = n * ops / dt / 1e6
+    print("  {:8s}: {:9.2f} MFLOPS   dt={:.3f}s".format(label, mflops, dt))
+
+
+def bench():
+    """Print a native-C FPU latency/throughput micro-benchmark (MFLOPS).
+
+    Same loop bodies as natmod/usermod's bench() (src/bench_mp.h), here
+    compiled straight into this backend's .so (bench_shim.c) and called
+    via ffi instead of the MicroPython native-module ABI.
+    """
+    print("=" * 52)
+    print("tiny_bclibc FPU FLOPS Benchmark (ffi backend)")
+    print("=" * 52)
+    print("\nLatency-bound (volatile, sequential chain):")
+    _bench_run("DP", bench_lat_dp, _BENCH_N_LAT, 4)
+    _bench_run("SP", bench_lat_sp, _BENCH_N_LAT, 4)
+    print("\nThroughput (8 independent accumulators):")
+    _bench_run("DP", bench_thr_dp, _BENCH_N_THR, 16)
+    _bench_run("SP", bench_thr_sp, _BENCH_N_THR, 16)
+    print("=" * 52)
