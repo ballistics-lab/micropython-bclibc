@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-beta.2] - 2026-09-21
+
 ### Changed
 
 - Bumped the `bclibc` submodule to pick up `tiny_bclibc`'s switch from Cash-Karp to
@@ -1033,8 +1035,9 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...HEAD
-[2.0.0-beta-1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta-1
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.1...HEAD
+[2.0.0-beta.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta.1
+[2.0.0-beta.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta.1
 [1.2.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.0...v1.2.1
