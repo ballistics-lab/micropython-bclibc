@@ -115,9 +115,10 @@ def main():
         )
     )
     print(
-        "  NOTE:  range_step is output sampling only; RK4 internal step is controlled by"
+        "  NOTE:  range_step is output sampling only; the adaptive integrator's own base"
     )
-    print("         step_multiplier (default 0.5) and is independent of output step.")
+    print("         step is controlled by step_multiplier (default 0.5), independent of")
+    print("         output step, and grows/shrinks itself from there per accepted step.")
     print()
 
     # ── Zero angle comparison ───────────────────────────────────────────────────
