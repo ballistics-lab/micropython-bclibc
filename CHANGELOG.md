@@ -22,7 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wind-zone shots, and a missed ZERO_UP/ZERO_DOWN event pair when both crossings fall inside
   one (Tsitouras's larger) accepted interval. See bclibc's CHANGELOG for the full writeup and
   its "Known issues" note on a small residual cross-implementation rounding difference
-  between `tiny_bclibc`'s C port and bclibc's own C++ Tsitouras engine.
+  between `tiny_bclibc`'s C port and bclibc's own C++ Tsitouras engine. Further bumped again
+  for a fix aligning `tiny_bclibc`'s per-stage Tsitouras accumulation order with the C++
+  engine's (unscaled weighted sum first, single `dt`-scale, single add — instead of folding
+  `dt` into each term and adding it straight onto the much larger position/velocity base).
+  Re-validated with `test_ffi.py` (19/19 checks pass, `ffimod` CPython backend, double
+  precision) after rebuilding against the new commit. See bclibc's CHANGELOG for what this
+  fix did and did not close — it isn't a full fix for the cross-implementation rounding
+  difference noted above, just a reduction of it for well-conditioned shots.
 
 ### Fixed
 
