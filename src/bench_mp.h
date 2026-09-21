@@ -51,7 +51,7 @@ static mp_obj_t mp_bclibc_bench_lat_dp(mp_obj_t n_obj)
         c = c + a * b;
         c = c - a * b;
     }
-    return mp_obj_new_float((mp_float_t)c);
+    return mp_obj_new_float(c);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_lat_dp_obj, mp_bclibc_bench_lat_dp);
 
@@ -64,7 +64,7 @@ static mp_obj_t mp_bclibc_bench_lat_sp(mp_obj_t n_obj)
         c = c + a * b;
         c = c - a * b;
     }
-    return mp_obj_new_float((mp_float_t)c);
+    return mp_obj_new_float(c);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_lat_sp_obj, mp_bclibc_bench_lat_sp);
 
@@ -85,7 +85,7 @@ static mp_obj_t mp_bclibc_bench_thr_dp(mp_obj_t n_obj)
         c7 += a * b;
     }
     volatile double sink = c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7;
-    return mp_obj_new_float((mp_float_t)sink);
+    return mp_obj_new_float(sink);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_thr_dp_obj, mp_bclibc_bench_thr_dp);
 
@@ -106,7 +106,7 @@ static mp_obj_t mp_bclibc_bench_thr_sp(mp_obj_t n_obj)
         c7 += a * b;
     }
     volatile float sink = c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7;
-    return mp_obj_new_float((mp_float_t)sink);
+    return mp_obj_new_float(sink);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_thr_sp_obj, mp_bclibc_bench_thr_sp);
 
@@ -127,7 +127,7 @@ static mp_obj_t mp_bclibc_bench_peak_dp(mp_obj_t n_obj)
         c7 += a;
     }
     volatile double sink = c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7;
-    return mp_obj_new_float((mp_float_t)sink);
+    return mp_obj_new_float(sink);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_peak_dp_obj, mp_bclibc_bench_peak_dp);
 
@@ -148,7 +148,7 @@ static mp_obj_t mp_bclibc_bench_peak_sp(mp_obj_t n_obj)
         c7 += a;
     }
     volatile float sink = c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7;
-    return mp_obj_new_float((mp_float_t)sink);
+    return mp_obj_new_float(sink);
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(mp_bclibc_bench_peak_sp_obj, mp_bclibc_bench_peak_sp);
 

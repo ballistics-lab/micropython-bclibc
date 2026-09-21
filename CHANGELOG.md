@@ -17,7 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/tiny_bclibc_bench.py` against the previous Cash-Karp build: within noise on both
   wall-clock and accepted-step counts for smooth trajectories — a wash, not a regression
   or a speedup. See [bclibc's tiny_bclibc README](https://github.com/ballistics-lab/bclibc/blob/main/tiny_bclibc/README.md#adaptive-integration-tsitouras)
-  for the measured numbers.
+  for the measured numbers. Further bumped to pick up two real bugs the Tsitouras switch
+  exposed and bclibc then fixed: a wind-boundary step-limiting Zeno's-paradox hang on 3+
+  wind-zone shots, and a missed ZERO_UP/ZERO_DOWN event pair when both crossings fall inside
+  one (Tsitouras's larger) accepted interval. See bclibc's CHANGELOG for the full writeup and
+  its "Known issues" note on a small residual cross-implementation rounding difference
+  between `tiny_bclibc`'s C port and bclibc's own C++ Tsitouras engine.
+
+### Fixed
+
+- `src/bench_mp.h`'s FLOPS micro-benchmark functions cast their return value through
+  `(mp_float_t)` before `mp_obj_new_float()`, unlike every other call site in this codebase
+  (`tiny_bclibc_mp.c`), which just calls `mp_obj_new_float(v)` and lets its own internal
+  `(double)(v)` cast handle it. `mp_float_t` isn't actually guaranteed in scope for a
+  dynruntime.mk natmod build, and on 3 of the natmod CI matrix's architectures (`rv32imc`,
+  `rv64imc`, `xtensa` — worked by chance elsewhere) it wasn't, breaking the `(mp_float_t)sink`
+  cast's parse and cascading into a build failure. Unrelated to the `bclibc` bump above — a
+  pre-existing bug in this repo's own recently-added flops-bench code, just never previously
+  exercised by CI on those three architectures since the file was added. Fixed by matching the
+  established convention: drop the redundant cast.
 
 ### Added
 
