@@ -29,7 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Re-validated with `test_ffi.py` (19/19 checks pass, `ffimod` CPython backend, double
   precision) after rebuilding against the new commit. See bclibc's CHANGELOG for what this
   fix did and did not close — it isn't a full fix for the cross-implementation rounding
-  difference noted above, just a reduction of it for well-conditioned shots.
+  difference noted above, just a reduction of it for well-conditioned shots. Bumped once
+  more for the actual root-cause fix: `tiny_bclibc`'s MACH-crossing interpolation linearly
+  interpolated the mach *ratio* between accepted-step endpoints instead of reconstructing it
+  from Hermite-derived velocity and a linearly-interpolated speed of sound (the way bclibc's
+  C++ engine does it), costing real accuracy specifically at MACH crossings. Re-validated
+  again with `test_ffi.py` (19/19 checks pass).
 
 ### Fixed
 
