@@ -921,7 +921,7 @@ BSS must be 0 — MicroPython natmod ABI does not allow uninitialized static dat
 ### `find_zero_angle` performance (`TINY_BCLIBC_FAST_ZERO_FIND`)
 
 `find_zero_angle` uses a Golden-Section Search (GSS) to bracket the max-range angle,
-then Ridder's method to find the zero angle. Each GSS iteration runs a full RK4
+then Ridder's method to find the zero angle. Each GSS iteration runs a full adaptive-integrator
 trajectory, which is expensive on soft-float MCUs (Cortex-M0+, RISC-V without FPU).
 
 `TINY_BCLIBC_FAST_ZERO_FIND` is always defined now (single precision is unconditional — see
@@ -929,7 +929,7 @@ above). It applies two optimisations that do **not** affect the final angle accu
 
 | Parameter           | Default    | Fast                                                |
 | ------------------- | ---------- | --------------------------------------------------- |
-| GSS step multiplier | 1×         | 8× coarser (fewer RK4 steps per trajectory)         |
+| GSS step multiplier | 1×         | 8× coarser (fewer integrator steps per trajectory)         |
 | GSS convergence `h` | `1e-5 rad` | `1e-2 rad` (~13 iterations vs ~25)                  |
 | Ridder's `acc`      | `0.001 ft` | `0.01 ft` (3 mm — more than sufficient for `float`) |
 
@@ -991,7 +991,7 @@ build and once with a float32 natmod build — and diffed the output row by row.
 `find_zero_angle` was also compared between the two builds.
 
 **Important:** `range_step_ft` in the `Request` is the *output sampling step* only.
-The internal RK4 integrator uses its own sub-step controlled by `step_multiplier` (default
+The internal adaptive integrator uses its own base sub-step controlled by `step_multiplier` (default
 `0.5`) and is completely independent of the output step. Changing the output step does not
 affect integration accuracy.
 
@@ -1004,7 +1004,7 @@ is numerically valid.
 - Shot: G7, BC=0.310, 168 gr, dia=0.308", mv=2750 fps, sight=0.125 ft (1.5"), twist=11"
 - Atmosphere: T=15°C, P=1013.25 hPa, RH=0.5, alt=0 ft
 - Range: 0–3000 m, output step=25 m (120 sample points)
-- Internal RK4 step multiplier: 0.5 (default)
+- Internal adaptive-integrator base step multiplier: 0.5 (default)
 - Host: MicroPython v1.26 unix port, x64, Python float=64-bit
 
 ### Results

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped the `bclibc` submodule to pick up `tiny_bclibc`'s switch from Cash-Karp to
+  Tsitouras 5(4) as its baked-in adaptive integrator (used by every integration entry
+  point: `integrate`/`integrate_stream`/`integrate_at`, `find_zero_angle`'s GSS/Ridder's
+  bracket search, and `find_apex`). Validated across this repo's own suite (`test_ffi.py`
+  via the `ffimod` CPython backend) and benchmarked with `tests/aim.py` and
+  `tests/tiny_bclibc_bench.py` against the previous Cash-Karp build: within noise on both
+  wall-clock and accepted-step counts for smooth trajectories — a wash, not a regression
+  or a speedup. See [bclibc's tiny_bclibc README](https://github.com/ballistics-lab/bclibc/blob/main/tiny_bclibc/README.md#adaptive-integration-tsitouras)
+  for the measured numbers.
+
 ### Added
 
 - High-level `zero(shot, distance_ft)`, `aim(shot, distance_ft)`, and
