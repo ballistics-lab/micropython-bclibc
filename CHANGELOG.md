@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-beta.3] - 2026-09-22
+
+### Changed
+- Bumped the `bclibc` submodule to `v2.0.0-rc.1` (the embedded RK45 methods'
+  thread-local tolerance/stats API is replaced by stateful integrator classes
+  in bclibc's own C++ core). No change here: `tiny_bclibc` itself is
+  untouched by this bump, and this repo's own code never used the replaced
+  API.
+
 ## [2.0.0-beta.2] - 2026-09-21
 
 ### Changed
@@ -1035,8 +1044,9 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.1...HEAD
-[2.0.0-beta.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta.1
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.3...HEAD
+[2.0.0-beta.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.2...v2.0.0-beta.3
+[2.0.0-beta.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.1...v2.0.0-beta.2
 [2.0.0-beta.1]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.3...v2.0.0-beta.1
 [1.2.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/ballistics-lab/micropython-bclibc/compare/v1.2.1...v1.2.2
