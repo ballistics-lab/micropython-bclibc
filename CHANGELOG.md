@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-beta.6] - 2026-10-03
+
+### Chores
+- Bumped the `bclibc` submodule to `v2.0.0`
+
 ## [2.0.0-beta.5] - 2026-10-01
 
 ### Chores
@@ -1054,7 +1059,8 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.5...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.6...HEAD
+[2.0.0-beta.6]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.5...v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.4...v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.3...v2.0.0-beta.4
 [2.0.0-beta.3]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.2...v2.0.0-beta.3
