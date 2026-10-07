@@ -26,7 +26,7 @@
 # usermod.yml already builds.
 build = """
 mpy*-v1.29.0-*
-v1.29.0-manylinux_2_28_x86_64 v1.29.0-manylinux_2_28_i686 v1.29.0-manylinux_2_28_aarch64
+v1.29.0-manylinux_2_28_x86_64 v1.29.0-manylinux_2_28_i686 v1.29.0-manylinux_2_28_aarch64 v1.29.0-musllinux_1_2_aarch64
 v1.29.0-manylinux_2_31_armv7l v1.29.0-manylinux_2_41_mipsel
 v1.29.0-qemu-MPS2_AN385
 v1.29.0-wasm32
@@ -58,6 +58,11 @@ user-c-modules = "usermod"
 extra-make-args = ["LDFLAGS_EXTRA=-static"]
 
 [override."v1.29.0-musllinux_1_2_i686"]
+extra-make-args = ["LDFLAGS_EXTRA=-static"]
+
+# Same reason as i686 musl above: the binary is built inside the musllinux
+# container but executed on the glibc host runner, which has no musl loader.
+[override."v1.29.0-musllinux_1_2_aarch64"]
 extra-make-args = ["LDFLAGS_EXTRA=-static"]
 
 # webassembly's own manifest problem: ports/webassembly has no boards/, only
