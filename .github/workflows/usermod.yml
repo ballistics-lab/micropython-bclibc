@@ -113,7 +113,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (${{ matrix.identifier }})
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: ${{ matrix.identifier }}
 
@@ -175,7 +175,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-user-static
 
       - name: Build usermod (${{ env.MPY_TAG }}-manylinux_2_41_mipsel)
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: ${{ env.MPY_TAG }}-manylinux_2_41_mipsel
 
@@ -222,7 +222,7 @@ jobs:
           pip install pyserial
 
       - name: Build usermod (v1.29.0-qemu-MPS2_AN385)
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: v1.29.0-qemu-MPS2_AN385
 
@@ -270,7 +270,7 @@ jobs:
         # port's own default `standard`, which is broken against modern
         # emsdk -- micropython/micropython#19380) -- same reasoning
         # o-murphy/micropython-wasm3's own webassembly job already recorded.
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: v1.29.0-wasm32
 
@@ -310,7 +310,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (v1.29.0-rp2-${{ matrix.board }})
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: v1.29.0-rp2-${{ matrix.board }}
 
@@ -389,7 +389,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (v1.29.0-rp2-${{ matrix.board }})
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: v1.29.0-rp2-${{ matrix.board }}
 
@@ -437,7 +437,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (${{ matrix.identifier }})
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: ${{ matrix.identifier }}
 
@@ -515,7 +515,7 @@ jobs:
           submodules: recursive
 
       - name: Build usermod (v1.29.0-esp32-ESP32_GENERIC)
-        uses: ballistics-lab/cibuildmp@v0.7.3
+        uses: ballistics-lab/cibuildmp@v0.7.4
         with:
           build: v1.29.0-esp32-ESP32_GENERIC
 
