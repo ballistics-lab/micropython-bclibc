@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+- Added a `musllinux_1_2_aarch64` (static) unix usermod build + test row to `cibuildmp.toml` and `usermod.yml`
+
 ## [2.0.0-beta.6] - 2026-10-03
 
 ### Chores
