@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### CI
 - Added a `musllinux_1_2_aarch64` (static) unix usermod build + test row to `cibuildmp.toml` and `usermod.yml`
+- `natmod.yml` no longer runs on its own for a tag push: it shared its concurrency group with the run `release.yml` makes
+  through `workflow_call`, so the standalone run cancelled the release build
 
 ## [2.0.0-beta.6] - 2026-10-03
 

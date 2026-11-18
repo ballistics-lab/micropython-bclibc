@@ -8,7 +8,14 @@ on:
   # PR gets both runs -- the concurrency group keys on github.ref, which differs
   # between refs/heads/<branch> and refs/pull/<n>/merge, so they do not cancel
   # each other. That duplication is the deliberate cost of the trigger.
+  #
+  # Branches only: a tag push must not start this workflow on its own. release.yml
+  # (tag push) calls it through workflow_call, and both runs would share the
+  # concurrency group below (natmod-refs/tags/<tag>), so with cancel-in-progress
+  # the standalone run cancelled the called one -- and the release with it.
+  # (A `paths` filter does not apply to tag pushes, so it cannot prevent this.)
   push:
+    branches: ["**"]
     paths:
       - "bclibc"
       - "natmod/**"
