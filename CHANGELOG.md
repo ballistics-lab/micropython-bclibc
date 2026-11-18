@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0-beta.7] - 2026-11-18
+
 ### Chores
 - Bumped the `bclibc` submodule to `v2.1.0`: the zero search no longer depends on the early-termination limits
   (`cMaximumDrop`, `cMinimumAltitude`), and a zero beyond the maximum range is an out-of-range error
@@ -1066,7 +1068,8 @@ available as a built-in at every boot.
 - natmod armv6m QEMU test (`MICROBIT` board) removed — MICROBIT firmware does not support loading native `.mpy` for Cortex-M0; build verification in the `build` job is sufficient
 
 
-[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.6...HEAD
+[Unreleased]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.7...HEAD
+[2.0.0-beta.7]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.6...v2.0.0-beta.7
 [2.0.0-beta.6]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.5...v2.0.0-beta.6
 [2.0.0-beta.5]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.4...v2.0.0-beta.5
 [2.0.0-beta.4]: https://github.com/ballistics-lab/micropython-bclibc/compare/v2.0.0-beta.3...v2.0.0-beta.4
