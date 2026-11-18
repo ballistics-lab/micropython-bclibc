@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Chores
+- Bumped the `bclibc` submodule to `v2.1.0`: the zero search no longer depends on the early-termination limits
+  (`cMaximumDrop`, `cMinimumAltitude`), and a zero beyond the maximum range is an out-of-range error
+
 ### CI
 - Added a `musllinux_1_2_aarch64` (static) unix usermod build + test row to `cibuildmp.toml` and `usermod.yml`
 
