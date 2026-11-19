@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Chores
+- Bumped the `bclibc` submodule to `v2.2.0`. `tiny_bclibc`, the only part of it built here (natmod, usermod, ffimod), is unchanged
+  since `v2.1.0`: the release is in the C ABI (`bclibc_ffi.h`), which none of them uses.
+
+### CI
+- `usermod.yml`: the unix-mipsel job installs `qemu-user-binfmt`, `qemu-user-static` is gone from `ubuntu-latest` (Ubuntu 26.04)
+
 ## [2.0.0-beta.7] - 2026-11-18
 
 ### Chores
