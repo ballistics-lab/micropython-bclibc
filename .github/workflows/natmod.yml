@@ -97,7 +97,7 @@ jobs:
       - if: matrix.arch == 'x86'
         run: sudo apt-get update -q && sudo apt-get install -y gcc-multilib
 
-      - uses: ballistics-lab/cibuildmp@v0.7.5
+      - uses: ballistics-lab/cibuildmp@v0.7.6
         with:
           # mpy*-<tag>-<arch>: cibuildmp resolves the current .mpy ABI from
           # the checked-out MicroPython itself, so this stays correct even
@@ -131,7 +131,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ballistics-lab/cibuildmp@v0.7.5
+      - uses: ballistics-lab/cibuildmp@v0.7.6
         env:
           # No action input for extra-make-args (composite action's own
           # inputs are package-dir/output-dir/config-file/build/skip/extras/
@@ -214,7 +214,7 @@ jobs:
         # no-user-c-modules outright -- same as test-arm-linux below. Output
         # lands under natmod/ci/mpyhouse, outside natmod/build/, which the
         # artifact download below unpacks into.
-        uses: ballistics-lab/cibuildmp@v0.7.5
+        uses: ballistics-lab/cibuildmp@v0.7.6
         env:
           CIBMP_NO_USER_C_MODULES: "1"
         with:
@@ -395,7 +395,7 @@ jobs:
         # "MICROPY_FLOAT_IMPL redefined" -Werror collision with
         # mpy-cross/mpconfigport.h that a CFLAGS_EXTRA leaking into an
         # auto-built mpy-cross causes cannot happen here.
-        uses: ballistics-lab/cibuildmp@v0.7.5
+        uses: ballistics-lab/cibuildmp@v0.7.6
         env:
           CIBMP_NO_USER_C_MODULES: "1"
           CIBMP_EXTRA_MAKE_ARGS: "LDFLAGS_EXTRA=-static ${{ matrix.host_make_args }}"
