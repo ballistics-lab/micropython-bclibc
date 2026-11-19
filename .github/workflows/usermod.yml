@@ -166,16 +166,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install qemu-user-static
+      - name: Install qemu-user-binfmt
         # What the composite action used to do for this arch, and it has to
         # be the real apt package, not docker/setup-qemu-action: the "Run
         # tests" step below execs the binary as an ordinary host process, so
         # the binfmt_misc registration has to be host-wide
         # (`update-binfmts`), not container-scoped. Same call a7p's own
         # mipsel row makes, for the same reason.
+        #
+        # qemu-user-binfmt, not qemu-user-static: ubuntu-latest is Ubuntu
+        # 26.04 now, which has no qemu-user-static ("has no installation
+        # candidate", a virtual package provided by qemu-user-binfmt); the
+        # binfmt package registers the handlers and pulls in qemu-user. It
+        # runs the static mipsel binary the same way.
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends qemu-user-static
+          sudo apt-get install -y --no-install-recommends qemu-user-binfmt
 
       - name: Build usermod (${{ env.MPY_TAG }}-manylinux_2_41_mipsel)
         uses: ballistics-lab/cibuildmp@v0.7.5
@@ -183,7 +189,7 @@ jobs:
           build: ${{ env.MPY_TAG }}-manylinux_2_41_mipsel
 
       - name: Run tests
-        # No explicit qemu-mipsel-static prefix: the handler installed above
+        # No explicit qemu-mipsel prefix: the handler installed above
         # intercepts the binary transparently, same as upstream's own recipe.
         # `file` first so the log records what actually ran.
         #
